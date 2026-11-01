@@ -1,0 +1,530 @@
+{
+ "status": "success",
+ "data": {
+  "id": 169,
+  "name": "The Matrix",
+  "slug": "the-matrix",
+  "image": "https://artworks.thetvdb.com/banners/movies/169/posters/5f274c00c85c1.jpg",
+  "nameTranslations": [
+   "ces",
+   "deu",
+   "hun"
+  ],
+  "overviewTranslations": [
+   "ces",
+   "deu",
+   "hun"
+  ],
+  "aliases": [],
+  "score": 1279087,
+  "runtime": 136,
+  "status": {
+   "id": 5,
+   "name": "Released",
+   "recordType": "movie",
+   "keepUpdated": true
+  },
+  "lastUpdated": "2026-10-31 23:25:45",
+  "year": "1999",
+  "trailers": [
+   {
+    "id": 185547,
+    "name": "Trailer",
+    "url": "https://www.youtube.com/watch?v=tGgCqGm_6Hs",
+    "language": "eng",
+    "runtime": 0
+   },
+   {
+    "id": 185548,
+    "name": "Trailer",
+    "url": "https://www.youtube.com/watch?v=8xx91zoASLY",
+    "language": "fra",
+    "runtime": 0
+   },
+   {
+    "id": 185549,
+    "name": "Trailer",
+    "url": "https://www.youtube.com/watch?v=sMkNB8v-0uQ",
+    "language": "spa",
+    "runtime": 0
+   }
+  ],
+  "genres": [
+   {
+    "id": 19,
+    "name": "Action",
+    "slug": "action"
+   },
+   {
+    "id": 2,
+    "name": "Science Fiction",
+    "slug": "science-fiction"
+   }
+  ],
+  "releases": [
+   {
+    "country": "usa",
+    "date": "1999-03-31",
+    "detail": null
+   },
+   {
+    "country": "global",
+    "date": "1999-04-08",
+    "detail": null
+   },
+   {
+    "country": "fra",
+    "date": "1999-05-24",
+    "detail": null
+   }
+  ],
+  "artworks": [
+   {
+    "id": 62278121,
+    "image": "https://artworks.thetvdb.com/banners/movies/169/posters/5f274c00c85c1.jpg",
+    "thumbnail": "https://artworks.thetvdb.com/banners/movies/169/posters/5f274c00c85c1_t.jpg",
+    "language": "eng",
+    "type": 14,
+    "score": 100003,
+    "width": 680,
+    "height": 1000,
+    "includesText": true
+   },
+   {
+    "id": 63204042,
+    "image": "https://artworks.thetvdb.com/banners/v4/movie/169/backgrounds/6329b65bb0f74.jpg",
+    "thumbnail": "https://artworks.thetvdb.com/banners/v4/movie/169/backgrounds/6329b65bb0f74_t.jpg",
+    "language": null,
+    "type": 15,
+    "score": 100001,
+    "width": 1920,
+    "height": 1080,
+    "includesText": true
+   },
+   {
+    "id": 63663924,
+    "image": "https://artworks.thetvdb.com/banners/v4/movie/169/posters/651174fdbbc9a.jpg",
+    "thumbnail": "https://artworks.thetvdb.com/banners/v4/movie/169/posters/651174fdbbc9a_t.jpg",
+    "language": "eng",
+    "type": 14,
+    "score": 100001,
+    "width": 680,
+    "height": 1000,
+    "includesText": true
+   }
+  ],
+  "remoteIds": [
+   {
+    "id": "tt0133093",
+    "type": 2,
+    "sourceName": "IMDB"
+   },
+   {
+    "id": "http://www.warnerbros.com/matrix",
+    "type": 4,
+    "sourceName": "Official Website"
+   },
+   {
+    "id": "603",
+    "type": 10,
+    "sourceName": "TheMovieDB.com"
+   }
+  ],
+  "characters": [
+   {
+    "id": 12141990,
+    "name": "Thomas A. Anderson / …",
+    "peopleId": 294100,
+    "seriesId": null,
+    "series": null,
+    "movie": null,
+    "movieId": 169,
+    "episodeId": null,
+    "type": 3,
+    "image": "https://artworks.thetvdb.com/banners/v4/actor/294100/photo/6072b2470fc1c.jpg",
+    "sort": 1,
+    "isFeatured": true,
+    "url": "294100-keanu-reeves",
+    "nameTranslations": null,
+    "overviewTranslations": null,
+    "aliases": null,
+    "peopleType": "Actor",
+    "personName": "Keanu Reeves",
+    "tagOptions": null,
+    "personImgURL": "https://artworks.thetvdb.com/banners/person/294100/64f31de21ef7a.jpg"
+   },
+   {
+    "id": 12141991,
+    "name": "Morpheus",
+    "peopleId": 282895,
+    "seriesId": null,
+    "series": null,
+    "movie": null,
+    "movieId": 169,
+    "episodeId": null,
+    "type": 3,
+    "image": "https://artworks.thetvdb.com/banners/v4/actor/282895/photo/6072b2cf74bb3.jpg",
+    "sort": 4,
+    "isFeatured": true,
+    "url": "282895-laurence-fishburne",
+    "nameTranslations": null,
+    "overviewTranslations": null,
+    "aliases": null,
+    "peopleType": "Actor",
+    "personName": "Laurence Fishburne",
+    "tagOptions": null,
+    "personImgURL": "https://artworks.thetvdb.com/banners/v4/actor/282895/photo/64d4e57ea0c57.jpg"
+   },
+   {
+    "id": 12141992,
+    "name": "Trinity",
+    "peopleId": 279670,
+    "seriesId": null,
+    "series": null,
+    "movie": null,
+    "movieId": 169,
+    "episodeId": null,
+    "type": 3,
+    "image": "https://artworks.thetvdb.com/banners/v4/actor/279670/photo/6072b4fccecd9.jpg",
+    "sort": 2,
+    "isFeatured": true,
+    "url": "279670-carrie-anne-moss",
+    "nameTranslations": null,
+    "overviewTranslations": null,
+    "aliases": null,
+    "peopleType": "Actor",
+    "personName": "Carrie-Anne Moss",
+    "tagOptions": null,
+    "personImgURL": "https://artworks.thetvdb.com/banners/v4/actor/279670/photo/66faba85e8bab.jpg"
+   }
+  ],
+  "budget": "63000000.00",
+  "boxOffice": "463500000.00",
+  "boxOfficeUS": "",
+  "originalCountry": "usa",
+  "originalLanguage": "eng",
+  "audioLanguages": null,
+  "subtitleLanguages": null,
+  "studios": [
+   {
+    "id": 29,
+    "name": "Warner Bros. Pictures",
+    "parentStudio": null
+   }
+  ],
+  "awards": [
+   {
+    "id": 174647,
+    "year": "2000",
+    "details": null,
+    "isWinner": true,
+    "category": "Visual Effects",
+    "name": "Academy Awards",
+    "series": null,
+    "movie": null,
+    "episode": null,
+    "character": null
+   },
+   {
+    "id": 174648,
+    "year": "2000",
+    "details": null,
+    "isWinner": true,
+    "category": "Film Editing",
+    "name": "Academy Awards",
+    "series": null,
+    "movie": null,
+    "episode": null,
+    "character": null
+   },
+   {
+    "id": 174649,
+    "year": "2000",
+    "details": null,
+    "isWinner": true,
+    "category": "Sound",
+    "name": "Academy Awards",
+    "series": null,
+    "movie": null,
+    "episode": null,
+    "character": null
+   }
+  ],
+  "tagOptions": [
+   {
+    "id": 211,
+    "tag": 12,
+    "tagName": "Setting",
+    "name": "Post-Apocalyptic",
+    "helpText": null
+   },
+   {
+    "id": 359,
+    "tag": 8,
+    "tagName": "Mood or Tone",
+    "name": "Mind-Bending",
+    "helpText": null
+   },
+   {
+    "id": 35,
+    "tag": 2,
+    "tagName": "Sub-Genre",
+    "name": "Blockbuster",
+    "helpText": null
+   }
+  ],
+  "lists": [
+   {
+    "id": 3,
+    "name": "The Matrix Franchise",
+    "overview": "An unassuming programmer comes …",
+    "url": "matrix",
+    "isOfficial": true,
+    "nameTranslations": [
+     "deu",
+     "eng",
+     "fra"
+    ],
+    "overviewTranslations": [
+     "deu",
+     "eng",
+     "pt"
+    ],
+    "aliases": [],
+    "score": 2460384,
+    "image": "",
+    "imageIsFallback": false,
+    "remoteIds": null,
+    "tags": null
+   },
+   {
+    "id": 6930,
+    "name": "Movies",
+    "overview": "",
+    "url": "6930",
+    "isOfficial": false,
+    "nameTranslations": [
+     "eng"
+    ],
+    "overviewTranslations": [
+     "eng"
+    ],
+    "aliases": [],
+    "score": 0,
+    "image": "",
+    "imageIsFallback": false,
+    "remoteIds": null,
+    "tags": null
+   },
+   {
+    "id": 13259,
+    "name": "My Watched",
+    "overview": "",
+    "url": "13259",
+    "isOfficial": false,
+    "nameTranslations": [
+     "eng"
+    ],
+    "overviewTranslations": [
+     "eng"
+    ],
+    "aliases": [],
+    "score": 0,
+    "image": "",
+    "imageIsFallback": false,
+    "remoteIds": null,
+    "tags": null
+   }
+  ],
+  "translations": {
+   "nameTranslations": [
+    {
+     "name": "Matrix",
+     "language": "ces"
+    },
+    {
+     "name": "The Matrix",
+     "language": "deu"
+    },
+    {
+     "name": "Mátrix",
+     "language": "hun"
+    }
+   ],
+   "overviewTranslations": [
+    {
+     "overview": "Der Film beginnt damit, …",
+     "language": "deu"
+    },
+    {
+     "overview": "Thomas Anderson programozó egy …",
+     "language": "hun"
+    },
+    {
+     "overview": "Seguendo un tatuaggio sulla …",
+     "language": "ita"
+    }
+   ],
+   "aliases": null
+  },
+  "contentRatings": [
+   {
+    "id": 539,
+    "name": "12",
+    "country": "gbr",
+    "description": "Suitable for 12 years …",
+    "contentType": "movie",
+    "order": 0,
+    "fullname": "12"
+   },
+   {
+    "id": 345,
+    "name": "16",
+    "country": "hun",
+    "description": "Not recommended for viewers …",
+    "contentType": "movie",
+    "order": 0,
+    "fullname": "16"
+   },
+   {
+    "id": 505,
+    "name": "18",
+    "country": "esp",
+    "description": "Not recommended for audiences …",
+    "contentType": "movie",
+    "order": 0,
+    "fullname": "18"
+   }
+  ],
+  "companies": {
+   "studio": [
+    {
+     "id": 2076,
+     "name": "Warner Bros. Pictures",
+     "slug": "warner-bros-pictures",
+     "nameTranslations": null,
+     "overviewTranslations": null,
+     "aliases": null,
+     "country": null,
+     "primaryCompanyType": 2,
+     "activeDate": null,
+     "inactiveDate": null,
+     "companyType": {
+      "companyTypeId": 2,
+      "companyTypeName": "Studio"
+     },
+     "parentCompany": {
+      "id": null,
+      "name": null,
+      "relation": {
+       "id": null,
+       "typeName": null
+      }
+     },
+     "tagOptions": null
+    }
+   ],
+   "network": [],
+   "production": [
+    {
+     "id": 2076,
+     "name": "Warner Bros. Pictures",
+     "slug": "warner-bros-pictures",
+     "nameTranslations": null,
+     "overviewTranslations": null,
+     "aliases": null,
+     "country": null,
+     "primaryCompanyType": 2,
+     "activeDate": null,
+     "inactiveDate": null,
+     "companyType": {
+      "companyTypeId": 3,
+      "companyTypeName": "Production Company"
+     },
+     "parentCompany": {
+      "id": null,
+      "name": null,
+      "relation": {
+       "id": null,
+       "typeName": null
+      }
+     },
+     "tagOptions": null
+    },
+    {
+     "id": 2106,
+     "name": "Village Roadshow Pictures",
+     "slug": "village-roadshow-pictures",
+     "nameTranslations": null,
+     "overviewTranslations": null,
+     "aliases": null,
+     "country": null,
+     "primaryCompanyType": 2,
+     "activeDate": null,
+     "inactiveDate": null,
+     "companyType": {
+      "companyTypeId": 3,
+      "companyTypeName": "Production Company"
+     },
+     "parentCompany": {
+      "id": null,
+      "name": null,
+      "relation": {
+       "id": null,
+       "typeName": null
+      }
+     },
+     "tagOptions": null
+    },
+    {
+     "id": 19777,
+     "name": "Groucho II Film Partnership",
+     "slug": "groucho-ii-film-partnership",
+     "nameTranslations": null,
+     "overviewTranslations": null,
+     "aliases": null,
+     "country": null,
+     "primaryCompanyType": 3,
+     "activeDate": null,
+     "inactiveDate": null,
+     "companyType": {
+      "companyTypeId": 3,
+      "companyTypeName": "Production Company"
+     },
+     "parentCompany": {
+      "id": null,
+      "name": null,
+      "relation": {
+       "id": null,
+       "typeName": null
+      }
+     },
+     "tagOptions": null
+    }
+   ],
+   "distributor": [],
+   "special_effects": []
+  },
+  "production_countries": [
+   {
+    "id": 298585,
+    "country": "aus",
+    "name": "Australia"
+   },
+   {
+    "id": 298586,
+    "country": "usa",
+    "name": "United States of America"
+   }
+  ],
+  "inspirations": [],
+  "spoken_languages": [
+   "eng"
+  ],
+  "first_release": {
+   "country": "usa",
+   "date": "1999-03-31",
+   "detail": null
+  }
+ }
+}

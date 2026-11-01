@@ -191,6 +191,26 @@ pub struct MediaItem {
     /// under: see [`person::People`].
     #[serde(default, skip_serializing_if = "person::People::is_empty")]
     pub people: person::People,
+    /// The networks and the companies credited on the work, each with the
+    /// ids its sources file it under, its logo and its country, in what it
+    /// did for the work. The texts `network`, `studio` and
+    /// `productionCompanies` stay what they were, locks and all: these
+    /// double them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companies: Vec<CompanyCredit>,
+    /// TMDB's keywords, each with its id. `keywords` stays the texts every
+    /// source gave, AniList's tags among them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keyword_entities: Vec<Keyword>,
+    /// Every video the sources list for the work — trailers, teasers, clips
+    /// — in their order. `trailerYoutubeId` stays the one chosen of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub videos: Vec<Video>,
+    /// What a source says of its pictures beyond their addresses — their
+    /// size, how its members voted on them — by the address the work gives
+    /// each: TMDB's, the only one that says.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub image_details: BTreeMap<String, ImageDetails>,
 
     /// Fields carrying a manual override, as `scope/field` paths. The web UI
     /// renders a lock next to each of these. A text locked in another
@@ -359,6 +379,10 @@ impl MediaItem {
             relations: Vec::new(),
             releases: Vec::new(),
             people: person::People::default(),
+            companies: Vec::new(),
+            keyword_entities: Vec::new(),
+            videos: Vec::new(),
+            image_details: BTreeMap::new(),
             locked_fields: Vec::new(),
             primary_images: PrimaryImages::default(),
             locked_texts: Vec::new(),
@@ -627,6 +651,11 @@ pub struct Season {
     /// own images: a lock (`season:N/primaryPoster`), as the work's is.
     #[serde(default, skip_serializing_if = "PrimaryImages::is_empty")]
     pub primary_images: PrimaryImages,
+    /// The season's title and synopsis in other languages, as TMDB's season
+    /// documents give them; never a tagline. A text locked on the season in
+    /// a language comes before them: see [`fields::season_text`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub translations: Vec<Translation>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -781,6 +810,10 @@ pub enum CreditType {
     Writer,
     Producer,
     Guest,
+    /// The rest of the crew: whoever scored the work, shot it, cut it,
+    /// designed it — each by the department and the job TMDB files them
+    /// under. Direction, writing and production keep their own kinds.
+    Crew,
 }
 
 impl CreditType {
@@ -791,6 +824,7 @@ impl CreditType {
             Self::Writer => "writer",
             Self::Producer => "producer",
             Self::Guest => "guest",
+            Self::Crew => "crew",
         }
     }
 }
@@ -804,6 +838,7 @@ impl FromStr for CreditType {
             "writer" => Self::Writer,
             "producer" => Self::Producer,
             "guest" => Self::Guest,
+            "crew" => Self::Crew,
             _ => Self::Actor,
         })
     }
@@ -815,6 +850,8 @@ pub struct Credit {
     pub id: String,
     pub credit_type: CreditType,
     pub person_name: String,
+    /// The part played; for one behind the camera, the job, as it has
+    /// always been kept: what its readers take it from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -827,6 +864,249 @@ pub struct Credit {
     pub credit_tmdb_id: Option<String>,
     pub sort_order: i32,
     pub is_manual: bool,
+    /// The department of one behind the camera, as TMDB names it:
+    /// `Directing`, `Writing`, `Production`, `Sound`, `Camera`, `Editing`,
+    /// `Art`… None for a part, or where the source names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub department: Option<String>,
+    /// Their job there, as TMDB names it: `Screenplay`, `Original Music
+    /// Composer`, `Director of Photography`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
+}
+
+/// What a company is: a network, which airs works, or a company, which makes
+/// or sells them. TMDB numbers the two apart — its network 174 is AMC, its
+/// company 174 Warner Bros. Pictures — so a kind is part of what one of its
+/// ids names.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum CompanyKind {
+    Network,
+    Company,
+}
+
+impl CompanyKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Network => "network",
+            Self::Company => "company",
+        }
+    }
+}
+
+impl FromStr for CompanyKind {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "network" => Ok(Self::Network),
+            "company" => Ok(Self::Company),
+            other => anyhow::bail!("unknown kind of company: {other}"),
+        }
+    }
+}
+
+/// What a company did for a work.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum CompanyRole {
+    /// Aired it: a series' network.
+    Network,
+    /// Made it: TMDB's production companies, TheTVDB's.
+    Production,
+    /// Animated it, or shot it: TheTVDB's studios.
+    Studio,
+    /// Sold it, or put it out.
+    Distributor,
+}
+
+impl CompanyRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Network => "network",
+            Self::Production => "production",
+            Self::Studio => "studio",
+            Self::Distributor => "distributor",
+        }
+    }
+
+    /// The kind of company that does it: a network airs, the rest are
+    /// companies.
+    pub const fn kind(self) -> CompanyKind {
+        match self {
+            Self::Network => CompanyKind::Network,
+            _ => CompanyKind::Company,
+        }
+    }
+}
+
+impl FromStr for CompanyRole {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "network" => Ok(Self::Network),
+            "production" => Ok(Self::Production),
+            "studio" => Ok(Self::Studio),
+            "distributor" => Ok(Self::Distributor),
+            other => anyhow::bail!("unknown role of a company: {other}"),
+        }
+    }
+}
+
+/// A network or a company, kept once for every work it is credited on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Company {
+    /// This server's id for it: what its page is found by. Empty in a
+    /// source's answer, until it is stored.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub kind: CompanyKind,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmdb_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tvdb_id: Option<i64>,
+    /// Its logo, an address as its source gives it, like an image's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
+    /// Where it is from: ISO 3166-1 alpha-2, upper case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+}
+
+impl Company {
+    /// Whether two sources' companies are one: the same kind, and the same
+    /// id of a source both give one of, else — neither contradicting the
+    /// other by an id — the same name, its case and the spaces around it
+    /// aside. TheTVDB's AMC is TMDB's.
+    pub fn is_same(&self, other: &Self) -> bool {
+        if self.kind != other.kind {
+            return false;
+        }
+        let ids = [(self.tmdb_id, other.tmdb_id), (self.tvdb_id, other.tvdb_id)];
+        if let Some(&(a, b)) = ids.iter().find(|(a, b)| a.is_some() && b.is_some()) {
+            return a == b;
+        }
+        let key = company_key(&self.name);
+        !key.is_empty() && key == company_key(&other.name)
+    }
+
+    /// What `other` knows of the same company that this one does not: an
+    /// id of another source, a logo, a country, this server's id for it.
+    pub fn complete(&mut self, other: &Self) {
+        if self.id.is_empty() {
+            self.id.clone_from(&other.id);
+        }
+        self.tmdb_id = self.tmdb_id.or(other.tmdb_id);
+        self.tvdb_id = self.tvdb_id.or(other.tvdb_id);
+        if self.logo.is_none() {
+            self.logo.clone_from(&other.logo);
+        }
+        if self.country.is_none() {
+            self.country.clone_from(&other.country);
+        }
+    }
+}
+
+/// A company's name as two sources' are compared: trimmed, in lower case.
+pub fn company_key(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// A company credited on a work: what it did there, where its source lists
+/// it, and whose list it is.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyCredit {
+    pub company: Company,
+    pub role: CompanyRole,
+    pub sort_order: i32,
+    /// The source whose list it is: `tmdb`, `tvdb`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// A keyword, kept once for every work it is given: TMDB's, by its id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Keyword {
+    /// This server's id for it: what its page is found by. Empty in a
+    /// source's answer, until it is stored.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmdb_id: Option<i64>,
+    pub name: String,
+}
+
+/// A video a source lists for a work.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Video {
+    /// This server's id for it; empty in a source's answer.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// Where it is: `YouTube`, `Vimeo`.
+    pub site: String,
+    /// What it is found by there: a YouTube video's id.
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// What it is, as TMDB says: `Trailer`, `Teaser`, `Clip`, `Featurette`,
+    /// `Behind the Scenes`, `Bloopers`, `Opening Credits`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_type: Option<String>,
+    /// The language it speaks: ISO 639-3, as the rest of the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// The country it was put out for: ISO 3166-1 alpha-2, upper case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    /// Put out by the work's makers.
+    #[serde(default)]
+    #[schema(required)]
+    pub official: bool,
+    /// When, as TMDB writes it: `2024-09-17T16:44:25.000Z`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    /// Its height in lines: `1080`, `2160`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<i32>,
+    /// TMDB's id for the video itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmdb_id: Option<String>,
+    /// The source that listed it: `tmdb`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    pub sort_order: i32,
+}
+
+/// What a source says of a picture beyond its address: TMDB's size of it and
+/// how its members voted on it, by which TMDB ranks its pictures.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vote_average: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vote_count: Option<i64>,
+}
+
+impl ImageDetails {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]

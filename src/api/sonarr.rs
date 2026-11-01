@@ -6,6 +6,11 @@
 //! elsewhere, so reaching this server means overriding DNS for that host. See
 //! `docs/integration.md`. Both editions are answered here from the one
 //! catalogue: `/v1/` as Sonarr v4 reads it, `/v2/` as v5 does.
+//!
+//! The real service answers a third, `/v2/tmdb/…`: a series by TMDB's id,
+//! numbered as TMDB numbers it, for the day Sonarr v5 reads some series
+//! from TMDB — its pre-releases do not call it yet. Answered here from the
+//! same catalogue, so that a series Sonarr moves there is not found missing.
 
 use axum::{
     Extension, Json,
@@ -19,11 +24,11 @@ use crate::{
     db::repo,
     domain::MediaItem,
     error::{AppError, AppResult},
-    service::{language, orders, scene, series},
+    service::{ids, language, orders, scene, series},
     state::AppState,
     wire::{
         sonarr::{ShowResource, from_item},
-        sonarr_v2::{self, Asked, OwnText, ShowResourceV2},
+        sonarr_v2::{self, Asked, OwnText, ShowResourceTmdb, ShowResourceV2},
     },
 };
 
@@ -36,6 +41,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(search))
         .routes(routes!(show_v2))
         .routes(routes!(search_v2))
+        .routes(routes!(show_tmdb))
+        .routes(routes!(search_tmdb))
 }
 
 #[derive(Deserialize)]
@@ -65,6 +72,13 @@ struct ShowPathV2 {
 struct SearchQueryV2 {
     language: Option<String>,
     term: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ShowPathTmdb {
+    language: String,
+    tmdb_id: i64,
+    season_type: String,
 }
 
 /// A series by TVDB id, in Skyhook's format.
@@ -331,6 +345,194 @@ async fn search_v2(
     }
 
     Ok(Json(shows))
+}
+
+/// A series by TMDB id, as Skyhook's TMDB edition serves it.
+///
+/// What the TheTVDB edition answers, numbered as TMDB numbers the series:
+/// `default` is TMDB's own numbering, kept at every refresh that reads TMDB's
+/// seasons — read from TMDB first for a series no refresh has kept it for
+/// yet — and a TMDB episode group is asked for by its id on TMDB. Each
+/// episode is known by its TMDB id. An order made here is asked for by its
+/// key, as on the TheTVDB edition; a type the series has not is answered in
+/// TMDB's own numbering.
+///
+/// The id is TMDB's; from 200 000 000 up, the one Sonarr knows a Fan-Kai or
+/// a series entered by hand by, which TMDB does not list, and the answer
+/// echoes it back. Not found and not answered are told apart as on the
+/// TheTVDB edition; and a series TheTVDB numbers whose numbering by TMDB
+/// nothing has kept, while TMDB does not answer, is not answered either.
+#[utoipa::path(
+    get, path = "/v2/tmdb/shows/{language}/{tmdb_id}/{season_type}", tag = TAG,
+    operation_id = "sonarr_show_tmdb",
+    params(
+        ("language" = String, Path, description = "Three-letter language code, as Sonarr writes it: `eng`, `fra`"),
+        ("tmdb_id" = i64, Path, description = "TMDB series id, or the one Sonarr knows a Fan-Kai or a series entered by hand by"),
+        ("season_type" = String, Path, description = "`default`, TMDB's own numbering; a TMDB episode group's id; an order made here, `ams-…`"),
+    ),
+    responses(
+        (status = 200, body = ShowResourceTmdb),
+        (status = 403, description = "The caller's address is not in the allowlist"),
+        (status = 404, description = "Every source that could resolve this id answered that there is no such series"),
+        (status = 502, description = "A source that could have resolved this id did not answer, and nothing is held to answer with; or TMDB's numbering of a series TheTVDB numbers is neither kept nor could be read"),
+    ),
+    security(),
+)]
+async fn show_tmdb(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(ShowPathTmdb {
+        language,
+        tmdb_id,
+        season_type,
+    }): Path<ShowPathTmdb>,
+) -> AppResult<Json<ShowResourceTmdb>> {
+    let language = language::three_letter(&language);
+    let mut item = by_tmdb_id(&state, tmdb_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Told from a homonym under the id the TheTVDB edition knows it by, as
+    // Sonarr's other series are.
+    let client_id = series::client_id(&item).unwrap_or(tmdb_id);
+    name_for_sonarr(&state, &mut item, client_id).await;
+    let own = OwnText::of(&item, &language::normalize(&state.language(None, None)));
+    language::apply_with_fallback(
+        &state,
+        &mut item,
+        &language,
+        &state.language(identity.client_id(), identity.peer_id()),
+    )
+    .await?;
+    // TMDB's own numbering, read from TMDB first when nothing has kept it;
+    // then the order asked in, a TMDB group read first when it is still to
+    // be read.
+    let mut orders = orders::for_clients(&state, &item, Some(orders::TMDB_AIRED)).await?;
+    let asked = season_type.trim();
+    if !asked.eq_ignore_ascii_case(sonarr_v2::TMDB_DEFAULT) {
+        let group = format!("{}{asked}", orders::TMDB_GROUP);
+        let key = if orders::named(&orders, &group).is_some() {
+            group.as_str()
+        } else {
+            asked
+        };
+        orders = orders::for_clients(&state, &item, Some(key)).await?;
+    }
+    // A series TheTVDB numbers whose numbering by TMDB nothing has kept,
+    // and TMDB did not give now: a 502, which Sonarr asks again on, rather
+    // than TheTVDB's numbering under TMDB's name, which would renumber its
+    // episodes once now and again when TMDB answers. Without a TMDB key,
+    // nothing ever would: the series is answered as the catalogue numbers it.
+    let numbered_by_tvdb = orders::aired(&orders).is_some_and(|aired| aired.source == "tvdb");
+    if numbered_by_tvdb
+        && state.tmdb.is_configured()
+        && orders::named(&orders, orders::TMDB_AIRED).is_none()
+        && sonarr_v2::tmdb_edition_order(&item, &orders, &season_type).is_none()
+    {
+        return Err(AppError::UpstreamUnavailable(anyhow::anyhow!(
+            "TMDB's numbering of tmdb:{tmdb_id} could not be read"
+        )));
+    }
+
+    state.media.for_clients(&mut item);
+    Ok(Json(sonarr_v2::from_item_by_tmdb(
+        &item,
+        &Asked {
+            client_id: tmdb_id,
+            language: &language,
+            season_type: &season_type,
+            own: &own,
+            orders: &orders,
+            with_episodes: true,
+        },
+    )))
+}
+
+/// Search series, as Skyhook's TMDB edition answers: without their
+/// episodes, each under the id that edition knows it by — a series TheTVDB
+/// alone lists, which TMDB has no id for, is left out. `term` is as for the
+/// TheTVDB edition, and so is a search nothing answered.
+#[utoipa::path(
+    get, path = "/v2/tmdb/search", tag = TAG,
+    operation_id = "sonarr_search_tmdb",
+    params(
+        ("language" = Option<String>, Query, description = "Three-letter language code, as Sonarr writes it; English when left out"),
+        ("term" = Option<String>, Query, description = "Free text, or `prefix:id`"),
+    ),
+    responses(
+        (status = 200, body = Vec<ShowResourceTmdb>),
+        (status = 403, description = "The caller's address is not in the allowlist"),
+        (status = 502, description = "No source that could answer this search did, and the catalogue holds nothing by that name"),
+    ),
+    security(),
+)]
+async fn search_tmdb(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Query(SearchQueryV2 { language, term }): Query<SearchQueryV2>,
+) -> AppResult<Json<Vec<ShowResourceTmdb>>> {
+    let language = language::three_letter(language.as_deref().unwrap_or_default());
+    let term = term.unwrap_or_default();
+    let stored = language::normalize(&state.language(None, None));
+    let callers = state.language(identity.client_id(), identity.peer_id());
+
+    let mut items = series::search(&state, &term).await?;
+    let adult = state.adult_for_arr(identity.client_id(), identity.peer_id());
+    items.retain(|item| adult || !item.is_adult);
+    let client_ids = series::client_ids(&state, &items).await?;
+
+    let mut shows = Vec::with_capacity(items.len());
+    for (item, client_id) in items.iter_mut().zip(client_ids) {
+        // One this edition cannot name would show in the list and fail on
+        // add.
+        let Some(id) = tmdb_edition_id(item, client_id) else {
+            continue;
+        };
+        if let Some(client_id) = client_id {
+            name_for_sonarr(&state, item, client_id).await;
+        }
+        let own = OwnText::of(item, &stored);
+        language::apply_shallow_with_fallback(&state, item, &language, &callers);
+        let orders = repo::order::list(&state.db, &item.id).await?;
+        state.media.for_clients(item);
+        shows.push(sonarr_v2::from_item_by_tmdb(
+            item,
+            &Asked {
+                client_id: id,
+                language: &language,
+                season_type: sonarr_v2::TMDB_DEFAULT,
+                own: &own,
+                orders: &orders,
+                with_episodes: false,
+            },
+        ));
+    }
+
+    Ok(Json(shows))
+}
+
+/// The series an id of Skyhook's TMDB edition names: one TMDB lists, by its
+/// id there; from [`ids::FANKAI_OFFSET`] up, a Fan-Kai or a series entered
+/// by hand, which TMDB does not list, by the id Sonarr knows it by. `None`,
+/// or an error, as the TheTVDB edition's lookup gives them.
+async fn by_tmdb_id(state: &AppState, id: i64) -> anyhow::Result<Option<MediaItem>> {
+    if id <= 0 {
+        return Ok(None);
+    }
+    if id >= ids::FANKAI_OFFSET {
+        return series::by_client_id(state, id).await;
+    }
+    series::by_tmdb_id(state, id).await
+}
+
+/// The id Skyhook's TMDB edition knows a series by: TMDB's, or — for a
+/// Fan-Kai or a series entered by hand, which TMDB does not list — the one
+/// Sonarr knows it by (`client_id`), from [`ids::FANKAI_OFFSET`] up. None
+/// for a series TheTVDB alone lists.
+fn tmdb_edition_id(item: &MediaItem, client_id: Option<i64>) -> Option<i64> {
+    item.external_ids
+        .tmdb
+        .or_else(|| client_id.filter(|id| *id >= ids::FANKAI_OFFSET))
 }
 
 /// The language in the URL, as a tag, or a 400.
@@ -1297,5 +1499,283 @@ mod tests {
             .await
             .expect("answered");
         assert_eq!(english.title, "Kenshin");
+    }
+
+    // ─── the TMDB edition ────────────────────────────────────────────────────
+
+    async fn asked_by_tmdb(
+        state: &AppState,
+        tmdb_id: i64,
+        season_type: &str,
+    ) -> AppResult<Json<ShowResourceTmdb>> {
+        show_tmdb(
+            State(state.clone()),
+            Extension(Identity::Network(None)),
+            Path(ShowPathTmdb {
+                language: "eng".into(),
+                tmdb_id,
+                season_type: season_type.into(),
+            }),
+        )
+        .await
+    }
+
+    fn tmdb_numbers(show: &ShowResourceTmdb) -> Vec<(i32, i32, i64)> {
+        show.episodes
+            .as_deref()
+            .unwrap()
+            .iter()
+            .map(|e| (e.season_number, e.episode_number, e.tmdb_id))
+            .collect()
+    }
+
+    /// TMDB's place for an episode, as a refresh keeps it: TMDB's id and
+    /// record, and the episode the series holds for it.
+    fn tmdb_place(tmdb_id: i64, tvdb_id: i64, season: i32, number: i32) -> PlacedEpisode {
+        PlacedEpisode {
+            tmdb_id: Some(tmdb_id),
+            record: Some(OrderRecord {
+                title: format!("TMDB's {tmdb_id}"),
+                overview: None,
+                aired: None,
+                runtime: None,
+                image: None,
+                finale_type: None,
+            }),
+            ..placed(tvdb_id, season, number)
+        }
+    }
+
+    /// Sonarr v5 asking by TMDB's id is answered in TMDB's numbering — the
+    /// Kyoto arc's first episode TMDB puts at the end of a first season —
+    /// each episode by its TMDB id, with none of TheTVDB's orders; asking by
+    /// TheTVDB's, it is offered no TMDB numbering.
+    #[tokio::test]
+    async fn sonarr_v5_asking_by_tmdbs_id_is_answered_in_tmdbs_numbering() {
+        let state = server().await;
+        let work = stored(&state).await;
+        repo::order::write_tmdb_aired(
+            &state.db,
+            &work.id,
+            &[
+                tmdb_place(9001, 1001, 1, 1),
+                tmdb_place(9002, 1002, 1, 2),
+                tmdb_place(9003, 2001, 1, 3),
+            ],
+        )
+        .await
+        .expect("kept");
+        state.caches.touched(&work.id).await;
+
+        for season_type in [sonarr_v2::TMDB_DEFAULT, "official"] {
+            let Json(show) = asked_by_tmdb(&state, 209867, season_type)
+                .await
+                .expect("answered");
+            assert_eq!(
+                tmdb_numbers(&show),
+                [(1, 1, 9001), (1, 2, 9002), (1, 3, 9003)],
+                "{season_type}"
+            );
+            assert_eq!(show.episodes.as_deref().unwrap()[2].title, "Episode 2001");
+            assert_eq!((show.tmdb_id, show.tvdb_id), (209867, Some(416802)));
+            assert_eq!(show.metadata_source, "tmdb");
+            assert_eq!(
+                show.season_types
+                    .iter()
+                    .map(|t| t.kind.as_str())
+                    .collect::<Vec<_>>(),
+                [sonarr_v2::TMDB_DEFAULT]
+            );
+        }
+
+        let Json(by_tvdb) = asked(&state, "eng", 416802, "official")
+            .await
+            .expect("answered");
+        assert_eq!(
+            by_tvdb
+                .season_types
+                .iter()
+                .map(|t| t.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["official", "dvd"]
+        );
+    }
+
+    /// A series no refresh kept TMDB's numbering for yet is answered in it
+    /// all the same, read from TMDB once: each of TMDB's episodes names the
+    /// one the series holds that aired the same day.
+    #[tokio::test]
+    async fn tmdbs_numbering_nothing_kept_yet_is_read_from_tmdb_once() {
+        let episode = |number: i32, id: i64, aired: &str| {
+            json!({ "season_number": 1, "episode_number": number, "id": id,
+                    "air_date": aired, "name": format!("TMDB's {id}") })
+        };
+        let (at, paths) = providers(thetvdb(vec![
+            (
+                "/3/tv/209867",
+                200,
+                json!({ "id": 209867, "name": "Rurouni Kenshin",
+                        "seasons": [{ "season_number": 1 }] }),
+            ),
+            (
+                "/3/tv/209867/season/1",
+                200,
+                json!({ "season_number": 1, "episodes": [
+                    episode(1, 9001, "2023-07-07"),
+                    episode(2, 9002, "2023-07-14"),
+                    episode(3, 9003, "2024-10-04")
+                ] }),
+            ),
+        ]))
+        .await;
+        let state = server_at(&at, true).await;
+        let work = stored(&state).await;
+
+        let Json(show) = asked_by_tmdb(&state, 209867, sonarr_v2::TMDB_DEFAULT)
+            .await
+            .expect("answered");
+        assert_eq!(
+            tmdb_numbers(&show),
+            [(1, 1, 9001), (1, 2, 9002), (1, 3, 9003)]
+        );
+        assert_eq!(show.episodes.as_deref().unwrap()[2].title, "Episode 2001");
+        let kept = repo::order::get(&state.db, &work.id, orders::TMDB_AIRED)
+            .await
+            .expect("read")
+            .expect("kept");
+        assert_eq!(kept.episodes.len(), 3);
+
+        let asked_before = paths.lock().len();
+        let Json(again) = asked_by_tmdb(&state, 209867, sonarr_v2::TMDB_DEFAULT)
+            .await
+            .expect("answered");
+        assert_eq!(tmdb_numbers(&again), tmdb_numbers(&show));
+        assert_eq!(paths.lock().len(), asked_before, "{:?}", paths.lock());
+    }
+
+    /// The TMDB edition's search names a series by TMDB's id and leaves out
+    /// one TMDB does not list; a series entered by hand is asked for by the
+    /// id Sonarr knows it by, and said to be numbered here.
+    #[tokio::test]
+    async fn the_tmdb_edition_names_each_series_as_tmdb_does_or_as_sonarr_does() {
+        let state = server().await;
+        stored(&state).await;
+        let search = |term: &str| {
+            search_tmdb(
+                State(state.clone()),
+                Extension(Identity::Network(None)),
+                Query(SearchQueryV2 {
+                    language: Some("eng".into()),
+                    term: Some(term.into()),
+                }),
+            )
+        };
+
+        let Json(found) = search("tmdb:209867").await.expect("answered");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].tmdb_id, 209867);
+        let sent = serde_json::to_value(&found[0]).unwrap();
+        assert!(sent.get("episodes").is_none(), "{sent}");
+        assert_eq!(sent["metadataSource"], "tmdb");
+
+        // A series TheTVDB alone lists has no id on this edition.
+        let mut tvdb_alone = MediaItem::empty(MediaKind::Series);
+        tvdb_alone.title = "Quokkaplume Chronicles".into();
+        tvdb_alone.slug = "quokkaplume-chronicles".into();
+        tvdb_alone.external_ids = ExternalIds {
+            tvdb: Some(999_002),
+            ..Default::default()
+        };
+        repo::item::upsert(
+            &state.db,
+            ItemWrite {
+                item: &tvdb_alone,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        let Json(found) = search("tvdb:999002").await.expect("answered");
+        assert!(found.is_empty());
+
+        // One entered by hand, by the id Sonarr knows it by.
+        let mut handed = MediaItem::empty(MediaKind::Series);
+        handed.title = "Brindlemoss by hand".into();
+        handed.slug = "brindlemoss-by-hand".into();
+        handed.is_manual = true;
+        let mut first = blank_episode(1, 1);
+        first.is_manual = false;
+        first.title = "Typed".into();
+        handed.episodes = vec![first];
+        repo::item::upsert(
+            &state.db,
+            ItemWrite {
+                item: &handed,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        let own = ids::own(&handed.id);
+        let Json(show) = asked_by_tmdb(&state, own, sonarr_v2::TMDB_DEFAULT)
+            .await
+            .expect("answered");
+        assert_eq!(show.tmdb_id, own);
+        assert_eq!(show.metadata_source, "local");
+        assert_eq!(
+            tmdb_numbers(&show)
+                .iter()
+                .map(|(s, n, _)| (*s, *n))
+                .collect::<Vec<_>>(),
+            [(1, 1)]
+        );
+    }
+
+    /// A series TheTVDB numbers whose numbering by TMDB nothing kept, while
+    /// TMDB does not answer: a 502, which Sonarr asks again on, rather than
+    /// TheTVDB's numbering under TMDB's name. With no TMDB key at all, as the
+    /// catalogue numbers it.
+    #[tokio::test]
+    async fn tmdbs_numbering_neither_kept_nor_read_is_not_answered_in_thetvdbs() {
+        let (at, _) = providers(thetvdb(vec![(
+            "/3/tv/209867",
+            500,
+            json!({ "status_message": "down" }),
+        )]))
+        .await;
+        let state = server_at(&at, true).await;
+        stored(&state).await;
+        let Err(refused) = asked_by_tmdb(&state, 209867, sonarr_v2::TMDB_DEFAULT).await else {
+            panic!("answered");
+        };
+        assert!(
+            matches!(refused, AppError::UpstreamUnavailable(_)),
+            "{refused}"
+        );
+
+        let keyless = server().await;
+        stored(&keyless).await;
+        let Json(show) = asked_by_tmdb(&keyless, 209867, sonarr_v2::TMDB_DEFAULT)
+            .await
+            .expect("answered");
+        assert_eq!(
+            tmdb_numbers(&show)
+                .iter()
+                .map(|(s, n, _)| (*s, *n))
+                .collect::<Vec<_>>(),
+            [(1, 1), (1, 2), (2, 1)]
+        );
+    }
+
+    /// An id TMDB answers no series for, nothing held: not found, as on the
+    /// TheTVDB edition.
+    #[tokio::test]
+    async fn a_tmdb_id_nobody_holds_is_not_found() {
+        let (at, _) = providers(thetvdb(Vec::new())).await;
+        let state = server_at(&at, true).await;
+        let Err(refused) = asked_by_tmdb(&state, 1, sonarr_v2::TMDB_DEFAULT).await else {
+            panic!("answered");
+        };
+        assert!(matches!(refused, AppError::NotFound), "{refused}");
     }
 }

@@ -332,6 +332,9 @@ export const fr: Dict = {
     collection: 'Collection',
     anyCollection: 'Toutes les collections',
     withPerson: (name: string) => `Avec ${name}`,
+    // Une société ou un mot-clé choisi par son identifiant, sur sa page ou par un lien.
+    someCompany: 'Une société',
+    someKeyword: 'Un mot-clé',
     runtimeChip: (min?: number, max?: number) =>
       min !== undefined && max !== undefined ? `De ${min} à ${max} min` : min !== undefined ? `${min} min et plus` : `${max} min au plus`,
     madeIn: (country: string) => `Pays : ${country}`,
@@ -510,6 +513,43 @@ export const fr: Dict = {
     allIdentifiers: (n: number) => `Les ${n} identifiants`,
     searchTitle: (title: string) => `Chercher « ${title} » dans le catalogue`,
     withPerson: (name: string) => `Les œuvres du catalogue avec ${name}`,
+    // L’équipe technique, un département à la fois, sous la distribution.
+    crewLead: 'Toutes les personnes que TMDB crédite derrière la caméra, un département à la fois, les métiers les plus parlants d’abord.',
+    wholeCrew: (n: number) => `Toute l’équipe · ${n}`,
+    departments: {
+      Directing: 'Réalisation',
+      Writing: 'Scénario',
+      Production: 'Production',
+      Sound: 'Son et musique',
+      Camera: 'Image',
+      Editing: 'Montage',
+      Art: 'Décors',
+      'Costume & Make-Up': 'Costumes et maquillage',
+      'Visual Effects': 'Effets visuels',
+      Lighting: 'Lumière',
+      Crew: 'Équipe',
+      Creator: 'Création',
+    },
+    // Toutes les vidéos que listent les sources, la bande-annonce choisie en tête.
+    videos: 'Vidéos',
+    videosLead: 'Telles que TMDB les liste, la bande-annonce choisie pour l’œuvre en tête. Une vidéo YouTube se lit ici, par le lecteur sans cookies de YouTube, quand vous le demandez ; les autres s’ouvrent là où elles sont.',
+    allVideos: (n: number) => `Les ${n} vidéos`,
+    official: 'Officielle',
+    playVideo: 'Lire : ',
+    videoTypes: {
+      Trailer: 'Bande-annonce',
+      Teaser: 'Teaser',
+      Clip: 'Extrait',
+      Featurette: 'Making-of',
+      'Behind the Scenes': 'Coulisses',
+      Bloopers: 'Bêtisier',
+      'Opening Credits': 'Générique',
+    },
+    // Les chaînes et les sociétés, chacune menant à sa page.
+    companiesTitle: 'Chaînes et sociétés',
+    companyRoles: { network: 'Chaîne', production: 'Production', studio: 'Studio', distributor: 'Distribution' },
+    companyPage: (name: string) => `Tout ce qui vient de ${name} au catalogue`,
+    keywordPage: (word: string) => `Tout ce qui porte le mot-clé « ${word} » au catalogue`,
   },
   elsewhere: {
     newTab: '(s’ouvre dans un nouvel onglet)',
@@ -590,8 +630,11 @@ export const fr: Dict = {
       regional: 'Régionale',
       altdvd: 'DVD alternative',
       alttwo: 'Alternative 2',
+      'tmdb-aired': 'TMDB (diffusion)',
     },
     orderNote: 'Telle que TheTVDB les numérote ; les clients reçoivent l’ordre de diffusion, sauf s’ils demandent celui-ci.',
+    orderNoteTmdbAired:
+      'Telle que TMDB les numérote, gardée à côté de celle de TheTVDB à chaque rafraîchissement ; Plex se la voit proposer, et chaque client reçoit l’ordre de diffusion, sauf s’il demande celui-ci. Elle est à TMDB : elle ne se modifie pas ici, elle se fige seulement.',
     orderNoteTmdb: 'Telle que TMDB les regroupe ; les clients reçoivent l’ordre de diffusion, sauf s’ils demandent celui-ci.',
     orderNoteLocal: 'Telle que ses épisodes ont été ordonnés ici ; les clients reçoivent l’ordre de diffusion, sauf s’ils demandent celui-ci.',
     orderNoteFrozen: 'Figé comme numérotation de diffusion : tout client qui demande l’ordre de diffusion reçoit celui-ci.',
@@ -643,6 +686,7 @@ export const fr: Dict = {
       directing: 'Réalisation',
       writing: 'Scénario',
       producing: 'Production',
+      crew: 'Équipe technique',
     },
     jobWorks: (n: number) => plural(n, { one: `${n} œuvre`, other: `${n} œuvres` }),
     order: 'Ordre',
@@ -788,6 +832,42 @@ export const fr: Dict = {
     aired: (aired: number, of: number) => `${aired} sur ${of} diffusés`,
     nextEpisode: (n: number, when: string) => `Épisode ${n} le ${when}`,
     sequelOf: (title: string) => `Suite de ${title}`,
+    // Une entrée AniList et MyAnimeList d’une saison, telle que la liste des identifiants d’anime la place.
+    cour: {
+      label: 'L’entrée de cette saison',
+      part: (part: number, parts: number) => `Partie ${part} sur ${parts}`,
+      premieres: 'Commence cette saison',
+      episodes: (first: number, last: number) => (first === last ? `Épisode ${first}` : `Épisodes ${first} à ${last}`),
+      next: (episode: number, when: string) => `Épisode ${episode} ${when}`,
+      status: { notYetReleased: 'Pas encore diffusée', releasing: 'En cours', finished: 'Terminée' },
+      planned: (n: number) => plural(n, { one: `${n} épisode prévu`, other: `${n} épisodes prévus` }),
+      source: (source: string) => `Adaptée ${source}`,
+      studios: (list: string) => `Studios : ${list}`,
+      onAnilist: 'Sur AniList',
+      onMal: 'Sur MyAnimeList',
+      describe: 'La description de MyAnimeList',
+      describing: 'MyAnimeList est interrogé…',
+      describeFailed: 'MyAnimeList n’a pas pu être interrogé pour l’instant.',
+      undescribed: 'MyAnimeList n’en dit pas plus.',
+      sources: {
+        original: 'd’une histoire originale',
+        manga: 'd’un manga',
+        light_novel: 'd’un light novel',
+        novel: 'd’un roman',
+        web_manga: 'd’un webtoon',
+        web_novel: 'd’un roman en ligne',
+        visual_novel: 'd’un visual novel',
+        game: 'd’un jeu',
+        '4_koma_manga': 'd’un yonkoma',
+        digital_manga: 'd’un manga numérique',
+        card_game: 'd’un jeu de cartes',
+        book: 'd’un livre',
+        picture_book: 'd’un album illustré',
+        music: 'd’une musique',
+        mixed_media: 'de plusieurs médias',
+        radio: 'd’une fiction radiophonique',
+      },
+    },
     finished: 'tous diffusés',
     trailerOf: (title: string) => `Bande-annonce : ${title}`,
     loadFailed: 'La saison n’a pas pu être chargée à l’instant. Réessayez dans un moment.',
@@ -1141,6 +1221,23 @@ export const fr: Dict = {
           store: 'Le magasin de médias est éteint (AMS_MEDIA_STORAGE) : tant qu’il l’est, le relais nomme le serveur d’images de TMDB.',
           publicUrl: 'AMS_PUBLIC_URL n’est pas défini : tant qu’il ne l’est pas, le relais nomme le serveur d’images de TMDB.',
           both: 'Le magasin de médias est éteint (AMS_MEDIA_STORAGE) et AMS_PUBLIC_URL n’est pas défini : tant qu’il manque l’un ou l’autre, le relais nomme le serveur d’images de TMDB.',
+        },
+      },
+      // Ce que chaque relais répond lui-même, depuis le catalogue, avant de demander à son service.
+      relayMode: {
+        title: 'Ce que les relais répondent eux-mêmes',
+        lead: 'Si un relais demande tout à son service, ou répond lui-même pour les œuvres que ce serveur détient, depuis le catalogue, à la forme du service.',
+        label: (relay: string) => `Ce que le ${relay} répond lui-même`,
+        options: { relay: 'Demander au service', 'local-first': 'Le catalogue d’abord' },
+        consequence: {
+          relay: (service: string) =>
+            `Tout est demandé à ${service}, et les verrous sont écrits dans ses réponses. Une œuvre saisie à la main ici est inconnue des clients de ${service}.`,
+          'local-first': (service: string) =>
+            `Une œuvre que ce serveur détient — corrigée, saisie à la main, ou que ${service} ne connaît pas — reçoit une réponse tirée du catalogue, à la forme de ${service}, sans rien demander à ${service} ni à sa clé ; une recherche liste d’abord les œuvres du catalogue. Le reste est demandé à ${service}, comme avant.`,
+        },
+        answers: {
+          tmdb: 'Les films et les séries, leurs saisons et leurs épisodes, un find par l’un de leurs identifiants, la première page d’une recherche. Où regarder, les critiques et le reste viennent toujours de TMDB, par le relais, quand TMDB connaît l’œuvre.',
+          tvdb: 'La fiche d’une série ou d’un film, courte ou étendue, ses traductions, ses épisodes dans tous les ordres qu’elle tient, ses saisons et ses épisodes, la première page d’une recherche. Les personnes, les listes et les sociétés viennent toujours de TheTVDB.',
         },
       },
       surface: 'API',
@@ -1884,6 +1981,10 @@ export const fr: Dict = {
         episodeStills: 'Images d’épisode',
         airDateUtc: 'Instant de diffusion (UTC)',
         absoluteNumbering: 'Numérotation absolue',
+        seasonTranslations: 'Titres et synopsis des saisons dans d’autres langues',
+        keywordEntities: 'Mots-clés, avec les identifiants de TMDB',
+        companies: 'Chaînes et sociétés, un rôle à la fois depuis la première qui en liste, les autres les complétant',
+        videos: 'Vidéos (toutes)',
       },
       only: { series: 'séries', movie: 'films' },
       cell: {
@@ -3206,6 +3307,7 @@ export const fr: Dict = {
         writer: 'Scénario',
         producer: 'Production',
         guest: 'Invité',
+        crew: 'Équipe technique',
         as: (character: string) => `dans le rôle de ${character}`,
         titles: 'Autres titres',
         titlesHint:
@@ -3430,6 +3532,7 @@ export const fr: Dict = {
       names: {
         'refresh.sweep': 'Actualiser ce qui est dû',
         'refresh.all': 'Tout actualiser',
+        'refresh.replay': 'Compléter depuis les réponses gardées',
         'import.anime': 'Liste des identifiants d’anime',
         'import.imdb': 'Notes IMDb',
         'imdb.akas': 'Titres IMDb par pays',
@@ -3453,6 +3556,7 @@ export const fr: Dict = {
       about: {
         'refresh.sweep': 'Les fiches dont les informations ont vieilli — une série en cours toutes les quelques heures, une série terminée chaque semaine — redemandées à leurs sources, par lots.',
         'refresh.all': 'Toutes les fiches qui ont un identifiant ailleurs, redemandées à leurs sources maintenant, l’une après l’autre. On peut l’arrêter ; le reste est alors actualisé par le programme.',
+        'refresh.replay': 'Ce que cette version garde des réponses de TMDB et de TheTVDB et que les précédentes laissaient de côté — les chaînes et les sociétés avec leurs identifiants et leurs logos, les mots-clés et les vidéos de TMDB, la langue, la taille et les votes de chaque image, le département et le métier de chaque crédit de l’équipe — rempli dans chaque œuvre depuis les réponses gardées avec elle, sans rien demander à l’un ni à l’autre : ce que le prochain rafraîchissement de chaque œuvre apporterait, tout de suite. Les réponses de TMDB de plus de six mois sont laissées de côté. Le reste de l’équipe et les titres des saisons dans d’autres langues attendent ce rafraîchissement.',
         'import.anime': 'La liste qui relie AniList et MyAnimeList à TheTVDB et TMDB, téléchargée en entier.',
         'import.imdb': 'Le fichier des notes d’IMDb, téléchargé en entier et gardé pour les œuvres présentes ici.',
         'imdb.akas': 'Le fichier des titres d’IMDb — un demi-gigaoctet — lu à mesure qu’il arrive, et les titres des œuvres présentes ici gardés : Radarr reçoit les titres d’un film dans les pays qui lui sont réglés. Chaque semaine, une fois activé dans les réglages. Il peut être arrêté : les œuvres atteintes gardent leurs nouveaux titres, les autres les anciens.',
@@ -3599,6 +3703,8 @@ export const fr: Dict = {
         exported: (works: number, episodes: number, failed: number) =>
           `${works} œuvres, ${episodes} épisodes${failed ? `, ${failed} en échec` : ''}`,
         nothingDue: 'Rien n’était dû',
+        replayed: (filled: number, passed: number) =>
+          `${plural(filled, { one: `${filled} œuvre complétée`, other: `${filled} œuvres complétées` })}, ${plural(passed, { one: `${passed} laissée de côté`, other: `${passed} laissées de côté` })}`,
         stored: (done: number, failed: number, of: number) => `${done} stockés, ${failed} en échec, sur ${of}`,
         storedProgress: (at: number, of: number, done: number, failed: number) =>
           `${at} sur ${of} : ${done} stockés, ${failed} en échec`,
@@ -3940,6 +4046,8 @@ export const fr: Dict = {
       'tmdb.watchRegion': 'Pays pour « Où regarder »',
       'tmdb.searchLimit': 'Résultats par recherche',
       'tmdb.castLimit': 'Distribution gardée par œuvre',
+      'tmdb.crewLimit': 'Équipe technique gardée par œuvre',
+      'tmdb.imageLimit': 'Images de TMDB gardées de chaque sorte',
       'tvdb.castLimit': 'Personnages de TheTVDB gardés par série',
       'tvdb.searchFallback': 'TheTVDB, quand une recherche ne trouve rien',
       'skyhook.fallback': 'Skyhook, quand TheTVDB n’a rien',
@@ -3972,6 +4080,8 @@ export const fr: Dict = {
       'mcp.enabled': 'Serveur MCP, pour les agents',
       'relays.staleIfError': 'La dernière réponse des relais, quand un service est en panne',
       'tmdb.images': 'Où les clients de TMDB prennent les images',
+      'tmdb.relayMode': 'Ce que le relais TMDB répond lui-même',
+      'tvdb.relayMode': 'Ce que le relais TheTVDB répond lui-même',
       'refresh.enabled': 'Rafraîchir en arrière-plan',
       'refresh.intervalSeconds': 'Entre deux passages',
       'refresh.batchSize': 'Œuvres par passage',
@@ -4000,6 +4110,10 @@ export const fr: Dict = {
       'tmdb.searchLimit': 'Le nombre d’œuvres qu’une recherche renvoie.',
       'tmdb.castLimit':
         'Combien d’acteurs de TMDB une œuvre garde, têtes d’affiche en premier : 25 au départ, 200 au plus. Chacun est une ligne, et un portrait à récupérer et à garder. Une œuvre déjà là prend le nouveau nombre à son prochain rafraîchissement.',
+      'tmdb.crewLimit':
+        'Combien de membres de l’équipe technique de TMDB une œuvre garde, tous départements — réalisation, scénario, production, musique, image, montage et le reste —, les métiers les plus parlants d’abord : 30 au départ, 500 au plus, 0 pour aucun. Seuls les réalisateurs, les scénaristes et les producteurs ont un portrait récupéré. Une œuvre déjà là prend le nouveau nombre à son prochain rafraîchissement.',
+      'tmdb.imageLimit':
+        'Combien d’affiches et de fonds de TMDB une œuvre garde, la meilleure de chaque langue utile d’abord — celle du catalogue, l’anglais, sans texte, la langue de l’œuvre ; les keyarts et les logos en prennent les trois cinquièmes, arrondis au-dessus : 5 garde cinq affiches, cinq fonds, trois keyarts et trois logos. De 1 à 50. Une œuvre déjà là prend le nouveau nombre à son prochain rafraîchissement.',
       'tvdb.castLimit':
         'Combien de personnages de TheTVDB une série garde, dans l’ordre de TheTVDB\u202f: chacun est rapproché par son nom de la distribution qu’une autre source a donnée, ou ajouté à sa suite, et donne à la personne l’identifiant de TheTVDB. 25 sans réglage, 200 au plus. Une œuvre déjà là prend le nouveau nombre à son prochain rafraîchissement.',
       'tvdb.searchFallback': 'Interrogé seulement quand le stock local et TMDB ne renvoient rien. TheTVDB connaît des séries dont TMDB n’a jamais entendu parler.',
@@ -4026,6 +4140,10 @@ export const fr: Dict = {
         'Quand TMDB, TheTVDB ou AniList est injoignable, tarde trop, ou répond 429, 500, 502, 503 ou 504, les relais répondent avec la dernière réponse gardée pour la même requête — de sept jours au plus pour TMDB et TheTVDB, d’un jour pour AniList —, avec un en-tête Age qui dit son âge ; les listes de référence de TMDB et de TheTVDB avec la copie que garde la base, de 180 jours au plus. Seul ce qui a été demandé avec la clé de ce serveur est gardé pour cela. Aussi sur Ouverture & API.',
       'tmdb.images':
         'Le serveur d’images que nomme le /3/configuration du relais TMDB. Celui de TMDB, ou celui de ce serveur, /tmdb-images/…, où Jellyfin, Kodi, Kometa et Emby prennent alors les images — seulement avec le magasin de médias allumé et AMS_PUBLIC_URL défini ; sans l’un ou l’autre, celui de TMDB. Seerr et Yamtrack chargent les leurs dans le navigateur du lecteur, chez TMDB, dans les deux cas. Aussi sur Ouverture & API.',
+      'tmdb.relayMode':
+        'relay demande tout à TMDB et écrit les verrous dans ses réponses. local-first répond lui-même pour un film ou une série que ce serveur détient — ses saisons et ses épisodes, un find par l’un de ses identifiants — depuis le catalogue, à la forme de TMDB, corrections et œuvres saisies à la main comprises, sans demander à TMDB ni sa clé ; met les œuvres du catalogue en tête d’une recherche ; et demande le reste à TMDB. Aussi sur Ouverture & API.',
+      'tvdb.relayMode':
+        'relay demande tout à TheTVDB et écrit les verrous dans ses réponses. local-first répond lui-même pour une série ou un film que ce serveur détient — sa fiche, ses épisodes dans tous les ordres, ses saisons et ses épisodes — depuis le catalogue, à la forme de TheTVDB, sans demander à TheTVDB ni sa clé ; met les œuvres du catalogue en tête d’une recherche ; et demande le reste à TheTVDB. Aussi sur Ouverture & API.',
       'refresh.enabled': 'Les œuvres stockées sont récupérées à nouveau, régulièrement, à mesure que ce qu’on en sait vieillit.',
       'refresh.intervalSeconds': 'En secondes. Une minute au minimum, une semaine au maximum.',
       'refresh.batchSize': 'Le nombre d’œuvres récupérées à nouveau à chaque réveil du planificateur.',
@@ -4066,6 +4184,10 @@ export const fr: Dict = {
       'backup.schedule.monthly': 'Chaque mois',
       'tmdb.images.tmdb': 'Chez TMDB',
       'tmdb.images.server': 'Chez ce serveur',
+      'tmdb.relayMode.relay': 'Demander à TMDB',
+      'tmdb.relayMode.local-first': 'Le catalogue d’abord',
+      'tvdb.relayMode.relay': 'Demander à TheTVDB',
+      'tvdb.relayMode.local-first': 'Le catalogue d’abord',
     },
     inherited: 'Hérité',
     inheritedHint: 'Suit la réponse du serveur.',
@@ -4307,7 +4429,21 @@ export const fr: Dict = {
     count: (n: number, max: number) => `${n} / ${max}`,
   },
   facet: {
-    kinds: { genre: 'Genre', network: 'Chaîne ou studio', year: 'Année', decade: 'Décennie' },
+    kinds: {
+      genre: 'Genre',
+      network: 'Chaîne ou studio',
+      year: 'Année',
+      decade: 'Décennie',
+      company: 'Société',
+      keyword: 'Mot-clé',
+    },
+    // Une chaîne ou une société en elle-même : ce qu’elle est, d’où, ce qu’elle a fait.
+    companyKinds: { network: 'Chaîne', company: 'Société' },
+    roles: { network: 'Chaîne', production: 'Production', studio: 'Studio', distributor: 'Distribution' },
+    roleCount: (role: string, n: number) => `${role} · ${n}`,
+    onTmdb: 'Sur TMDB',
+    keywordNote: 'Un des mots-clés de TMDB.',
+    notFoundEntityHint: 'Rien ne porte cet identifiant, ou aucune œuvre que ce catalogue vous montre n’y est rangée.',
     decadeName: (year: number) => `Les années ${year}`,
     works: (n: number) => plural(n, { one: `${n} œuvre au catalogue`, other: `${n} œuvres au catalogue` }),
     none: 'Rien au catalogue pour l’instant',
@@ -4344,7 +4480,7 @@ export const fr: Dict = {
     shared: 'Les personnes qu’elles partagent',
     sharedNone: 'Personne n’est crédité sur les deux.',
     on: (title: string) => `Sur ${title} :`,
-    jobs: { actor: 'Interprétation', director: 'Réalisation', writer: 'Scénario', producer: 'Production', guest: 'Invité·e' },
+    jobs: { actor: 'Interprétation', director: 'Réalisation', writer: 'Scénario', producer: 'Production', guest: 'Invité·e', crew: 'Équipe technique' },
   },
   notFound: {
     title: 'Rien à cette adresse',

@@ -1046,6 +1046,34 @@ const CHILDREN: &[Child] = &[
         kept: true,
     },
     Child {
+        table: "media_season_translation",
+        key: &["season_number", "language"],
+        same: Some(&["season_number", "language"]),
+        marks: &["season_number", "language", "title", "overview"],
+        kept: true,
+    },
+    Child {
+        table: "media_company",
+        key: &["company_id", "role"],
+        same: Some(&["company_id", "role"]),
+        marks: &["company_id", "role", "sort_order"],
+        kept: true,
+    },
+    Child {
+        table: "media_keyword",
+        key: &["keyword_id"],
+        same: Some(&["keyword_id"]),
+        marks: &["keyword_id", "sort_order"],
+        kept: true,
+    },
+    Child {
+        table: "media_video",
+        key: ID,
+        same: Some(&["site", "video_key"]),
+        marks: ID,
+        kept: true,
+    },
+    Child {
         table: "media_numbering",
         key: &[],
         same: Some(&[]),
@@ -1412,7 +1440,8 @@ async fn fold(
 /// a missing one as an empty one — as the unique indexes over a language
 /// read it. A credit is a person in a part, of the work or of one of its
 /// episodes: the person by TMDB's id for them where the credit has one,
-/// else by the person it names here, else by their name whatever its case.
+/// else by the person it names here, else by their name whatever its case;
+/// one of the rest of the crew, a person in a job.
 fn same_key(table: &str, columns: &[&str], row: &Row) -> String {
     if table == "media_credit" {
         let person = match (row.get("tmdb_person_id"), row.get("person_id")) {
@@ -1423,9 +1452,14 @@ fn same_key(table: &str, columns: &[&str], row: &Row) -> String {
                 text_of(row.get("person_name")).trim().to_lowercase()
             ),
         };
+        let kind = text_of(row.get("credit_type"));
+        let job = if kind == crate::domain::CreditType::Crew.as_str() {
+            format!("|{}", text_of(row.get("job")))
+        } else {
+            String::new()
+        };
         return format!(
-            "{}|{}|{}|{person}",
-            text_of(row.get("credit_type")),
+            "{kind}|{}|{}|{person}{job}",
             text_of(row.get("season_number")),
             text_of(row.get("episode_number")),
         );
@@ -1948,6 +1982,10 @@ const PUT_BACK: &[&str] = &[
     "media_release",
     "media_translation",
     "media_rating",
+    "media_season_translation",
+    "media_company",
+    "media_keyword",
+    "media_video",
     "media_numbering",
     "media_order",
     "media_order_episode",
@@ -2327,6 +2365,8 @@ mod tests {
             credit_tmdb_id: None,
             sort_order: 0,
             is_manual: false,
+            department: None,
+            job: None,
         }
     }
 

@@ -176,6 +176,19 @@ pub struct Alias {
     pub source: String,
 }
 
+/// Somebody's name and biography in one language, as TMDB's record of them
+/// gives them: read with the record, and kept beside it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonTranslation {
+    /// ISO 639-3, as the rest of the model: `fra`.
+    pub language: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub biography: Option<String>,
+}
+
 /// Who a credit names, beyond the name it gives.
 ///
 /// From a source: what it knows of them that a credit has no room for —

@@ -11,6 +11,8 @@
 //! following the tasks through one instance sees a run another instance is
 //! making, and how far it has got.
 
+use std::sync::{Arc, LazyLock};
+
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -20,6 +22,7 @@ use crate::{
         self,
         job::{Job, Status},
     },
+    error::{AppError, AppResult},
     jobs::schedule::{self, Schedule, Setting},
     state::AppState,
 };
@@ -27,6 +30,9 @@ use crate::{
 /// A task's name, as the history files its runs.
 pub const REFRESH_SWEEP: &str = repo::job::kinds::REFRESH_SWEEP;
 pub const REFRESH_ALL: &str = repo::job::kinds::REFRESH_ALL;
+/// What every work keeps of the answers kept with it, filled in from them
+/// without asking anybody: see [`replay_now`].
+pub const REFRESH_REPLAY: &str = "refresh.replay";
 pub const IMPORT_ANIME: &str = repo::job::kinds::IMPORT_ANIME;
 pub const IMPORT_IMDB: &str = repo::job::kinds::IMPORT_IMDB;
 pub const IMDB_AKAS: &str = repo::job::kinds::IMDB_AKAS;
@@ -52,6 +58,8 @@ pub enum TaskId {
     RefreshSweep,
     #[serde(rename = "refresh.all")]
     RefreshAll,
+    #[serde(rename = "refresh.replay")]
+    RefreshReplay,
     #[serde(rename = "import.anime")]
     ImportAnime,
     #[serde(rename = "import.imdb")]
@@ -90,9 +98,10 @@ pub enum TaskId {
 
 impl TaskId {
     /// Every task, in the order the page shows them.
-    pub const ALL: [TaskId; 19] = [
+    pub const ALL: [TaskId; 20] = [
         Self::RefreshSweep,
         Self::RefreshAll,
+        Self::RefreshReplay,
         Self::ImportAnime,
         Self::ImportImdb,
         Self::ImdbAkas,
@@ -117,6 +126,7 @@ impl TaskId {
         match self {
             Self::RefreshSweep => REFRESH_SWEEP,
             Self::RefreshAll => REFRESH_ALL,
+            Self::RefreshReplay => REFRESH_REPLAY,
             Self::ImportAnime => IMPORT_ANIME,
             Self::ImportImdb => IMPORT_IMDB,
             Self::ImdbAkas => IMDB_AKAS,
@@ -298,6 +308,7 @@ pub async fn board(state: &AppState) -> anyhow::Result<Board> {
 fn lock_busy(id: &str) -> bool {
     match id {
         REFRESH_SWEEP | REFRESH_ALL => crate::jobs::refresh::is_busy(),
+        REFRESH_REPLAY => is_replaying(),
         IMPORT_ANIME | IMPORT_IMDB | IMDB_AKAS | IMDB_EPISODES => crate::jobs::datasets::is_busy(),
         IMPORT_BATCH => crate::jobs::import::is_busy(),
         IMPORT_RULES => crate::jobs::rules::is_busy(),
@@ -320,7 +331,7 @@ fn lock_busy(id: &str) -> bool {
 /// that is one instance's own.
 pub fn hold_of(id: &str) -> Option<&'static str> {
     match id {
-        REFRESH_SWEEP | REFRESH_ALL => Some(crate::jobs::refresh::HOLD),
+        REFRESH_SWEEP | REFRESH_ALL | REFRESH_REPLAY => Some(crate::jobs::refresh::HOLD),
         IMPORT_ANIME | IMPORT_IMDB | IMDB_AKAS | IMDB_EPISODES => Some(crate::jobs::datasets::HOLD),
         IMPORT_BATCH => Some(crate::jobs::import::HOLD),
         IMPORT_RULES => Some(crate::jobs::rules::HOLD),
@@ -360,11 +371,18 @@ async fn state_of(
 ) -> anyhow::Result<TaskState> {
     let id = task.as_str();
     let (last, last_success_at) = repo::job::latest(&state.db, id).await?;
-    // Held here, or — among several instances — held elsewhere.
+    // Held here, or — among several instances — held elsewhere. The answers
+    // kept are not replayed beside a refresh in bulk, which writes the same
+    // rows, nor the other way round.
     let busy = lock_busy(id)
         || match hold_of(id) {
             Some(name) => state.coord.is_held(name).await,
             None => false,
+        }
+        || match id {
+            REFRESH_REPLAY => crate::jobs::refresh::is_busy(),
+            REFRESH_SWEEP | REFRESH_ALL => is_replaying(),
+            _ => false,
         };
     // A run is in progress when the history says so and the instance it
     // names is at it: this one with its lock held, or another still heard of.
@@ -397,6 +415,9 @@ async fn state_of(
             )
         }
         REFRESH_ALL => (Mode::Manual, None, None),
+        // By hand, once after an upgrade: what a refresh would fill in from
+        // the providers, filled in sooner from what they last answered.
+        REFRESH_REPLAY => (Mode::Manual, None, None),
         IMPORT_ANIME => {
             let on = crate::jobs::datasets::anime_wanted(state);
             (
@@ -607,6 +628,66 @@ async fn next_run(
     })
 }
 
+/// Held while the answers kept are replayed into the works, on this
+/// instance.
+static REPLAYING: LazyLock<Arc<tokio::sync::Mutex<()>>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
+
+/// Whether the answers kept are being replayed into the works here now.
+pub fn is_replaying() -> bool {
+    REPLAYING.try_lock().is_err()
+}
+
+/// Fill into every work, now, as `by` asked, what this version keeps of the
+/// answers kept with it and older versions let go — its networks and
+/// companies, TMDB's keywords and videos, its pictures' languages and what
+/// TMDB says of them, its crew's departments and jobs — in the background:
+/// the run's id at once. Nothing is asked of any service; see
+/// [`crate::jobs::refresh::replay_snapshots`].
+///
+/// Never beside a refresh in bulk, which writes the same rows from what the
+/// services answer now: held under the same name among several instances,
+/// and refused while one runs here. The works kept in memory are read again
+/// once it ends.
+pub async fn replay_now(state: &AppState, by: &str) -> AppResult<Option<String>> {
+    let busy = || {
+        AppError::Conflict(
+            "works are being refreshed or filled in already; its run is in the history".into(),
+        )
+    };
+    if crate::jobs::refresh::is_busy() {
+        return Err(busy());
+    }
+    let held = REPLAYING.clone().try_lock_owned().map_err(|_| busy())?;
+    let shared = state
+        .coord
+        .hold_for(crate::jobs::refresh::HOLD, "works are being refreshed")
+        .await?;
+    // Not without its record: the run is what says how it went.
+    let record = repo::job::start_by(&state.db, REFRESH_REPLAY, None, Some(by)).await?;
+
+    let state = state.clone();
+    let id = record.clone();
+    tokio::spawn(async move {
+        let _held = held;
+        let _shared = shared;
+        let outcome = crate::jobs::refresh::replay_snapshots(&state).await;
+        state.caches.flush("items").await;
+        let closed = match outcome {
+            Ok(done) => {
+                let summary = format!("{} filled in, {} passed over", done.filled, done.passed);
+                repo::job::finish(&state.db, &record, Some(&summary), None).await
+            }
+            Err(e) => repo::job::finish(&state.db, &record, None, Some(&format!("{e:#}"))).await,
+        };
+        if let Err(e) = closed {
+            tracing::warn!(error = %e, "could not close the job run");
+        }
+    });
+
+    Ok(Some(id))
+}
+
 /// One task as it stands: what a change to its schedule answers with.
 pub async fn state_named(state: &AppState, task: TaskId) -> anyhow::Result<TaskState> {
     let read = schedule::of(state, task.as_str()).await?;
@@ -633,6 +714,81 @@ mod tests {
             "not_configured"
         );
         assert_eq!(TaskId::named("refresh.item"), None);
+    }
+
+    #[tokio::test]
+    async fn the_answers_kept_are_filled_in_by_a_task_run_by_hand() {
+        use crate::domain::{CompanyRole, ExternalIds, MediaItem, MediaKind};
+
+        let state = crate::api::native::testing::server().await;
+        let mut work = MediaItem::empty(MediaKind::Series);
+        work.title = "Filled In From Its Answer".into();
+        work.slug = crate::domain::make_slug(&work.title, None);
+        work.external_ids = ExternalIds {
+            tmdb: Some(918_273),
+            ..Default::default()
+        };
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        let answer = serde_json::json!({
+            "id": 918_273,
+            "name": "Filled In From Its Answer",
+            "networks": [{ "id": 918, "name": "Tidewater Broadcasting", "origin_country": "GB" }],
+            "keywords": { "results": [{ "id": 273, "name": "tidewater" }] }
+        });
+        repo::snapshot::put(&state.db, &work.id, "tmdb", &answer.to_string(), None)
+            .await
+            .expect("kept");
+
+        // Another test may be refreshing in bulk in this process: wait for it.
+        let run = loop {
+            match replay_now(&state, "an administrator").await {
+                Ok(run) => break run.expect("a run"),
+                Err(AppError::Conflict(_)) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+        let job = loop {
+            let job = repo::job::get(&state.db, &run)
+                .await
+                .expect("read")
+                .expect("recorded");
+            if job.status != Status::Running {
+                break job;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+        assert_eq!(job.status, Status::Succeeded, "{:?}", job.error);
+        assert_eq!(job.kind, REFRESH_REPLAY);
+        assert_eq!(job.detail.as_deref(), Some("1 filled in, 0 passed over"));
+
+        let companies = repo::company::of_work(&state.db, &work.id)
+            .await
+            .expect("read");
+        assert_eq!(
+            companies
+                .iter()
+                .map(|c| (c.role, c.company.name.as_str()))
+                .collect::<Vec<_>>(),
+            [(CompanyRole::Network, "Tidewater Broadcasting")]
+        );
+
+        // On the board by hand, its last run the one just made.
+        let task = state_named(&state, TaskId::RefreshReplay)
+            .await
+            .expect("read");
+        assert_eq!(task.mode, Mode::Manual);
+        assert_eq!(task.last.map(|job| job.id), Some(run));
+        assert_eq!(TaskId::named("refresh.replay"), Some(TaskId::RefreshReplay));
     }
 
     #[test]

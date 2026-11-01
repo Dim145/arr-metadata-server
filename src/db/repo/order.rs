@@ -9,6 +9,10 @@
 //! a sequence of places, each naming an episode the work holds or carrying
 //! the record of one it does not.
 //!
+//! TMDB's own numbering of a series is one of them (`tmdb-aired`): the aired
+//! order is TheTVDB's, and TMDB's seasons, which cut some series otherwise,
+//! are kept beside it as they were read at the last refresh.
+//!
 //! Who numbers the aired order, and whether TMDB does so in TheTVDB's place,
 //! is kept here too: see [`Numbering`].
 
@@ -17,7 +21,10 @@ use sqlx::{Any, Transaction};
 
 use crate::{
     db::{Db, RowExt, from_bool, new_id, now},
-    domain::{EpisodeOrder, OrderKind, OrderRecord, PlacedEpisode},
+    domain::{
+        EpisodeOrder, OrderKind, OrderRecord, PlacedEpisode,
+        orders::{TMDB_AIRED, TMDB_AIRED_LABEL},
+    },
     merge::provenance::Provenance,
 };
 
@@ -187,8 +194,9 @@ fn place(row: &sqlx::any::AnyRow) -> Result<Option<PlacedEpisode>> {
 }
 
 /// Where an order stands among those offered: TheTVDB's in the order of
-/// [`TVDB_OFFERED`], an unknown type of theirs after, by name; then TMDB's
-/// groups by kind and name; then those made here, by name.
+/// [`TVDB_OFFERED`], an unknown type of theirs after, by name; then TMDB's,
+/// its own numbering first and its groups after it by kind and name; then
+/// those made here, by name.
 fn rank(order: &EpisodeOrder) -> (usize, usize, String) {
     let kind = |kind: OrderKind| {
         [
@@ -215,7 +223,12 @@ fn rank(order: &EpisodeOrder) -> (usize, usize, String) {
                 .unwrap_or(TVDB_OFFERED.len()),
             order.key.clone(),
         ),
-        "tmdb" => (1, kind(order.kind), order.label.to_lowercase()),
+        "tmdb" if order.key == TMDB_AIRED => (1, 0, String::new()),
+        "tmdb" => (
+            1,
+            kind(order.kind).saturating_add(1),
+            order.label.to_lowercase(),
+        ),
         _ => (2, 0, order.label.to_lowercase()),
     }
 }
@@ -300,16 +313,18 @@ pub async fn replace_source(
 /// The episode groups TMDB lists for a work, as orders still to be read:
 /// a group new here is kept with no places, one whose count of episodes moved
 /// is to be read again, and one TMDB no longer lists is gone. Its places are
-/// read the first time it is served or shown ([`write_read`]).
+/// read the first time it is served or shown ([`write_read`]). TMDB's own
+/// numbering is no group, and is left alone ([`write_tmdb_aired`]).
 pub async fn list_groups(db: &Db, media_id: &str, groups: &[EpisodeOrder]) -> Result<()> {
     let mut tx = db.begin_write().await?;
     let at = now();
 
     let held = sqlx::query(db.sql(
         "SELECT id, key, announced, is_frozen FROM media_order
-          WHERE media_id = ? AND source = 'tmdb'",
+          WHERE media_id = ? AND source = 'tmdb' AND key <> ?",
     ))
     .bind(media_id)
+    .bind(TMDB_AIRED)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -403,6 +418,52 @@ pub async fn write_read(
     write_places(db, &mut tx, &id, places).await?;
     tx.commit().await?;
     Ok(true)
+}
+
+/// Write TMDB's own numbering of a work (`tmdb-aired`), whole: the places
+/// TMDB's seasons give it this time, read as of now — none, for a series TMDB
+/// lists no episode of yet, which is read all the same. Made the first time;
+/// kept frozen when it was.
+pub async fn write_tmdb_aired(db: &Db, media_id: &str, places: &[PlacedEpisode]) -> Result<()> {
+    let mut tx = db.begin_write().await?;
+    let at = now();
+    let id = match order_id(db, &mut tx, media_id, TMDB_AIRED).await? {
+        Some(id) => {
+            sqlx::query(db.sql(
+                "UPDATE media_order SET kind = ?, source = ?, label = ?, read_at = ?, updated_at = ?
+                  WHERE id = ?",
+            ))
+            .bind(OrderKind::Aired.as_str())
+            .bind(crate::providers::names::TMDB)
+            .bind(TMDB_AIRED_LABEL)
+            .bind(&at)
+            .bind(&at)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+            id
+        }
+        None => {
+            let id = new_id();
+            let order = EpisodeOrder {
+                key: TMDB_AIRED.to_string(),
+                kind: OrderKind::Aired,
+                source: crate::providers::names::TMDB.to_string(),
+                source_ref: None,
+                label: TMDB_AIRED_LABEL.to_string(),
+                is_default: false,
+                is_frozen: false,
+                announced: None,
+                updated_at: at.clone(),
+                episodes: Vec::new(),
+            };
+            insert_header(db, &mut tx, &id, media_id, &order, Some(&at), &at).await?;
+            id
+        }
+    };
+    write_places(db, &mut tx, &id, places).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Keep an order made here: its header and its places.
@@ -885,6 +946,95 @@ mod tests {
         // No longer listed by TMDB: gone.
         list_groups(&db, &work.id, &[]).await.unwrap();
         assert!(keys(&db, &work.id).await.unwrap().is_empty());
+    }
+
+    /// TMDB's own numbering is written whole at each read, first among
+    /// TMDB's orders, frozen still when it was; the groups TMDB lists, or no
+    /// longer lists, leave it alone, and it is never one to read.
+    #[tokio::test]
+    async fn tmdbs_own_numbering_is_written_whole_and_no_group_takes_it_away() {
+        let db = db().await;
+        let work = firefly(&db).await;
+        let tmdb_place = |tmdb_id: i64, season: i32, number: i32, title: &str| PlacedEpisode {
+            tmdb_id: Some(tmdb_id),
+            tvdb_id: None,
+            record: Some(OrderRecord {
+                title: title.into(),
+                overview: None,
+                aired: Some("2002-09-20".into()),
+                runtime: Some(44),
+                image: None,
+                finale_type: None,
+            }),
+            ..placed(0, season, number)
+        };
+        let group = EpisodeOrder {
+            key: "tmdb-5acf93e60e0a26346d0000ce".into(),
+            kind: OrderKind::Aired,
+            source: "tmdb".into(),
+            source_ref: Some("5acf93e60e0a26346d0000ce".into()),
+            label: "Broadcast order".into(),
+            announced: Some(14),
+            ..tvdb("dvd", "DVD Order", vec![])
+        };
+        list_groups(&db, &work.id, std::slice::from_ref(&group))
+            .await
+            .unwrap();
+        write_tmdb_aired(
+            &db,
+            &work.id,
+            &[
+                tmdb_place(62131, 1, 1, "Serenity"),
+                tmdb_place(62132, 1, 2, "The Train Job"),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let read = list(&db, &work.id).await.unwrap();
+        assert_eq!(
+            read.iter().map(|o| o.key.as_str()).collect::<Vec<_>>(),
+            ["official", TMDB_AIRED, "tmdb-5acf93e60e0a26346d0000ce"]
+        );
+        let own = &read[1];
+        assert_eq!(
+            (own.kind, own.source.as_str(), own.label.as_str()),
+            (OrderKind::Aired, "tmdb", TMDB_AIRED_LABEL)
+        );
+        assert_eq!(own.source_ref, None);
+        assert_eq!(
+            own.episodes
+                .iter()
+                .map(|e| (e.season_number, e.episode_number, e.tmdb_id))
+                .collect::<Vec<_>>(),
+            [(1, 1, Some(62131)), (1, 2, Some(62132))]
+        );
+        assert_eq!(
+            own.episodes[1].record.as_ref().map(|r| r.title.as_str()),
+            Some("The Train Job")
+        );
+        // Read already: never one of the orders still to read.
+        assert!(
+            unread(&db, &work.id)
+                .await
+                .unwrap()
+                .iter()
+                .all(|(key, _)| key != TMDB_AIRED)
+        );
+
+        // Frozen, then written again whole: still frozen, its places TMDB's
+        // of this time.
+        assert!(freeze(&db, &work.id, Some(TMDB_AIRED)).await.unwrap());
+        write_tmdb_aired(&db, &work.id, &[tmdb_place(62131, 1, 1, "Serenity")])
+            .await
+            .unwrap();
+        let again = get(&db, &work.id, TMDB_AIRED).await.unwrap().expect("kept");
+        assert!(again.is_frozen);
+        assert_eq!(again.episodes.len(), 1);
+
+        // TMDB listing no group any more takes its groups away, not this.
+        list_groups(&db, &work.id, &[]).await.unwrap();
+        assert_eq!(keys(&db, &work.id).await.unwrap(), [TMDB_AIRED]);
     }
 
     /// What 0013 kept — the DVD and the Superfan orders of a series, by

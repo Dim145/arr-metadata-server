@@ -153,7 +153,7 @@ pub struct Started {
         (status = 400, description = "A batch of works, which is started from the import page with its lines"),
         (status = 403, description = "The caller is not an administrator"),
         (status = 404, description = "No such task"),
-        (status = 409, description = "It is running already, or a backup is being restored"),
+        (status = 409, description = "It is running already, or a task sharing its work is — a refresh in bulk and the answers kept filled in never run together — or a backup is being restored"),
         (status = 503, description = "Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected, the AVIF copies off, no import rule switched on"),
     ),
 )]
@@ -169,6 +169,7 @@ async fn run(
     let job_id = match id.as_str() {
         tasks::REFRESH_SWEEP => jobs::refresh::sweep_now(&state, &by).await?,
         tasks::REFRESH_ALL => jobs::refresh::refresh_everything(&state, &by).await?,
+        tasks::REFRESH_REPLAY => tasks::replay_now(&state, &by).await?,
         tasks::IMPORT_ANIME => {
             jobs::datasets::import_in_background(&state, jobs::datasets::ANIME, &identity, ip)
                 .await?

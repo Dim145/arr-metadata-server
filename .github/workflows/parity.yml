@@ -3,12 +3,13 @@ name: Skyhook parity
 
 # The real Skyhook's second edition beside this server's, for a few real
 # series, once a week and on demand: scripts/e2e-skyhook-v2.sh fetches each
-# from skyhook.sonarr.tv and from a server built here, and fails on every
-# difference that is not an addition — a key the real service sends and this
-# server does not, a season type or a season missing here, an episode without
-# one of its ids. Sonarr v5 reads the real service's shape, and that shape
-# moved twice in October 2026 without a word: a run that fails is the notice
-# that it moved again.
+# from skyhook.sonarr.tv and from a server built here, by TheTVDB's id
+# (`/v2/tvdb`) and by TMDB's (`/v2/tmdb`, the edition Sonarr v5 does not call
+# yet), and fails on every difference that is not an addition — a key the
+# real service sends and this server does not, a season type or a season
+# missing here, an episode without one of its ids. Sonarr v5 reads the real
+# service's shape, and that shape moved twice in October 2026 without a word:
+# a run that fails is the notice that it moved again.
 on:
   schedule:
     # Monday, early: a week of the real service's changes, read before the

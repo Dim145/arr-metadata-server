@@ -1,0 +1,76 @@
+{
+ "page": 1,
+ "results": [
+  {
+   "adult": false,
+   "backdrop_path": "/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg",
+   "id": 1396,
+   "name": "Breaking Bad",
+   "original_name": "Breaking Bad",
+   "overview": "Walter White, a New Mexico chemistry…",
+   "poster_path": "/anFx9aTOOYqgS3v7x3R84Kz67ly.jpg",
+   "media_type": "tv",
+   "original_language": "en",
+   "genre_ids": [
+    18,
+    80
+   ],
+   "popularity": 172.2222,
+   "first_air_date": "2008-01-20",
+   "softcore": false,
+   "vote_average": 8.959,
+   "vote_count": 19013,
+   "origin_country": [
+    "US"
+   ]
+  },
+  {
+   "adult": false,
+   "backdrop_path": "/aEitmeLoFACS2hUEJSo1cDyWosn.jpg",
+   "id": 497814,
+   "title": "Breaking In",
+   "original_title": "Breaking In",
+   "overview": "Shaun Russell takes her son and…",
+   "poster_path": "/nuCxJwcQOEKYoiHTgcf4em8TxWv.jpg",
+   "media_type": "movie",
+   "original_language": "en",
+   "genre_ids": [
+    28,
+    80,
+    53
+   ],
+   "popularity": 3.6845,
+   "release_date": "2018-05-05",
+   "softcore": false,
+   "video": false,
+   "vote_average": 5.95,
+   "vote_count": 738
+  },
+  {
+   "adult": false,
+   "backdrop_path": "/9ayox8zhcllxKRjP3NA5KBp5M5v.jpg",
+   "id": 34541,
+   "name": "Breaking In",
+   "original_name": "Breaking In",
+   "overview": "Contra Security is a high tech…",
+   "poster_path": "/cDEglbhl4g6yFg203agZAOm8m3b.jpg",
+   "media_type": "tv",
+   "original_language": "en",
+   "genre_ids": [
+    35,
+    10759,
+    80
+   ],
+   "popularity": 7.6315,
+   "first_air_date": "2011-04-06",
+   "softcore": false,
+   "vote_average": 6.6,
+   "vote_count": 81,
+   "origin_country": [
+    "US"
+   ]
+  }
+ ],
+ "total_pages": 37,
+ "total_results": 738
+}

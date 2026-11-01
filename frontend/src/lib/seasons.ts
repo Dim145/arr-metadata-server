@@ -53,6 +53,21 @@ export function chartQuery(at: SeasonRef, language: string, today = localDay(new
   }
 }
 
+/**
+ * The same chart with MyAnimeList's description of each cour listed in it,
+ * MyAnimeList asked for what the server does not have at hand: slower, a
+ * few seconds for a season of sequels, so asked for only once a reader wants
+ * one, and kept apart from the chart itself.
+ */
+export function describedQuery(at: SeasonRef, language: string, today = localDay(new Date())) {
+  return {
+    queryKey: ['season', at.year, at.season, language, today, 'described'] as const,
+    queryFn: () =>
+      api.get<SeasonChart>(`/seasons/${at.year}/${at.season}${query({ language, today, describe: true })}`),
+    staleTime: 30 * 60_000,
+  }
+}
+
 const utc = (day: string) => Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)))
 const iso = (time: number) => new Date(time).toISOString().slice(0, 10)
 const DAY = 86_400_000

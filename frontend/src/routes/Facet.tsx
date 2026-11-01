@@ -1,6 +1,7 @@
 /**
  * A page of the catalogue: a genre's, a network's or a studio's, a year's or a
- * decade's.
+ * decade's — or a network's or a company's, and a keyword's, as entities of
+ * their own, by this server's ids for them.
  *
  * Its name over a band in the genre's own colour, how many works it holds,
  * the programmer's note on it in brass, the five rated highest, then every
@@ -16,6 +17,8 @@ import { useQuery } from '@tanstack/react-query'
 import { type CSSProperties, useEffect } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 
+import { CompanyLogo } from '../components/companies'
+import { ExternalLink } from '../components/elsewhere'
 import { PosterCard, PosterShelf } from '../components/media'
 import { ProgrammersNote } from '../components/ProgrammersNote'
 import { EmptyState, Glyph, Label, SectionTitle, Skeleton, stockOf } from '../components/ui'
@@ -24,7 +27,8 @@ import { cn } from '../lib/cn'
 import { type FacetKind, decadePath, facetApiPath, yearPath } from '../lib/facets'
 import { useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
-import type { FacetPage } from '../lib/types'
+import { countryName } from '../lib/releases'
+import type { EditorialScope, FacetPage } from '../lib/types'
 import { Browse } from './Browse'
 
 export function Facet({ kind }: { kind: FacetKind }) {
@@ -63,7 +67,7 @@ export function Facet({ kind }: { kind: FacetKind }) {
         <EmptyState
           kind={gone ? 'empty' : 'error'}
           title={gone ? t.facet.notFound : t.common.error}
-          hint={gone ? t.facet.notFoundHint : t.facet.loadFailed}
+          hint={gone ? (kind === 'company' || kind === 'keyword' ? t.facet.notFoundEntityHint : t.facet.notFoundHint) : t.facet.loadFailed}
           action={
             <div className="mt-2 flex flex-wrap justify-center gap-2">
               {gone ? null : (
@@ -95,7 +99,9 @@ export function Facet({ kind }: { kind: FacetKind }) {
     <div className="pt-8">
       <Header kind={kind} page={data} name={name ?? data.name} />
 
-      <ProgrammersNote scope={kind} id={data.slug} note={data.note ?? null} className="mt-8" />
+      {/* A programmer writes of the pages a reader browses to by name; a
+          company's and a keyword's are reached from the works. */}
+      {noted(kind) ? <ProgrammersNote scope={kind} id={data.slug} note={data.note ?? null} className="mt-8" /> : null}
 
       {data.best.length ? (
         <section aria-label={t.facet.best} className="mt-12">
@@ -122,6 +128,11 @@ export function Facet({ kind }: { kind: FacetKind }) {
   )
 }
 
+/** Whether a page of this kind carries the programmer's note. */
+function noted(kind: FacetKind): kind is FacetKind & EditorialScope {
+  return kind === 'genre' || kind === 'network' || kind === 'year' || kind === 'decade'
+}
+
 /** What a page is called, as the interface says it: a decade as "the 1990s". */
 function title(kind: FacetKind, page: FacetPage, t: ReturnType<typeof useI18n>['t']): string {
   return kind === 'decade' ? t.facet.decadeName(Number(page.name)) : page.name
@@ -144,6 +155,9 @@ function Header({ kind, page, name }: { kind: FacetKind; page: FacetPage; name: 
       }
     : undefined
   const year = Number(page.slug)
+  // A company is a network or a company, said as such; the others, by the
+  // kind of page they are.
+  const what = kind === 'company' && page.company ? t.facet.companyKinds[page.company.kind] : t.facet.kinds[kind]
 
   return (
     <header
@@ -157,12 +171,16 @@ function Header({ kind, page, name }: { kind: FacetKind; page: FacetPage; name: 
         {stock ? (
           <span aria-hidden className="size-2 rounded-full" style={{ backgroundColor: `var(--color-stock-${stock})` }} />
         ) : null}
-        <Label>{t.facet.kinds[kind]}</Label>
+        <Label>{what}</Label>
       </div>
-      <h1 className="mt-3 font-display text-4xl leading-[1.05] font-medium text-bone sm:text-5xl lg:text-6xl">{name}</h1>
+      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3">
+        {page.company?.logo ? <CompanyLogo company={page.company} className="h-14 w-28 sm:h-16 sm:w-32" /> : null}
+        <h1 className="min-w-0 font-display text-4xl leading-[1.05] font-medium text-bone sm:text-5xl lg:text-6xl">{name}</h1>
+      </div>
       <p className="mt-4 font-mono text-sm text-bone-dim tabular-nums">
         {page.count ? t.facet.works(page.count) : t.facet.none}
       </p>
+      {kind === 'company' || kind === 'keyword' ? <Entity page={page} /> : null}
 
       {kind === 'year' || kind === 'decade' ? (
         <nav aria-label={kind === 'year' ? t.facet.around : t.facet.aroundDecades} className="mt-6 flex flex-wrap items-center gap-2">
@@ -183,6 +201,43 @@ function Header({ kind, page, name }: { kind: FacetKind; page: FacetPage; name: 
         </nav>
       ) : null}
     </header>
+  )
+}
+
+/**
+ * What a company's or a keyword's page says of it beyond its name: what it
+ * did for the works here and for how many, where it is from, and the way to
+ * it on TMDB.
+ */
+function Entity({ page }: { page: FacetPage }) {
+  const { t, locale } = useI18n()
+  const company = page.company
+  const roles = Object.entries(page.roles ?? {}).filter(([, n]) => n > 0)
+  const tmdb = company?.tmdbId
+    ? `https://www.themoviedb.org/${company.kind === 'network' ? 'network' : 'company'}/${company.tmdbId}`
+    : page.keyword?.tmdbId
+      ? `https://www.themoviedb.org/keyword/${page.keyword.tmdbId}`
+      : undefined
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-bone-dim">
+      {roles.length ? (
+        <ul aria-label={t.work.companiesTitle} className="flex flex-wrap gap-1.5">
+          {roles.map(([role, n]) => (
+            <li key={role} className="rounded-full border border-rule-bright px-2.5 py-1 font-mono text-xs tabular-nums">
+              {t.facet.roleCount(t.facet.roles[role] ?? role, n)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {company?.country ? <span>{countryName(company.country, locale)}</span> : null}
+      {page.keyword ? <span>{t.facet.keywordNote}</span> : null}
+      {tmdb ? (
+        <ExternalLink href={tmdb} className="text-bone-dim">
+          {t.facet.onTmdb}
+        </ExternalLink>
+      ) : null}
+    </div>
   )
 }
 
@@ -225,6 +280,16 @@ export function GenrePage() {
 /** A network's or a studio's page. */
 export function NetworkPage() {
   return <Facet kind="network" />
+}
+
+/** A network's or a company's page, as an entity, by this server's id for it. */
+export function CompanyPage() {
+  return <Facet kind="company" />
+}
+
+/** A keyword's page, by this server's id for it. */
+export function KeywordPage() {
+  return <Facet kind="keyword" />
 }
 
 /** A year's page. */

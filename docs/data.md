@@ -100,16 +100,54 @@ work's page, and in its NFO as `<tagline>`, a `<country>` each, by its English n
 each after the studio itself. The tagline, the production countries, the production companies and the
 AniList format can each be locked in the editor.
 
+The **networks and companies** are kept besides as things of their own, once for every work they are
+credited on: by TMDB's id — TMDB numbers its networks and its companies apart, so its network 174 is
+AMC and its company 174 Warner Bros. Pictures — and by TheTVDB's, with the logo TMDB gives and the
+country each is from. A work names each with what it did there: aired it, made it, animated it (one
+of TheTVDB's studios), sold it. A role's list comes from the first source in the priority that lists
+any — TMDB's networks, TheTVDB's studios — and the other completes the same companies with its ids:
+TMDB's AMC and TheTVDB's are one network, found again by its name when only one of the two has named
+it. TMDB's **keywords** are kept the same way, each by its id. The texts above, and their locks, stay
+what they were: these double them, for pages and filters that go by an id.
+
+## Videos and pictures
+
+Every **video** TMDB lists for a work is kept — where it is and its key there, what it is (a trailer,
+a teaser, a clip, a featurette), its language and country, whether the work's makers put it out —
+nine to forty-five of them for a film. The trailer a work is sent to Sonarr, Radarr and Plex with
+stays the one chosen of them, the best official YouTube trailer, which can be locked.
+
+TMDB's **pictures** keep the language written on them — none for a picture without text — and what
+TMDB says of each: its size and how its members voted on it. Asked in the catalogue's language, in
+English and without a language, a work keeps of each kind the best of each language worth having
+first — the catalogue's, English, none, the work's own — then the rest as TMDB ranks them; a
+background without text before one with. How many is the setting `tmdb.imageLimit`; the poster and
+the background TMDB chooses lead as before, and a client that keeps one picture a kind is still given
+the first.
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| `tmdb.imageLimit` | `5` | 1 to 50 | How many of TMDB's posters and backgrounds a work keeps; key art and logos three fifths of it, rounded up — five, five, three and three by default, as before |
+
 ## The people
 
 A work keeps TMDB's **writers** — the screenplay, the story, the novel — a series' **creators** and a
 film's **producers** beside its directors, each with the job TMDB gives them: up to three directors, and
-up to six of each of the others. Radarr is sent those jobs, and the page names each job once with its
-people. How many of TMDB's **actors** a work keeps is the setting `tmdb.castLimit`, on the Settings page:
+up to six of each of the others. Behind them comes the rest of TMDB's **crew**, the most telling jobs
+first — the music, the photography, the editing, then every other job in TMDB's order — each credit with
+TMDB's department and job (`Sound`, `Original Music Composer`); the job stays in the credit's character,
+where its readers have always found it. Radarr is sent the departments and the jobs, and the page names
+each job once with its people. The rest of the crew comes without a portrait: the media store keeps
+every credit's, and the defaults keep no more of them than before. How many of TMDB's **actors** and
+of its **crew** a work keeps are settings, on the Settings page:
 
 | Setting | Default | Range | What it does |
 |---|---|---|---|
 | `tmdb.castLimit` | `25` | 1 to 200 | How many of TMDB's actors a work keeps, top of the bill first. Each is a row, and a portrait to fetch and keep. A work already held takes the new figure at its next refresh |
+| `tmdb.crewLimit` | `30` | 0 to 500 | How many of TMDB's crew a work keeps, every department together, the directors, writers and producers first; none at 0 |
+
+A person's **biography** is kept in every language TMDB has it in, read with their record the first
+time their page is opened; the page in another language gives the one in that language.
 
 A film made from Radarr's service alone no longer lists its composer and its editor among the actors: its
 directors, writers and producers are kept, and the rest left out.
@@ -183,6 +221,13 @@ was typed: TMDB fills only what is left empty. A credit a lock hides names nobod
 hidden is neither in the index nor found by the search. Each of these writes is on the audit trail, under the
 record it was made to: `person.created`, `person.updated`, `person.merged`, `person.split` and
 `person.credited`.
+
+## A season's title in other languages
+
+A season's **title and synopsis** are kept in every language TMDB has them in, read with the season's
+document a refresh asks for anyway. A text locked on the season in a language comes before them.
+
+Works already held gain what this section and the ones above describe at their next refresh.
 
 ## Genres
 

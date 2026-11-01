@@ -1,0 +1,306 @@
+{
+ "id": 62085,
+ "air_date": "2008-01-20",
+ "crew": [
+  {
+   "department": "Directing",
+   "job": "Director",
+   "credit_id": "52542275760ee313280006e8",
+   "adult": false,
+   "gender": 2,
+   "id": 66633,
+   "known_for_department": "Writing",
+   "name": "Vince Gilligan",
+   "original_name": "Vince Gilligan",
+   "popularity": 2.1476,
+   "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+  },
+  {
+   "department": "Writing",
+   "job": "Writer",
+   "credit_id": "52542275760ee313280006ce",
+   "adult": false,
+   "gender": 2,
+   "id": 66633,
+   "known_for_department": "Writing",
+   "name": "Vince Gilligan",
+   "original_name": "Vince Gilligan",
+   "popularity": 2.1476,
+   "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+  },
+  {
+   "job": "Editor",
+   "department": "Editing",
+   "credit_id": "52b702ea19c2955402183a66",
+   "adult": false,
+   "gender": 1,
+   "id": 1280071,
+   "known_for_department": "Editing",
+   "name": "Lynne Willingham",
+   "original_name": "Lynne Willingham",
+   "popularity": 0.3961,
+   "profile_path": null
+  }
+ ],
+ "episode_number": 1,
+ "episode_type": "standard",
+ "guest_stars": [
+  {
+   "character": "Steven Gomez",
+   "credit_id": "5271b489760ee35b3e0881a7",
+   "order": 8,
+   "adult": false,
+   "gender": 2,
+   "id": 61535,
+   "known_for_department": "Acting",
+   "name": "Steven Michael Quezada",
+   "original_name": "Steven Michael Quezada",
+   "popularity": 1.2751,
+   "profile_path": "/pVYrDkwI6GWvCNL2kJhpDJfBFyd.jpg"
+  },
+  {
+   "character": "Jock",
+   "credit_id": "52542275760ee313280006b4",
+   "order": 500,
+   "adult": false,
+   "gender": 2,
+   "id": 1216132,
+   "known_for_department": "Acting",
+   "name": "Aaron Hill",
+   "original_name": "Aaron Hill",
+   "popularity": 1.1369,
+   "profile_path": "/rNp31SeoVqSQU6OZWxZUhGwAgyq.jpg"
+  },
+  {
+   "character": "Dr. Belknap",
+   "credit_id": "52725cb1760ee3044d0b9984",
+   "order": 502,
+   "adult": false,
+   "gender": 2,
+   "id": 161591,
+   "known_for_department": "Acting",
+   "name": "Gregory Chase",
+   "original_name": "Gregory Chase",
+   "popularity": 0.4232,
+   "profile_path": "/gNdodev00CROpXuAh5EFmkWTVOo.jpg"
+  }
+ ],
+ "name": "Pilot",
+ "overview": "When an unassuming high school chemistry…",
+ "production_code": "",
+ "runtime": 59,
+ "season_number": 1,
+ "still_path": "/ydlY3iPfeOAvu8gVqrxPoMvzNCn.jpg",
+ "vote_average": 8.517,
+ "vote_count": 571,
+ "credits": {
+  "cast": [
+   {
+    "adult": false,
+    "gender": 2,
+    "id": 17419,
+    "known_for_department": "Acting",
+    "name": "Bryan Cranston",
+    "original_name": "Bryan Cranston",
+    "popularity": 6.2071,
+    "profile_path": "/7Jahy5LZX2Fo8fGJltMreAI49hC.jpg",
+    "character": "Walter White",
+    "credit_id": "52542282760ee313280017f9",
+    "order": 0
+   },
+   {
+    "adult": false,
+    "gender": 2,
+    "id": 84497,
+    "known_for_department": "Acting",
+    "name": "Aaron Paul",
+    "original_name": "Aaron Paul",
+    "popularity": 3.51,
+    "profile_path": "/8Ac9uuoYwZoYVAIJfRLzzLsGGJn.jpg",
+    "character": "Jesse Pinkman",
+    "credit_id": "52542282760ee31328001845",
+    "order": 1
+   },
+   {
+    "adult": false,
+    "gender": 1,
+    "id": 134531,
+    "known_for_department": "Acting",
+    "name": "Anna Gunn",
+    "original_name": "Anna Gunn",
+    "popularity": 3.8204,
+    "profile_path": "/adppyeu1a4REN3khtgmXusrapFi.jpg",
+    "character": "Skyler White",
+    "credit_id": "52542282760ee3132800181b",
+    "order": 2
+   }
+  ],
+  "crew": [
+   {
+    "department": "Directing",
+    "job": "Director",
+    "credit_id": "52542275760ee313280006e8",
+    "adult": false,
+    "gender": 2,
+    "id": 66633,
+    "known_for_department": "Writing",
+    "name": "Vince Gilligan",
+    "original_name": "Vince Gilligan",
+    "popularity": 2.1476,
+    "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+   },
+   {
+    "department": "Writing",
+    "job": "Writer",
+    "credit_id": "52542275760ee313280006ce",
+    "adult": false,
+    "gender": 2,
+    "id": 66633,
+    "known_for_department": "Writing",
+    "name": "Vince Gilligan",
+    "original_name": "Vince Gilligan",
+    "popularity": 2.1476,
+    "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+   },
+   {
+    "job": "Editor",
+    "department": "Editing",
+    "credit_id": "52b702ea19c2955402183a66",
+    "adult": false,
+    "gender": 1,
+    "id": 1280071,
+    "known_for_department": "Editing",
+    "name": "Lynne Willingham",
+    "original_name": "Lynne Willingham",
+    "popularity": 0.3961,
+    "profile_path": null
+   }
+  ],
+  "guest_stars": [
+   {
+    "character": "Steven Gomez",
+    "credit_id": "5271b489760ee35b3e0881a7",
+    "order": 8,
+    "adult": false,
+    "gender": 2,
+    "id": 61535,
+    "known_for_department": "Acting",
+    "name": "Steven Michael Quezada",
+    "original_name": "Steven Michael Quezada",
+    "popularity": 1.2751,
+    "profile_path": "/pVYrDkwI6GWvCNL2kJhpDJfBFyd.jpg"
+   },
+   {
+    "character": "Jock",
+    "credit_id": "52542275760ee313280006b4",
+    "order": 500,
+    "adult": false,
+    "gender": 2,
+    "id": 1216132,
+    "known_for_department": "Acting",
+    "name": "Aaron Hill",
+    "original_name": "Aaron Hill",
+    "popularity": 1.1369,
+    "profile_path": "/rNp31SeoVqSQU6OZWxZUhGwAgyq.jpg"
+   },
+   {
+    "character": "Dr. Belknap",
+    "credit_id": "52725cb1760ee3044d0b9984",
+    "order": 502,
+    "adult": false,
+    "gender": 2,
+    "id": 161591,
+    "known_for_department": "Acting",
+    "name": "Gregory Chase",
+    "original_name": "Gregory Chase",
+    "popularity": 0.4232,
+    "profile_path": "/gNdodev00CROpXuAh5EFmkWTVOo.jpg"
+   }
+  ]
+ },
+ "images": {
+  "stills": []
+ },
+ "external_ids": {
+  "imdb_id": "tt0959621",
+  "freebase_mid": "/m/03mb620",
+  "freebase_id": null,
+  "tvdb_id": 349232,
+  "tvrage_id": 637041,
+  "wikidata_id": "Q14625947"
+ },
+ "videos": {
+  "results": [
+   {
+    "iso_639_1": "en",
+    "iso_3166_1": "US",
+    "name": "Walt's First Day As A Cook Goes Wrong - Pilot",
+    "key": "NIFuNtReMrA",
+    "site": "YouTube",
+    "size": 1080,
+    "type": "Clip",
+    "official": true,
+    "id": "66c53c8f1742a4e306713a93",
+    "published_at": "2024-08-20T15:30:04.000Z"
+   },
+   {
+    "iso_639_1": "en",
+    "iso_3166_1": "US",
+    "name": "Breaking Bad Title Reference - Pilot",
+    "key": "yz0qzMEPFhw",
+    "site": "YouTube",
+    "size": 1080,
+    "type": "Clip",
+    "official": true,
+    "id": "63f591b425b95500dd93f5a9",
+    "published_at": "2023-02-21T16:00:40.000Z"
+   },
+   {
+    "iso_639_1": "en",
+    "iso_3166_1": "US",
+    "name": "\"Cooking Is Art\" - Pilot",
+    "key": "40tX4s5Ecwc",
+    "site": "YouTube",
+    "size": 1080,
+    "type": "Clip",
+    "official": true,
+    "id": "63efd4f0a24c5000d4e2c30d",
+    "published_at": "2023-02-17T16:00:05.000Z"
+   }
+  ]
+ },
+ "translations": {
+  "translations": [
+   {
+    "iso_3166_1": "US",
+    "iso_639_1": "en",
+    "name": "English",
+    "english_name": "English",
+    "data": {
+     "name": "Pilot",
+     "overview": "When an unassuming high school chemistry…"
+    }
+   },
+   {
+    "iso_3166_1": "DE",
+    "iso_639_1": "de",
+    "name": "Deutsch",
+    "english_name": "German",
+    "data": {
+     "name": "Der Einstieg",
+     "overview": "Ein Chemielehrer mit Lungenkrebs im Endstadium…"
+    }
+   },
+   {
+    "iso_3166_1": "FR",
+    "iso_639_1": "fr",
+    "name": "Français",
+    "english_name": "French",
+    "data": {
+     "name": "Chute libre",
+     "overview": "Atteint d'un cancer en phase terminale,…"
+    }
+   }
+  ]
+ }
+}

@@ -20,7 +20,7 @@ import { genrePath, networkPath, yearPath } from '../lib/facets'
 import * as fmt from '../lib/format'
 import { useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
-import { listedGenres, providerName } from '../lib/labels'
+import { jobLabel, listedGenres, providerName } from '../lib/labels'
 import { poster, ratingsOf } from '../lib/media'
 import type { Comparison, ItemPage, MediaItem, SharedPerson } from '../lib/types'
 
@@ -391,13 +391,16 @@ function Shared({ comparison }: { comparison: Comparison }) {
 
 /** What somebody did on one of the two works. */
 function Parts({ person, which, title }: { person: SharedPerson; which: 'first' | 'second'; title: string }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const parts = person[which]
   return (
     <p className="text-sm text-bone-dim">
       <span className="sr-only">{t.compare.on(title)} </span>
       {parts
         .map((part) => {
+          // The rest of the crew is said by its job alone: "Music", not
+          // "Crew (Original Music Composer)".
+          if (part.creditType === 'crew' && part.character) return jobLabel(part.character, lang)
           const job = t.compare.jobs[part.creditType] ?? part.creditType
           return part.character ? `${job} (${part.character})` : job
         })

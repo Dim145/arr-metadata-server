@@ -1,0 +1,1028 @@
+{
+ "adult": false,
+ "backdrop_path": "/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg",
+ "created_by": [
+  {
+   "id": 66633,
+   "credit_id": "52542286760ee31328001a7b",
+   "name": "Vince Gilligan",
+   "original_name": "Vince Gilligan",
+   "gender": 2,
+   "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+  }
+ ],
+ "episode_run_time": [],
+ "first_air_date": "2008-01-20",
+ "genres": [
+  {
+   "id": 18,
+   "name": "Drama"
+  },
+  {
+   "id": 80,
+   "name": "Crime"
+  }
+ ],
+ "homepage": "https://www.sonypictures.com/tv/breakingbad",
+ "id": 1396,
+ "in_production": false,
+ "languages": [
+  "en",
+  "de",
+  "es"
+ ],
+ "last_air_date": "2013-09-29",
+ "last_episode_to_air": {
+  "id": 62161,
+  "name": "Felina",
+  "overview": "All bad things must come to an end.",
+  "vote_average": 9.3,
+  "vote_count": 332,
+  "air_date": "2013-09-29",
+  "episode_number": 16,
+  "episode_type": "finale",
+  "production_code": "",
+  "runtime": 56,
+  "season_number": 5,
+  "show_id": 1396,
+  "still_path": "/pA0YwyhvdDXP3BEGL2grrIhq8aM.jpg"
+ },
+ "name": "Breaking Bad",
+ "next_episode_to_air": null,
+ "networks": [
+  {
+   "id": 174,
+   "logo_path": "/pmvRmATOCaDykE6JrVoeYxlFHw3.png",
+   "name": "AMC",
+   "origin_country": "US"
+  }
+ ],
+ "number_of_episodes": 62,
+ "number_of_seasons": 5,
+ "origin_country": [
+  "US"
+ ],
+ "original_language": "en",
+ "original_name": "Breaking Bad",
+ "overview": "Walter White, a New Mexico chemistry…",
+ "popularity": 172.2222,
+ "poster_path": "/anFx9aTOOYqgS3v7x3R84Kz67ly.jpg",
+ "production_companies": [
+  {
+   "id": 11073,
+   "logo_path": "/wHs44fktdoj6c378ZbSWfzKsM2Z.png",
+   "name": "Sony Pictures Television",
+   "origin_country": "US"
+  },
+  {
+   "id": 33742,
+   "logo_path": "/2jdh2sEa0R6y6uT0F7g0IgA2WO8.png",
+   "name": "High Bridge Productions",
+   "origin_country": "US"
+  },
+  {
+   "id": 2605,
+   "logo_path": null,
+   "name": "Gran Via Productions",
+   "origin_country": "US"
+  }
+ ],
+ "production_countries": [
+  {
+   "iso_3166_1": "US",
+   "name": "United States of America"
+  }
+ ],
+ "seasons": [
+  {
+   "air_date": "2009-02-17",
+   "episode_count": 9,
+   "id": 3577,
+   "name": "Specials",
+   "overview": "",
+   "poster_path": "/4RaIvSQgHHHPfaI1jFqaMR8UJWM.jpg",
+   "season_number": 0,
+   "vote_average": 0.0
+  },
+  {
+   "air_date": "2008-01-20",
+   "episode_count": 7,
+   "id": 3572,
+   "name": "Season 1",
+   "overview": "High school chemistry teacher Walter White's…",
+   "poster_path": "/1BP4xYv9ZG4ZVHkL7ocOziBbSYH.jpg",
+   "season_number": 1,
+   "vote_average": 8.4
+  },
+  {
+   "air_date": "2009-03-08",
+   "episode_count": 13,
+   "id": 3573,
+   "name": "Season 2",
+   "overview": "Walt must deal with the chain…",
+   "poster_path": "/e3oGYpoTUhOFK0BJfloru5ZmGV.jpg",
+   "season_number": 2,
+   "vote_average": 8.5
+  }
+ ],
+ "softcore": false,
+ "spoken_languages": [
+  {
+   "english_name": "English",
+   "iso_639_1": "en",
+   "name": "English"
+  },
+  {
+   "english_name": "German",
+   "iso_639_1": "de",
+   "name": "Deutsch"
+  },
+  {
+   "english_name": "Spanish",
+   "iso_639_1": "es",
+   "name": "Español"
+  }
+ ],
+ "status": "Ended",
+ "tagline": "Change the equation.",
+ "type": "Scripted",
+ "vote_average": 8.959,
+ "vote_count": 19012,
+ "season/1": {
+  "_id": "52542272760ee313280005f8",
+  "air_date": "2008-01-20",
+  "episodes": [
+   {
+    "air_date": "2008-01-20",
+    "episode_number": 1,
+    "episode_type": "standard",
+    "id": 62085,
+    "name": "Pilot",
+    "overview": "When an unassuming high school chemistry…",
+    "production_code": "",
+    "runtime": 59,
+    "season_number": 1,
+    "show_id": 1396,
+    "still_path": "/ydlY3iPfeOAvu8gVqrxPoMvzNCn.jpg",
+    "vote_average": 8.517,
+    "vote_count": 571,
+    "crew": [
+     {
+      "department": "Directing",
+      "job": "Director",
+      "credit_id": "52542275760ee313280006e8",
+      "adult": false,
+      "gender": 2,
+      "id": 66633,
+      "known_for_department": "Writing",
+      "name": "Vince Gilligan",
+      "original_name": "Vince Gilligan",
+      "popularity": 2.1476,
+      "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+     },
+     {
+      "department": "Writing",
+      "job": "Writer",
+      "credit_id": "52542275760ee313280006ce",
+      "adult": false,
+      "gender": 2,
+      "id": 66633,
+      "known_for_department": "Writing",
+      "name": "Vince Gilligan",
+      "original_name": "Vince Gilligan",
+      "popularity": 2.1476,
+      "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+     },
+     {
+      "job": "Editor",
+      "department": "Editing",
+      "credit_id": "52b702ea19c2955402183a66",
+      "adult": false,
+      "gender": 1,
+      "id": 1280071,
+      "known_for_department": "Editing",
+      "name": "Lynne Willingham",
+      "original_name": "Lynne Willingham",
+      "popularity": 0.3961,
+      "profile_path": null
+     }
+    ],
+    "guest_stars": [
+     {
+      "character": "Steven Gomez",
+      "credit_id": "5271b489760ee35b3e0881a7",
+      "order": 8,
+      "adult": false,
+      "gender": 2,
+      "id": 61535,
+      "known_for_department": "Acting",
+      "name": "Steven Michael Quezada",
+      "original_name": "Steven Michael Quezada",
+      "popularity": 1.2751,
+      "profile_path": "/pVYrDkwI6GWvCNL2kJhpDJfBFyd.jpg"
+     },
+     {
+      "character": "Jock",
+      "credit_id": "52542275760ee313280006b4",
+      "order": 500,
+      "adult": false,
+      "gender": 2,
+      "id": 1216132,
+      "known_for_department": "Acting",
+      "name": "Aaron Hill",
+      "original_name": "Aaron Hill",
+      "popularity": 1.1369,
+      "profile_path": "/rNp31SeoVqSQU6OZWxZUhGwAgyq.jpg"
+     },
+     {
+      "character": "Dr. Belknap",
+      "credit_id": "52725cb1760ee3044d0b9984",
+      "order": 502,
+      "adult": false,
+      "gender": 2,
+      "id": 161591,
+      "known_for_department": "Acting",
+      "name": "Gregory Chase",
+      "original_name": "Gregory Chase",
+      "popularity": 0.4232,
+      "profile_path": "/gNdodev00CROpXuAh5EFmkWTVOo.jpg"
+     }
+    ]
+   },
+   {
+    "air_date": "2008-01-27",
+    "episode_number": 2,
+    "episode_type": "standard",
+    "id": 62086,
+    "name": "Cat's in the Bag...",
+    "overview": "Walt and Jesse attempt to tie…",
+    "production_code": "",
+    "runtime": 49,
+    "season_number": 1,
+    "show_id": 1396,
+    "still_path": "/AbMoecO0ZZio0LcgeLxlzdyGs6X.jpg",
+    "vote_average": 8.265,
+    "vote_count": 307,
+    "crew": [
+     {
+      "department": "Directing",
+      "job": "Director",
+      "credit_id": "52542275760ee31328000725",
+      "adult": false,
+      "gender": 2,
+      "id": 111338,
+      "known_for_department": "Directing",
+      "name": "Adam Bernstein",
+      "original_name": "Adam Bernstein",
+      "popularity": 0.8643,
+      "profile_path": "/mnob89jXPcPfW85PPw7tTPCKSig.jpg"
+     },
+     {
+      "department": "Writing",
+      "job": "Writer",
+      "credit_id": "52542275760ee313280006ce",
+      "adult": false,
+      "gender": 2,
+      "id": 66633,
+      "known_for_department": "Writing",
+      "name": "Vince Gilligan",
+      "original_name": "Vince Gilligan",
+      "popularity": 2.1476,
+      "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+     },
+     {
+      "job": "Editor",
+      "department": "Editing",
+      "credit_id": "52b702ea19c2955402183a66",
+      "adult": false,
+      "gender": 1,
+      "id": 1280071,
+      "known_for_department": "Editing",
+      "name": "Lynne Willingham",
+      "original_name": "Lynne Willingham",
+      "popularity": 0.3961,
+      "profile_path": null
+     }
+    ],
+    "guest_stars": [
+     {
+      "character": "Krazy-8",
+      "credit_id": "52725845760ee3046b09426e",
+      "order": 504,
+      "adult": false,
+      "gender": 2,
+      "id": 1046460,
+      "known_for_department": "Acting",
+      "name": "Max Arciniega",
+      "original_name": "Max Arciniega",
+      "popularity": 1.6301,
+      "profile_path": "/eqKAJKPpt41KpsLIkkBnAY4HMAL.jpg"
+     },
+     {
+      "character": "Ob-Gyn",
+      "credit_id": "63012c9c5f4b73008267ba53",
+      "order": 682,
+      "adult": false,
+      "gender": 0,
+      "id": 1448105,
+      "known_for_department": "Acting",
+      "name": "Shane Marinson",
+      "original_name": "Shane Marinson",
+      "popularity": 0.3749,
+      "profile_path": null
+     },
+     {
+      "character": "Ben",
+      "credit_id": "63012d2111c066007cbc37b1",
+      "order": 683,
+      "adult": false,
+      "gender": 0,
+      "id": 3670897,
+      "known_for_department": "Acting",
+      "name": "Jason Byrd",
+      "original_name": "Jason Byrd",
+      "popularity": 0.3411,
+      "profile_path": null
+     }
+    ]
+   },
+   {
+    "air_date": "2008-02-10",
+    "episode_number": 3,
+    "episode_type": "standard",
+    "id": 62087,
+    "name": "...And the Bag's in the River",
+    "overview": "Walter fights with Jesse over his…",
+    "production_code": "",
+    "runtime": 49,
+    "season_number": 1,
+    "show_id": 1396,
+    "still_path": "/n8Dah3Tc1vlc4i7bQ9zYPWaFO0e.jpg",
+    "vote_average": 8.44,
+    "vote_count": 281,
+    "crew": [
+     {
+      "department": "Directing",
+      "job": "Director",
+      "credit_id": "52542275760ee31328000725",
+      "adult": false,
+      "gender": 2,
+      "id": 111338,
+      "known_for_department": "Directing",
+      "name": "Adam Bernstein",
+      "original_name": "Adam Bernstein",
+      "popularity": 0.8643,
+      "profile_path": "/mnob89jXPcPfW85PPw7tTPCKSig.jpg"
+     },
+     {
+      "department": "Writing",
+      "job": "Writer",
+      "credit_id": "52542275760ee313280006ce",
+      "adult": false,
+      "gender": 2,
+      "id": 66633,
+      "known_for_department": "Writing",
+      "name": "Vince Gilligan",
+      "original_name": "Vince Gilligan",
+      "popularity": 2.1476,
+      "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+     },
+     {
+      "job": "Editor",
+      "department": "Editing",
+      "credit_id": "52b7051619c29533d00e8c79",
+      "adult": false,
+      "gender": 1,
+      "id": 1280074,
+      "known_for_department": "Editing",
+      "name": "Kelley Dixon",
+      "original_name": "Kelley Dixon",
+      "popularity": 0.5684,
+      "profile_path": null
+     }
+    ],
+    "guest_stars": [
+     {
+      "character": "Steven Gomez",
+      "credit_id": "5271b489760ee35b3e0881a7",
+      "order": 8,
+      "adult": false,
+      "gender": 2,
+      "id": 61535,
+      "known_for_department": "Acting",
+      "name": "Steven Michael Quezada",
+      "original_name": "Steven Michael Quezada",
+      "popularity": 1.2751,
+      "profile_path": "/pVYrDkwI6GWvCNL2kJhpDJfBFyd.jpg"
+     },
+     {
+      "character": "Krazy-8",
+      "credit_id": "52725845760ee3046b09426e",
+      "order": 504,
+      "adult": false,
+      "gender": 2,
+      "id": 1046460,
+      "known_for_department": "Acting",
+      "name": "Max Arciniega",
+      "original_name": "Max Arciniega",
+      "popularity": 1.6301,
+      "profile_path": "/eqKAJKPpt41KpsLIkkBnAY4HMAL.jpg"
+     },
+     {
+      "character": "Carmen Molina",
+      "credit_id": "52542273760ee31328000676",
+      "order": 643,
+      "adult": false,
+      "gender": 1,
+      "id": 115688,
+      "known_for_department": "Acting",
+      "name": "Carmen Serano",
+      "original_name": "Carmen Serano",
+      "popularity": 1.0453,
+      "profile_path": "/nzJEe2UqvvMIBJZP1aeFEj4EunN.jpg"
+     }
+    ]
+   }
+  ],
+  "name": "Season 1",
+  "networks": [
+   {
+    "id": 174,
+    "logo_path": "/pmvRmATOCaDykE6JrVoeYxlFHw3.png",
+    "name": "AMC",
+    "origin_country": "US"
+   }
+  ],
+  "overview": "High school chemistry teacher Walter White's…",
+  "poster_path": "/1BP4xYv9ZG4ZVHkL7ocOziBbSYH.jpg",
+  "season_number": 1,
+  "vote_average": 8.4
+ },
+ "season/1/images": {
+  "posters": [
+   {
+    "aspect_ratio": 0.667,
+    "height": 1800,
+    "iso_3166_1": "US",
+    "iso_639_1": "en",
+    "file_path": "/1BP4xYv9ZG4ZVHkL7ocOziBbSYH.jpg",
+    "vote_average": 6.0,
+    "vote_count": 19,
+    "width": 1200
+   },
+   {
+    "aspect_ratio": 0.667,
+    "height": 3000,
+    "iso_3166_1": "US",
+    "iso_639_1": "en",
+    "file_path": "/1C96KIebESXhEnpeq4BWY0jg4KS.jpg",
+    "vote_average": 4.3,
+    "vote_count": 10,
+    "width": 2000
+   },
+   {
+    "aspect_ratio": 0.666,
+    "height": 2000,
+    "iso_3166_1": "US",
+    "iso_639_1": "en",
+    "file_path": "/oTZYHCjswBRZMkuEyC2A5WtY0On.jpg",
+    "vote_average": 2.542,
+    "vote_count": 4,
+    "width": 1332
+   }
+  ]
+ },
+ "season/1/credits": {
+  "cast": [
+   {
+    "adult": false,
+    "gender": 2,
+    "id": 17419,
+    "known_for_department": "Acting",
+    "name": "Bryan Cranston",
+    "original_name": "Bryan Cranston",
+    "popularity": 6.2071,
+    "profile_path": "/7Jahy5LZX2Fo8fGJltMreAI49hC.jpg",
+    "character": "Walter White",
+    "credit_id": "52542282760ee313280017f9",
+    "order": 0
+   },
+   {
+    "adult": false,
+    "gender": 2,
+    "id": 84497,
+    "known_for_department": "Acting",
+    "name": "Aaron Paul",
+    "original_name": "Aaron Paul",
+    "popularity": 3.51,
+    "profile_path": "/8Ac9uuoYwZoYVAIJfRLzzLsGGJn.jpg",
+    "character": "Jesse Pinkman",
+    "credit_id": "52542282760ee31328001845",
+    "order": 1
+   },
+   {
+    "adult": false,
+    "gender": 1,
+    "id": 134531,
+    "known_for_department": "Acting",
+    "name": "Anna Gunn",
+    "original_name": "Anna Gunn",
+    "popularity": 3.8204,
+    "profile_path": "/adppyeu1a4REN3khtgmXusrapFi.jpg",
+    "character": "Skyler White",
+    "credit_id": "52542282760ee3132800181b",
+    "order": 2
+   }
+  ],
+  "crew": [
+   {
+    "adult": false,
+    "gender": 2,
+    "id": 24951,
+    "known_for_department": "Production",
+    "name": "Peter Gould",
+    "original_name": "Peter Gould",
+    "popularity": 1.2896,
+    "profile_path": "/a2dJSpUiXQ2NAxqSzztr6WsnhOJ.jpg",
+    "credit_id": "69472d6f94041a01928120a0",
+    "department": "Writing",
+    "job": "Story Editor"
+   },
+   {
+    "adult": false,
+    "gender": 2,
+    "id": 1223193,
+    "known_for_department": "Writing",
+    "name": "George Mastras",
+    "original_name": "George Mastras",
+    "popularity": 0.5476,
+    "profile_path": "/2K0NELbA0Ow45ECudbO2eFc1Fe4.jpg",
+    "credit_id": "69472d286d365600fafb0e92",
+    "department": "Writing",
+    "job": "Story Editor"
+   },
+   {
+    "adult": false,
+    "gender": 1,
+    "id": 1223199,
+    "known_for_department": "Production",
+    "name": "Melissa Bernstein",
+    "original_name": "Melissa Bernstein",
+    "popularity": 1.3401,
+    "profile_path": "/rSztwqMUIko8RkmwjxBse1XDW3g.jpg",
+    "credit_id": "64189dbaa14bef00fd7d4bca",
+    "department": "Production",
+    "job": "Co-Producer"
+   }
+  ]
+ },
+ "season/1/external_ids": {
+  "freebase_mid": "/m/05yy27m",
+  "freebase_id": "/en/breaking_bad_season_1",
+  "tvdb_id": 30272,
+  "tvrage_id": null,
+  "wikidata_id": "Q1582890"
+ },
+ "season/1/watch/providers": {
+  "results": {
+   "FR": {
+    "link": "https://www.themoviedb.org/tv/1396-breaking-bad/watch?locale=FR",
+    "flatrate": [
+     {
+      "logo_path": "/rK1KljqmbvO9HQa1PBFLILWah72.png",
+      "provider_id": 8,
+      "provider_name": "Netflix",
+      "display_priority": 2
+     },
+     {
+      "logo_path": "/eGUwOOIxcazwEBxqJpSN5sWEu6V.png",
+      "provider_id": 1796,
+      "provider_name": "Netflix Standard with Ads",
+      "display_priority": 50
+     }
+    ],
+    "buy": [
+     {
+      "logo_path": "/qdEGArH3lKfFnAtYXMkSYk5wxuG.png",
+      "provider_id": 2,
+      "provider_name": "Apple TV Store",
+      "display_priority": 6
+     },
+     {
+      "logo_path": "/73lu1dtE9uJLWK1laXpeaAFh48j.png",
+      "provider_id": 61,
+      "provider_name": "Orange VOD",
+      "display_priority": 11
+     },
+     {
+      "logo_path": "/51fX3l4yElitnfui0IkbMUmfmgF.png",
+      "provider_id": 58,
+      "provider_name": "Canal VOD",
+      "display_priority": 16
+     }
+    ]
+   },
+   "US": {
+    "link": "https://www.themoviedb.org/tv/1396-breaking-bad/watch?locale=US",
+    "flatrate": [
+     {
+      "logo_path": "/rK1KljqmbvO9HQa1PBFLILWah72.png",
+      "provider_id": 8,
+      "provider_name": "Netflix",
+      "display_priority": 0
+     },
+     {
+      "logo_path": "/eGUwOOIxcazwEBxqJpSN5sWEu6V.png",
+      "provider_id": 1796,
+      "provider_name": "Netflix Standard with Ads",
+      "display_priority": 153
+     }
+    ],
+    "buy": [
+     {
+      "logo_path": "/jn6TLbtaTZntTRX9UYucHJvpQx1.png",
+      "provider_id": 10,
+      "provider_name": "Amazon Video",
+      "display_priority": 9
+     },
+     {
+      "logo_path": "/qdEGArH3lKfFnAtYXMkSYk5wxuG.png",
+      "provider_id": 2,
+      "provider_name": "Apple TV Store",
+      "display_priority": 10
+     },
+     {
+      "logo_path": "/aZRENwYILujqs0RVOZutTh0BVGV.png",
+      "provider_id": 3,
+      "provider_name": "Google Play Movies",
+      "display_priority": 23
+     }
+    ]
+   }
+  }
+ },
+ "season/1/episode/1": {
+  "air_date": "2008-01-20",
+  "crew": [
+   {
+    "department": "Directing",
+    "job": "Director",
+    "credit_id": "52542275760ee313280006e8",
+    "adult": false,
+    "gender": 2,
+    "id": 66633,
+    "known_for_department": "Writing",
+    "name": "Vince Gilligan",
+    "original_name": "Vince Gilligan",
+    "popularity": 2.1476,
+    "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+   },
+   {
+    "department": "Writing",
+    "job": "Writer",
+    "credit_id": "52542275760ee313280006ce",
+    "adult": false,
+    "gender": 2,
+    "id": 66633,
+    "known_for_department": "Writing",
+    "name": "Vince Gilligan",
+    "original_name": "Vince Gilligan",
+    "popularity": 2.1476,
+    "profile_path": "/wJIxATESjzsjSgvRhVavOmdamXc.jpg"
+   },
+   {
+    "job": "Editor",
+    "department": "Editing",
+    "credit_id": "52b702ea19c2955402183a66",
+    "adult": false,
+    "gender": 1,
+    "id": 1280071,
+    "known_for_department": "Editing",
+    "name": "Lynne Willingham",
+    "original_name": "Lynne Willingham",
+    "popularity": 0.3961,
+    "profile_path": null
+   }
+  ],
+  "episode_number": 1,
+  "episode_type": "standard",
+  "guest_stars": [
+   {
+    "character": "Steven Gomez",
+    "credit_id": "5271b489760ee35b3e0881a7",
+    "order": 8,
+    "adult": false,
+    "gender": 2,
+    "id": 61535,
+    "known_for_department": "Acting",
+    "name": "Steven Michael Quezada",
+    "original_name": "Steven Michael Quezada",
+    "popularity": 1.2751,
+    "profile_path": "/pVYrDkwI6GWvCNL2kJhpDJfBFyd.jpg"
+   },
+   {
+    "character": "Jock",
+    "credit_id": "52542275760ee313280006b4",
+    "order": 500,
+    "adult": false,
+    "gender": 2,
+    "id": 1216132,
+    "known_for_department": "Acting",
+    "name": "Aaron Hill",
+    "original_name": "Aaron Hill",
+    "popularity": 1.1369,
+    "profile_path": "/rNp31SeoVqSQU6OZWxZUhGwAgyq.jpg"
+   },
+   {
+    "character": "Dr. Belknap",
+    "credit_id": "52725cb1760ee3044d0b9984",
+    "order": 502,
+    "adult": false,
+    "gender": 2,
+    "id": 161591,
+    "known_for_department": "Acting",
+    "name": "Gregory Chase",
+    "original_name": "Gregory Chase",
+    "popularity": 0.4232,
+    "profile_path": "/gNdodev00CROpXuAh5EFmkWTVOo.jpg"
+   }
+  ],
+  "name": "Pilot",
+  "overview": "When an unassuming high school chemistry…",
+  "production_code": "",
+  "runtime": 59,
+  "season_number": 1,
+  "still_path": "/ydlY3iPfeOAvu8gVqrxPoMvzNCn.jpg",
+  "vote_average": 8.517,
+  "vote_count": 571
+ },
+ "season/1/episode/1/images": {
+  "stills": []
+ },
+ "season/1/episode/1/external_ids": {
+  "imdb_id": "tt0959621",
+  "freebase_mid": "/m/03mb620",
+  "freebase_id": null,
+  "tvdb_id": 349232,
+  "tvrage_id": 637041,
+  "wikidata_id": "Q14625947"
+ },
+ "season/0": {
+  "_id": "525423c9760ee31328001f52",
+  "air_date": "2009-02-17",
+  "episodes": [
+   {
+    "air_date": "2009-02-17",
+    "episode_number": 1,
+    "episode_type": "standard",
+    "id": 62131,
+    "name": "Good Cop / Bad Cop",
+    "overview": "Season 1 Minisode 1: Hank and…",
+    "production_code": "",
+    "runtime": 3,
+    "season_number": 0,
+    "show_id": 1396,
+    "still_path": "/t729tFVXPetnJlJ2VsUZQz0rX6v.jpg",
+    "vote_average": 7.8,
+    "vote_count": 5,
+    "crew": [
+     {
+      "department": "Directing",
+      "job": "Director",
+      "credit_id": "525423cb760ee3132800227c",
+      "adult": false,
+      "gender": 2,
+      "id": 29924,
+      "known_for_department": "Writing",
+      "name": "John Shiban",
+      "original_name": "John Shiban",
+      "popularity": 0.6376,
+      "profile_path": "/rdmBnBQnxAab2FE2CP6A6hGnUXT.jpg"
+     },
+     {
+      "job": "Writer",
+      "department": "Writing",
+      "credit_id": "525423ce760ee3132800261a",
+      "adult": false,
+      "gender": 1,
+      "id": 1223203,
+      "known_for_department": "Writing",
+      "name": "Gennifer Hutchison",
+      "original_name": "Gennifer Hutchison",
+      "popularity": 0.7885,
+      "profile_path": "/b9aW3OIGhVOv7m8QdIzX87Bs4hl.jpg"
+     },
+     {
+      "job": "Writer",
+      "department": "Writing",
+      "credit_id": "653bcf19719aeb00fe3bf9e6",
+      "adult": false,
+      "gender": 1,
+      "id": 3787071,
+      "known_for_department": "Writing",
+      "name": "Suzanne Potts",
+      "original_name": "Suzanne Potts",
+      "popularity": 0.2782,
+      "profile_path": "/zuepGXUogJKEiqNJjIcsGfSe8V6.jpg"
+     }
+    ],
+    "guest_stars": [
+     {
+      "character": "Hank Schrader",
+      "credit_id": "52542283760ee3132800187b",
+      "order": 4,
+      "adult": false,
+      "gender": 2,
+      "id": 14329,
+      "known_for_department": "Acting",
+      "name": "Dean Norris",
+      "original_name": "Dean Norris",
+      "popularity": 4.126,
+      "profile_path": "/mKRrEbsxAX3ro700HsViFArRM7l.jpg"
+     },
+     {
+      "character": "Marie Schrader",
+      "credit_id": "52542283760ee31328001891",
+      "order": 5,
+      "adult": false,
+      "gender": 1,
+      "id": 1217934,
+      "known_for_department": "Acting",
+      "name": "Betsy Brandt",
+      "original_name": "Betsy Brandt",
+      "popularity": 1.4888,
+      "profile_path": "/xAnuzyjdMbQq9L1c4JNwXL52Wm4.jpg"
+     }
+    ]
+   },
+   {
+    "air_date": "2009-02-17",
+    "episode_number": 2,
+    "episode_type": "standard",
+    "id": 62133,
+    "name": "Wedding Day",
+    "overview": "Season 1 Minisode 2: Hank and…",
+    "production_code": "",
+    "runtime": 5,
+    "season_number": 0,
+    "show_id": 1396,
+    "still_path": "/wT62P6ZnjKgZXk0M5hHl4e5zSjB.jpg",
+    "vote_average": 9.7,
+    "vote_count": 3,
+    "crew": [
+     {
+      "department": "Directing",
+      "job": "Director",
+      "credit_id": "525423cb760ee3132800227c",
+      "adult": false,
+      "gender": 2,
+      "id": 29924,
+      "known_for_department": "Writing",
+      "name": "John Shiban",
+      "original_name": "John Shiban",
+      "popularity": 0.6376,
+      "profile_path": "/rdmBnBQnxAab2FE2CP6A6hGnUXT.jpg"
+     },
+     {
+      "job": "Writer",
+      "department": "Writing",
+      "credit_id": "525423ce760ee3132800261a",
+      "adult": false,
+      "gender": 1,
+      "id": 1223203,
+      "known_for_department": "Writing",
+      "name": "Gennifer Hutchison",
+      "original_name": "Gennifer Hutchison",
+      "popularity": 0.7885,
+      "profile_path": "/b9aW3OIGhVOv7m8QdIzX87Bs4hl.jpg"
+     },
+     {
+      "job": "Writer",
+      "department": "Writing",
+      "credit_id": "653bcf95564ec7013c205f77",
+      "adult": false,
+      "gender": 1,
+      "id": 1831876,
+      "known_for_department": "Writing",
+      "name": "Kate Powers",
+      "original_name": "Kate Powers",
+      "popularity": 0.4125,
+      "profile_path": null
+     }
+    ],
+    "guest_stars": [
+     {
+      "character": "Walter White",
+      "credit_id": "52542282760ee313280017f9",
+      "order": 0,
+      "adult": false,
+      "gender": 2,
+      "id": 17419,
+      "known_for_department": "Acting",
+      "name": "Bryan Cranston",
+      "original_name": "Bryan Cranston",
+      "popularity": 6.2071,
+      "profile_path": "/7Jahy5LZX2Fo8fGJltMreAI49hC.jpg"
+     },
+     {
+      "character": "Hank Schrader",
+      "credit_id": "52542283760ee3132800187b",
+      "order": 4,
+      "adult": false,
+      "gender": 2,
+      "id": 14329,
+      "known_for_department": "Acting",
+      "name": "Dean Norris",
+      "original_name": "Dean Norris",
+      "popularity": 4.126,
+      "profile_path": "/mKRrEbsxAX3ro700HsViFArRM7l.jpg"
+     }
+    ]
+   },
+   {
+    "air_date": "2009-02-17",
+    "episode_number": 3,
+    "episode_type": "standard",
+    "id": 62132,
+    "name": "TwaüghtHammër",
+    "overview": "Season 1 Minisode 3: Jesse explains…",
+    "production_code": "",
+    "runtime": 5,
+    "season_number": 0,
+    "show_id": 1396,
+    "still_path": "/gUHAqFw3Ptzya96JFFE9xVfMjze.jpg",
+    "vote_average": 8.3,
+    "vote_count": 3,
+    "crew": [
+     {
+      "department": "Directing",
+      "job": "Director",
+      "credit_id": "525423cb760ee3132800227c",
+      "adult": false,
+      "gender": 2,
+      "id": 29924,
+      "known_for_department": "Writing",
+      "name": "John Shiban",
+      "original_name": "John Shiban",
+      "popularity": 0.6376,
+      "profile_path": "/rdmBnBQnxAab2FE2CP6A6hGnUXT.jpg"
+     },
+     {
+      "job": "Writer",
+      "department": "Writing",
+      "credit_id": "525423ce760ee3132800261a",
+      "adult": false,
+      "gender": 1,
+      "id": 1223203,
+      "known_for_department": "Writing",
+      "name": "Gennifer Hutchison",
+      "original_name": "Gennifer Hutchison",
+      "popularity": 0.7885,
+      "profile_path": "/b9aW3OIGhVOv7m8QdIzX87Bs4hl.jpg"
+     }
+    ],
+    "guest_stars": [
+     {
+      "character": "Jesse Pinkman",
+      "credit_id": "52542282760ee31328001845",
+      "order": 1,
+      "adult": false,
+      "gender": 2,
+      "id": 84497,
+      "known_for_department": "Acting",
+      "name": "Aaron Paul",
+      "original_name": "Aaron Paul",
+      "popularity": 3.51,
+      "profile_path": "/8Ac9uuoYwZoYVAIJfRLzzLsGGJn.jpg"
+     },
+     {
+      "character": "Badger",
+      "credit_id": "52744535760ee3572209100e",
+      "order": 658,
+      "adult": false,
+      "gender": 2,
+      "id": 191202,
+      "known_for_department": "Acting",
+      "name": "Matt Jones",
+      "original_name": "Matt Jones",
+      "popularity": 1.8637,
+      "profile_path": "/x13vFDaJHY1CxNvSPWujYe12bMc.jpg"
+     }
+    ]
+   }
+  ],
+  "name": "Specials",
+  "networks": [
+   {
+    "id": 174,
+    "logo_path": "/pmvRmATOCaDykE6JrVoeYxlFHw3.png",
+    "name": "AMC",
+    "origin_country": "US"
+   }
+  ],
+  "overview": "",
+  "poster_path": "/4RaIvSQgHHHPfaI1jFqaMR8UJWM.jpg",
+  "season_number": 0,
+  "vote_average": 0.0
+ }
+}

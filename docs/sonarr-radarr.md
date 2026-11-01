@@ -75,13 +75,55 @@ is answered whether or not the sources do. On both editions.
 Sonarr v5 is a pre-release: this was checked against 5.0.0.2701
 ([Verified against](integration.md#verified-against)).
 [`scripts/e2e-skyhook-v2.sh`](../scripts/e2e-skyhook-v2.sh) sets the real
-service's second edition beside this server's for a few real series and tells
-every difference apart as an addition or a failure.
+service's second edition beside this server's for a few real series — by
+TheTVDB's id, and by TMDB's (see below) — and tells every difference apart as an
+addition or a failure.
 [`.github/workflows/parity.yml`](../.github/workflows/parity.yml) runs it every
 Monday morning, and on demand, against a server built from `main` with the
 repository's TMDB and TheTVDB keys, and fails — a notification from GitHub — on
 any difference that is not an addition: the real service's shape moved twice in
 October 2026 without a word.
+
+### Sonarr v5 by TMDB's id
+
+The real service answers a third edition besides, by TMDB's id:
+`/v2/tmdb/shows/{language}/{id}/{seasonType}` and `/v2/tmdb/search`. Sonarr v5's
+pre-releases do not call it yet; its announcement promises TMDB as an alternative
+to TheTVDB for all or some series, and a series Sonarr would ask for there and be
+answered a `404` for would be taken for deleted. So this server answers it too,
+from the same catalogue:
+
+- **The series** is the one TMDB lists under the id; from 200 000 000 up, the id
+  is the one Sonarr knows a Fan-Kai or a series entered by hand by, which TMDB
+  does not list. `tmdbId` echoes the id asked by; `tvdbId` is the one the TheTVDB
+  edition knows the series by — TheTVDB's, or the one this server made for a
+  series TheTVDB does not list — so that a series Sonarr holds under it is known
+  as the same. `metadataSource` is `tmdb`, or `fankai`, or `local`.
+- **Numbering.** `default` is TMDB's own numbering, the order `tmdb-aired` (see
+  [TMDB's own numbering](sources.md#tmdbs-own-numbering)): a series no refresh
+  kept it for yet is read from TMDB the first time it is asked for. Without it,
+  the series' own numbering stands in where it is not TheTVDB's — TMDB's for a
+  series TMDB numbers, the one written here for a series entered by hand; a
+  series TheTVDB numbers is answered `502` while TMDB does not answer, which
+  Sonarr asks again on, rather than in TheTVDB's numbering under TMDB's name —
+  or, on a server with no TMDB key, as the catalogue numbers it. The other season
+  types are TMDB's episode groups, under their id on TMDB as the real service
+  names them (`69f50757054263b7bc87e32a`, where this server's key is `tmdb-` and
+  that id), and the orders made here. TheTVDB's orders are not listed; one asked
+  for by its key is answered. A type the series has not, `official` among them,
+  is answered in `default`, where the real service answers no episode at all —
+  which would have Sonarr drop every episode it holds.
+- **Episodes** carry `tmdbShowId` and `tmdbId` — TMDB's id, or for an episode TMDB
+  gave none a negative one made of what names it, the same at every answer — and,
+  as in the real service's answers, none of TheTVDB's ids, absolute numbers or
+  where a special airs; nor does the series carry alternative titles or a time of
+  day.
+- **Search** answers what the TheTVDB edition's search finds, without episodes or
+  runtime, each series under the id this edition knows it by; one TheTVDB alone
+  lists, which has no TMDB id, is left out.
+
+Not found and not answered are told apart as on the TheTVDB edition, and the
+edition is guarded and counted as the rest of Sonarr's surface.
 
 ### Upgrading Sonarr to v5
 
@@ -340,6 +382,9 @@ was added. The catalogue keeps the series' other orders beside it:
   two season by season, since TheTVDB's own episodes endpoint answers empty for
   them. Each is named as the series names it on TheTVDB — *Superfan Order*,
   *BluRay Order* — or as TheTVDB names the type.
+- **TMDB's own numbering**, `tmdb-aired`, its episodes as TMDB's seasons cut
+  them, written at each refresh that reads them: see
+  [TMDB's own numbering](sources.md#tmdbs-own-numbering).
 - **TMDB's episode groups**, listed with the series at each refresh and read from
   TMDB by the refresh that lists one, or changes its count: see
   [Where the data comes from](sources.md#tmdbs-episode-groups).
@@ -377,6 +422,10 @@ way; the order keeps its own name everywhere else.
 | `tmdb-5acf93e60e0a26346d0000ce` | a TMDB episode group, by its id |
 | `ams-my-dvd-order` | an order made here: `ams-` and its name |
 
+TMDB's own numbering, `tmdb-aired`, is not among them, as TheTVDB's documents
+have no such order: it is the `default` of
+[the TMDB edition](#sonarr-v5-by-tmdbs-id), and Plex is offered it.
+
 Sonarr writes the type into the address it asks for the series at —
 `/v2/tvdb/shows/eng/73244/ams-my-dvd-order` — and is answered in that order. The
 same order kept by TheTVDB and by TMDB — an absolute order both keep — is offered
@@ -403,8 +452,9 @@ Before choosing one in Sonarr:
 
 ### Freezing an order as the aired numbering
 
-An order — TheTVDB's, a TMDB group, one made here — can be frozen as the series'
-aired numbering: what the aired order answers with from then on, for Sonarr v5
+An order — TheTVDB's, TMDB's own numbering, a TMDB group, one made here — can be
+frozen as the series' aired numbering: what the aired order answers with from
+then on, for Sonarr v5
 asking for `official`, for Sonarr v4, which knows no other, for Plex with no order
 named, for the TheTVDB relay's `official` pages and the episodes a series' record
 carries there (`meta=episodes`), and for the `.nfo` documents. One

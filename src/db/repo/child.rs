@@ -207,8 +207,9 @@ pub async fn add_credit(db: &Db, media_id: &str, credit: &Credit) -> Result<Stri
     sqlx::query(db.sql(
         "INSERT INTO media_credit
              (id, media_id, credit_type, person_name, character_name, image,
-              tmdb_person_id, credit_tmdb_id, sort_order, is_manual, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+              tmdb_person_id, credit_tmdb_id, sort_order, is_manual, created_at,
+              department, job)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
     ))
     .bind(&id)
     .bind(media_id)
@@ -220,6 +221,8 @@ pub async fn add_credit(db: &Db, media_id: &str, credit: &Credit) -> Result<Stri
     .bind(&credit.credit_tmdb_id)
     .bind(credit.sort_order)
     .bind(now())
+    .bind(&credit.department)
+    .bind(&credit.job)
     .execute(db.pool())
     .await?;
 
@@ -333,6 +336,7 @@ pub fn blank_season(season_number: i32) -> Season {
         is_manual: true,
         images: Vec::new(),
         primary_images: Default::default(),
+        translations: Vec::new(),
     }
 }
 
@@ -383,6 +387,8 @@ pub fn blank_credit(credit_type: CreditType, person_name: String) -> Credit {
         credit_tmdb_id: None,
         sort_order: 0,
         is_manual: true,
+        department: None,
+        job: None,
     }
 }
 
@@ -413,6 +419,7 @@ mod tests {
             is_manual: false,
             images: Vec::new(),
             primary_images: Default::default(),
+            translations: Vec::new(),
         }];
         item.episodes = vec![blank_episode(1, 1)];
         item.episodes[0].is_manual = false;

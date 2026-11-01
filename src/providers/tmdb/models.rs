@@ -84,9 +84,9 @@ pub struct Tv {
     #[serde(default)]
     pub episode_run_time: Vec<i32>,
     #[serde(default)]
-    pub networks: Vec<Named>,
+    pub networks: Vec<CompanyRef>,
     #[serde(default)]
-    pub production_companies: Vec<Named>,
+    pub production_companies: Vec<CompanyRef>,
     #[serde(default)]
     pub genres: Vec<Named>,
     pub vote_average: Option<f64>,
@@ -113,6 +113,12 @@ pub struct Tv {
     pub videos: Option<Results<Video>>,
     pub images: Option<Images>,
     pub translations: Option<Translations>,
+
+    /// The language the series was asked for in, ISO 639-1 — `fr` — which
+    /// the answer does not say: the one its pictures are kept in first
+    /// (`map::artwork`). Set by the client; none for a document read back.
+    #[serde(skip)]
+    pub asked_in: Option<String>,
 }
 
 /// The episode groups a series has: other orders of its episodes that
@@ -175,11 +181,12 @@ pub struct SeasonSummary {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Season {
-    /// Unread outside the tests: every episode carries its own.
-    #[allow(dead_code)]
     pub season_number: i32,
     #[serde(default)]
     pub episodes: Vec<Episode>,
+    /// The season's title and synopsis in every language TMDB has them in,
+    /// appended to the season's document (`translations`).
+    pub translations: Option<Translations>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -305,7 +312,7 @@ pub struct Movie {
     #[serde(default)]
     pub genres: Vec<Named>,
     #[serde(default)]
-    pub production_companies: Vec<Named>,
+    pub production_companies: Vec<CompanyRef>,
     #[serde(default)]
     pub production_countries: Vec<Country>,
     pub vote_average: Option<f64>,
@@ -325,6 +332,10 @@ pub struct Movie {
     pub videos: Option<Results<Video>>,
     pub images: Option<Images>,
     pub translations: Option<Translations>,
+
+    /// The language the film was asked for in, as [`Tv::asked_in`].
+    #[serde(skip)]
+    pub asked_in: Option<String>,
 }
 
 /// The collection a film belongs to, by id alone: it is read in full from
@@ -368,6 +379,27 @@ pub struct ReleaseDate {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Named {
+    #[serde(default)]
+    pub name: String,
+}
+
+/// A network, or a company, as a work's document lists it: by TMDB's id,
+/// which numbers networks and companies apart, with its logo and the country
+/// it is from.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CompanyRef {
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub name: String,
+    pub logo_path: Option<String>,
+    /// ISO 3166-1 alpha-2; empty where TMDB knows none.
+    pub origin_country: Option<String>,
+}
+
+/// A keyword, by TMDB's id.
+#[derive(Debug, Clone, Deserialize)]
+pub struct KeywordRef {
+    pub id: Option<i64>,
     #[serde(default)]
     pub name: String,
 }
@@ -479,25 +511,31 @@ pub struct AltTitle {
 #[derive(Debug, Clone, Deserialize)]
 pub struct KeywordsTv {
     #[serde(default)]
-    pub results: Vec<Named>,
+    pub results: Vec<KeywordRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct KeywordsMovie {
     #[serde(default)]
-    pub keywords: Vec<Named>,
+    pub keywords: Vec<KeywordRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Video {
+    /// TMDB's id for the video itself.
+    pub id: Option<String>,
     pub key: Option<String>,
+    pub name: Option<String>,
     pub site: Option<String>,
     #[serde(rename = "type")]
     pub video_type: Option<String>,
     pub official: Option<bool>,
-    /// Unread: a trailer is chosen by whether it is official.
-    #[allow(dead_code)]
+    /// Its height in lines: 1080.
     pub size: Option<i32>,
+    /// The language it speaks, ISO 639-1, and the country it is for.
+    pub iso_639_1: Option<String>,
+    pub iso_3166_1: Option<String>,
+    pub published_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -516,11 +554,10 @@ pub struct ImageRef {
     /// The language written on the picture: none for a textless one, which
     /// a poster of none makes key art.
     pub iso_639_1: Option<String>,
-    // Unread: the pictures are kept in the order TMDB ranks them.
-    #[allow(dead_code)]
     pub vote_average: Option<f64>,
-    #[allow(dead_code)]
+    pub vote_count: Option<i64>,
     pub width: Option<i32>,
+    pub height: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -546,6 +583,9 @@ pub struct TranslationData {
     /// The line under the title, in this language: a film's and a series'
     /// translations both carry one.
     pub tagline: Option<String>,
+    /// A person's biography, in this language: their record's translations
+    /// carry one.
+    pub biography: Option<String>,
 }
 
 /// `/movie/changes` and `/tv/changes`.

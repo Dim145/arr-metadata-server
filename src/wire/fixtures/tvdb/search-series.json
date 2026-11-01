@@ -1,0 +1,52 @@
+{
+ "status": "success",
+ "data": [
+  {
+   "objectID": "series-70753",
+   "country": "usa",
+   "id": "series-70753",
+   "image_url": "https://artworks.thetvdb.com/banners/posters/70753-2.jpg",
+   "name": "Covington Cross",
+   "first_air_time": "1992-08-25",
+   "overview": "This is a fanciful …",
+   "primary_language": "eng",
+   "primary_type": "series",
+   "status": "Ended",
+   "type": "series",
+   "tvdb_id": "70753",
+   "year": "1992",
+   "slug": "covington-cross",
+   "overviews": {
+    "ces": "Pseudohistorický příběh vypráví o …",
+    "eng": "This is a fanciful …",
+    "fra": "Les aventures de Thomas …"
+   },
+   "translations": {
+    "ces": "Covington Cross",
+    "eng": "Covington Cross",
+    "fra": "Covington Cross"
+   },
+   "network": "ABC (US)",
+   "remote_ids": [
+    {
+     "id": "tt0103391",
+     "type": 2,
+     "sourceName": "IMDB"
+    },
+    {
+     "id": "9721",
+     "type": 12,
+     "sourceName": "TheMovieDB.com"
+    }
+   ],
+   "thumbnail": "https://artworks.thetvdb.com/banners/posters/70753-2_t.jpg"
+  }
+ ],
+ "links": {
+  "prev": null,
+  "self": "https://api4.thetvdb.com/v4/search?query=covington&type=series&limit=5&page=0",
+  "next": null,
+  "total_items": 1,
+  "page_size": 5
+ }
+}

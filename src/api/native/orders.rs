@@ -1,8 +1,9 @@
 //! The orders a series' episodes come in: TheTVDB's besides the aired one,
-//! TMDB's episode groups, and those made here — read by whoever may see the
-//! work, made, written, frozen as the aired numbering and forgotten by those
-//! who may edit it. And who numbers the series: TheTVDB, or TMDB in its place
-//! while TheTVDB does not answer for it, until somebody gives it back.
+//! TMDB's own numbering and its episode groups, and those made here — read
+//! by whoever may see the work, made, written, frozen as the aired numbering
+//! and forgotten by those who may edit it. And who numbers the series:
+//! TheTVDB, or TMDB in its place while TheTVDB does not answer for it, until
+//! somebody gives it back.
 
 use std::collections::HashSet;
 
@@ -57,10 +58,10 @@ pub struct Orders {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aired: Option<EpisodeOrder>,
     /// Every other order — TheTVDB's first, the DVDs' at their head, then
-    /// TMDB's episode groups, then those made here — each with its places:
-    /// an episode the work holds by its id as the work gives it now, or the
-    /// record the order carries of one it does not. Empty for a film, or a
-    /// series numbered one way only.
+    /// TMDB's own numbering (`tmdb-aired`) and its episode groups, then those
+    /// made here — each with its places: an episode the work holds by its id
+    /// as the work gives it now, or the record the order carries of one it
+    /// does not. Empty for a film, or a series numbered one way only.
     pub orders: Vec<EpisodeOrder>,
     /// Who numbers the series, and what its clients are offered.
     pub numbering: Numbering,
@@ -91,6 +92,8 @@ pub struct Numbering {
     pub frozen: Option<String>,
     /// The keys of the orders Sonarr v5 and Plex are offered, the aired one
     /// aside: the same order kept by TheTVDB and by TMDB is offered once.
+    /// TMDB's own numbering, `tmdb-aired`, is offered to Plex alone: Sonarr
+    /// v5 is answered in it by TMDB's id, where it is the default.
     pub offered: Vec<String>,
 }
 

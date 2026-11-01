@@ -19,6 +19,14 @@ pub const MADE_HERE: &str = "ams-";
 /// What the key of a TMDB episode group begins with, before the group's id.
 pub const TMDB_GROUP: &str = "tmdb-";
 
+/// The key of TMDB's own numbering of a series, kept as an order beside the
+/// aired one: its episodes as TMDB's seasons cut them, where the aired order
+/// is TheTVDB's. No group's key: a group's id is hexadecimal digits.
+pub const TMDB_AIRED: &str = "tmdb-aired";
+
+/// What TMDB's own numbering is called.
+pub const TMDB_AIRED_LABEL: &str = "TMDB (aired)";
+
 /// The longest key an order is asked for by: a TMDB group's is `tmdb-` and
 /// twenty-four hexadecimal digits.
 pub const KEY_MOST: usize = 40;
@@ -132,8 +140,9 @@ pub struct EpisodeOrder {
     /// What a client asks for it by — Sonarr v5's season type, Plex's
     /// episode order, the TheTVDB relay's season type: `official` for the
     /// aired order, TheTVDB's own type for its others (`dvd`, `absolute`,
-    /// `alternate`, `regional`, `altdvd`, `alttwo`), `tmdb-` and the id of a
-    /// TMDB episode group, `ams-` and a name for one made here.
+    /// `alternate`, `regional`, `altdvd`, `alttwo`), `tmdb-aired` for TMDB's
+    /// own numbering, `tmdb-` and the id of a TMDB episode group, `ams-` and
+    /// a name for one made here.
     pub key: String,
     pub kind: OrderKind,
     /// Where it was read: `tvdb`, `tmdb`, or `local` for one made here. The
@@ -276,5 +285,18 @@ mod tests {
         assert_eq!(OrderKind::of_tmdb(5), Some(OrderKind::StoryArc));
         assert_eq!(OrderKind::of_tmdb(7), Some(OrderKind::Tv));
         assert_eq!(OrderKind::of_tmdb(8), None);
+    }
+
+    #[test]
+    fn tmdbs_own_numbering_has_a_key_no_group_takes() {
+        assert!(is_key(TMDB_AIRED));
+        // A group's id is hexadecimal: `aired` is none.
+        let group = format!("{TMDB_GROUP}5acf93e60e0a26346d0000ce");
+        assert!(is_key(&group) && group != TMDB_AIRED);
+        assert!(
+            !TMDB_AIRED[TMDB_GROUP.len()..]
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit())
+        );
     }
 }

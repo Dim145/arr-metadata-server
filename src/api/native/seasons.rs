@@ -7,7 +7,7 @@
 //! summer from July, autumn from October. The same four serve a catalogue of
 //! films and of every kind of series.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     Extension, Json,
@@ -22,7 +22,8 @@ use crate::{
     db::repo,
     domain::{ExternalSource, Kin, MediaItem, MediaKind},
     error::{AppError, AppResult},
-    service,
+    providers::mal,
+    service::{self, cour},
     state::AppState,
 };
 
@@ -135,6 +136,70 @@ pub struct Entry {
     /// earlier work, and the work here that it is when the catalogue holds it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sequel_of: Option<Kin>,
+    /// The AniList and MyAnimeList entries of the season that premiere in
+    /// the quarter: the season itself where it is one entry, or the cour of
+    /// it that starts here — the second half of a split season among those
+    /// carrying on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cours: Vec<CourLine>,
+}
+
+/// One AniList and MyAnimeList entry a season is, or one of the cours it is
+/// split into, as the anime identifier list places it on the season's
+/// episodes, and described from them.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(as = SeasonCour)]
+pub struct CourLine {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anilist_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mal_id: Option<i64>,
+    /// `TV`, `ONA`, `OVA`…, as the list files it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    /// Which of the season's entries it is, the first being 1, and how many
+    /// the list splits the season into.
+    pub part: i32,
+    pub parts: i32,
+    /// Its first and last episodes the catalogue holds, by their number in
+    /// the season.
+    pub first_episode: i32,
+    pub last_episode: i32,
+    /// The day it premiered, or will: `YYYY-MM-DD`.
+    pub starts: String,
+    /// Its last episode's day, once it has finished.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ends: Option<String>,
+    /// Its episodes, and how many have aired.
+    pub episodes: i64,
+    pub aired: i64,
+    pub status: cour::Status,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_episode: Option<CourNext>,
+    /// What the catalogue already calls it, where the work's related
+    /// entries name it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// MyAnimeList's own description of it, when the chart was asked to
+    /// describe the entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mal: Option<mal::Described>,
+}
+
+/// The next episode of an entry to air.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(as = SeasonCourNext)]
+pub struct CourNext {
+    /// Its number within the entry, the entry's first being 1, as AniList
+    /// counts.
+    pub episode: i32,
+    /// Its number in the season.
+    pub episode_number: i32,
+    pub air_date: String,
+    /// When it airs, in seconds since the epoch.
+    pub airing_at: i64,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -160,6 +225,10 @@ pub struct ChartQuery {
     /// The reader's own day, `YYYY-MM-DD`: what has aired, and what airs next,
     /// is counted from it. UTC's when absent, or more than a day off it.
     pub today: Option<String>,
+    /// Describe each AniList and MyAnimeList entry listed under an entry's
+    /// `cours` as MyAnimeList does, asking it where this server has nothing
+    /// at hand: slower, a few seconds for a season of sequels.
+    pub describe: Option<bool>,
 }
 
 /// The day the reader is on, where a clock somewhere could show it: at most a
@@ -213,13 +282,14 @@ async fn chart(
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
     let today = reader_day(query.today.as_deref());
     let language = filed_language(query.language.as_deref())?;
+    let describe = query.describe.unwrap_or(false);
 
     // Read across the whole catalogue on every visit, so kept a while: under a
     // mark of the catalogue, so a work stored or corrected is counted at once,
     // and under today, which says what has aired. Readers who may edit see
     // more of each work, so theirs are kept apart.
     let key = format!(
-        "season:{from}:{adult}:{}:{}:{today}:{}:{}",
+        "season:{from}:{adult}:{}:{}:{today}:{describe}:{}:{}",
         language.as_deref().unwrap_or(""),
         identity.can_write(),
         state.caches.stamp(),
@@ -262,10 +332,14 @@ async fn chart(
         service::as_card(work);
     }
     service::redact_for_reader(&identity, &mut works);
+    let mut cours = premiering(&state, &works, &runs, (season, year), describe).await;
 
     let mut entries: Vec<Entry> = runs
         .into_iter()
         .map(|run| Entry {
+            cours: cours
+                .remove(&(run.media_id.clone(), run.season_number))
+                .unwrap_or_default(),
             sequel_of: kin.get(&run.media_id).cloned(),
             work_id: run.media_id,
             kind: if run.starts < from {
@@ -286,6 +360,7 @@ async fn chart(
             }),
         })
         .chain(premieres.into_iter().map(|(id, kind, day)| Entry {
+            cours: Vec::new(),
             sequel_of: kin.get(&id).cloned(),
             work_id: id,
             kind: if kind == MediaKind::Movie {
@@ -325,6 +400,146 @@ async fn chart(
     }
 
     Ok(Json(chart))
+}
+
+/// The AniList and MyAnimeList entries that premiere in the quarter, by the
+/// work and the season they are of: the series of the chart the anime
+/// identifier list knows, each placed on its seasons ([`cour::of_work`]).
+/// Each is described from its episodes as the work serves them, named as
+/// the work's related entries name it, and — when `describe` — as
+/// MyAnimeList describes it. A work that cannot be read is left without.
+async fn premiering(
+    state: &AppState,
+    works: &[MediaItem],
+    runs: &[repo::season::Run],
+    asked: (SeasonName, i32),
+    describe: bool,
+) -> HashMap<(String, i32), Vec<CourLine>> {
+    let mut found = HashMap::new();
+    let running: HashSet<&str> = runs.iter().map(|run| run.media_id.as_str()).collect();
+    let series: Vec<(&str, i64)> = works
+        .iter()
+        .filter(|work| work.kind == MediaKind::Series && running.contains(work.id.as_str()))
+        .filter_map(|work| Some((work.id.as_str(), work.external_ids.tvdb?)))
+        .collect();
+    let tvdb_ids: Vec<i64> = series.iter().map(|(_, tvdb)| *tvdb).collect();
+    let listed = match repo::anime::listed_series(&state.db, &tvdb_ids).await {
+        Ok(listed) => listed,
+        Err(e) => {
+            tracing::warn!(
+                error = format_args!("{e:#}"),
+                "could not read the anime identifier list for a season"
+            );
+            return found;
+        }
+    };
+
+    let now = chrono::Utc::now();
+    for (id, _) in series.into_iter().filter(|(_, tvdb)| listed.contains(tvdb)) {
+        let item = match service::load(state, id).await {
+            Ok(Some(item)) => item,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(
+                    media_id = id,
+                    error = format_args!("{e:#}"),
+                    "could not read a work for its cours"
+                );
+                continue;
+            }
+        };
+        let cours = cour::of_work(state, &item, now).await;
+        let premiering: Vec<&cour::Cour> = cours
+            .iter()
+            .filter(|c| {
+                matches!(c.span, Some(cour::Span::Season { number, .. }) if number > 0)
+                    && c.quarter
+                        .is_some_and(|(quarter, year)| (season_name(quarter), year) == asked)
+            })
+            .collect();
+        if premiering.is_empty() {
+            continue;
+        }
+        let named = match repo::anime::named_beside(&state.db, &item.id).await {
+            Ok(named) => named,
+            Err(e) => {
+                tracing::warn!(
+                    media_id = id,
+                    error = format_args!("{e:#}"),
+                    "could not read the entries named beside a work"
+                );
+                Vec::new()
+            }
+        };
+        let described = if describe {
+            let wanted: Vec<cour::Cour> = premiering.iter().map(|c| (*c).clone()).collect();
+            cour::described(state, &item, &wanted, true).await
+        } else {
+            HashMap::new()
+        };
+
+        for line in premiering {
+            let Some(cour::Span::Season { number, first, .. }) = line.span else {
+                continue;
+            };
+            let (Some(starts), Some(status), Some((first_episode, last_episode))) =
+                (line.starts.clone(), line.status, line.numbers)
+            else {
+                continue;
+            };
+            // Its place among the season's own entries.
+            let mut starts_of: Vec<i32> = cours
+                .iter()
+                .filter_map(|c| match c.span {
+                    Some(cour::Span::Season {
+                        number: theirs,
+                        first,
+                        ..
+                    }) if theirs == number => Some(first),
+                    _ => None,
+                })
+                .collect();
+            starts_of.sort_unstable();
+            let part = starts_of.iter().position(|f| *f == first).unwrap_or(0) + 1;
+
+            found
+                .entry((item.id.clone(), number))
+                .or_insert_with(Vec::new)
+                .push(CourLine {
+                    anilist_id: line.anilist,
+                    mal_id: line.mal,
+                    format: line.format.clone(),
+                    part: i32::try_from(part).unwrap_or(1),
+                    parts: i32::try_from(starts_of.len()).unwrap_or(1),
+                    first_episode,
+                    last_episode,
+                    starts,
+                    ends: line.ends.clone(),
+                    episodes: line.episodes,
+                    aired: line.aired,
+                    status,
+                    next_episode: line.next.as_ref().map(|next| CourNext {
+                        episode: next.episode,
+                        episode_number: next.episode_number,
+                        air_date: next.day.clone(),
+                        airing_at: next.airing_at,
+                    }),
+                    title: cour::kept_title(&named, line),
+                    mal: line.mal.and_then(|id| described.get(&id).cloned()),
+                });
+        }
+    }
+    found
+}
+
+/// The chart's name for a quarter.
+fn season_name(quarter: cour::Quarter) -> SeasonName {
+    match quarter {
+        cour::Quarter::Winter => SeasonName::Winter,
+        cour::Quarter::Spring => SeasonName::Spring,
+        cour::Quarter::Summer => SeasonName::Summer,
+        cour::Quarter::Autumn => SeasonName::Autumn,
+    }
 }
 
 // ─── what else premieres ─────────────────────────────────────────────────────
@@ -632,5 +847,177 @@ mod tests {
         for asked in ["x1", "zz-9", "français", "../x"] {
             assert!(filed_language(Some(asked)).is_err(), "{asked:?}");
         }
+    }
+
+    // ─── the cours that premiere ─────────────────────────────────────────────
+
+    async fn server() -> AppState {
+        let mut config = crate::config::Config::from_env().expect("a configuration");
+        config.mode = crate::config::Mode::Single;
+        config.database = crate::db::testing::database().await;
+        config.security.bootstrap_admin = None;
+        config.cache.redis_url = None;
+        config.media.storage = crate::config::MediaStorage::Off;
+        config.clients = None;
+        config.tmdb.api_key = None;
+        config.tvdb.api_key = None;
+        config.tvdb.enabled = false;
+        AppState::bootstrap(config).await.expect("a server")
+    }
+
+    /// A series of one season split in two: six episodes in summer 2019,
+    /// six from October, and the list's two entries for it.
+    async fn split_in_two(state: &AppState, tvdb: i64, title: &str) -> MediaItem {
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.id = crate::db::new_id();
+        item.title = title.into();
+        item.slug = crate::domain::make_slug(title, None);
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        item.status = Some("ended".into());
+        item.external_ids.tvdb = Some(tvdb);
+        // What AniList filed beside its first half: the second.
+        item.relations = vec![crate::domain::Relation {
+            id: String::new(),
+            relation_type: "SEQUEL".into(),
+            source: "anilist".into(),
+            external_id: tvdb + 11,
+            mal_id: None,
+            title: format!("{title} Part 2"),
+            medium: "anime".into(),
+            format: Some("TV".into()),
+            year: Some(2019),
+            image: None,
+            is_adult: false,
+            work_id: None,
+            sort_order: 0,
+        }];
+        item.episodes = (1..=12)
+            .map(|n: i32| {
+                let mut episode = crate::db::repo::child::blank_episode(1, n);
+                episode.is_manual = false;
+                let day = if n <= 6 {
+                    chrono::NaiveDate::from_ymd_opt(2019, 7, 7).unwrap()
+                        + chrono::Duration::weeks(i64::from(n) - 1)
+                } else {
+                    chrono::NaiveDate::from_ymd_opt(2019, 10, 6).unwrap()
+                        + chrono::Duration::weeks(i64::from(n) - 7)
+                };
+                episode.air_date = Some(day.format("%Y-%m-%d").to_string());
+                episode
+            })
+            .collect();
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        item
+    }
+
+    #[tokio::test]
+    async fn the_cour_that_premieres_in_the_quarter_is_shown_beside_its_season() {
+        let state = server().await;
+        let split = split_in_two(&state, 9_900_401, "A season split in two, charted").await;
+        let whole = split_in_two(&state, 9_900_402, "A season the list does not split").await;
+        repo::anime::replace_all(
+            &state.db,
+            &[
+                repo::anime::Entry {
+                    anilist_id: Some(9_900_411),
+                    tvdb_id: Some(9_900_401),
+                    tvdb_season: Some(1),
+                    kind: Some("TV".into()),
+                    ..Default::default()
+                },
+                repo::anime::Entry {
+                    anilist_id: Some(9_900_412),
+                    mal_id: Some(9_900_512),
+                    tvdb_id: Some(9_900_401),
+                    tvdb_season: Some(1),
+                    tvdb_offset: Some(6),
+                    kind: Some("TV".into()),
+                    ..Default::default()
+                },
+            ],
+        )
+        .await
+        .unwrap();
+        let ids = [split.id.clone(), whole.id.clone()];
+        let works = repo::item::by_ids(&state.db, &ids).await.unwrap();
+        let charted = |from: &'static str, to: &'static str| {
+            let state = state.clone();
+            async move {
+                repo::season::runs(&state.db, from, to, "2026-11-01", true)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // Autumn: the season carries on, and its second half premieres.
+        let runs = charted("2019-10-01", "2019-12-31").await;
+        assert_eq!(runs.len(), 2);
+        let mut cours = premiering(&state, &works, &runs, (SeasonName::Autumn, 2019), false).await;
+        assert_eq!(cours.len(), 1, "the list does not know the other series");
+        let lines = cours
+            .remove(&(split.id.clone(), 1))
+            .expect("the split season's");
+        let [line] = lines.as_slice() else {
+            panic!("one line")
+        };
+        assert_eq!(
+            (line.anilist_id, line.mal_id),
+            (Some(9_900_412), Some(9_900_512))
+        );
+        assert_eq!((line.part, line.parts), (2, 2));
+        assert_eq!((line.first_episode, line.last_episode), (7, 12));
+        assert_eq!(line.starts, "2019-10-06");
+        assert_eq!(line.ends.as_deref(), Some("2019-11-10"));
+        assert_eq!((line.episodes, line.aired), (6, 6));
+        assert_eq!(line.status, cour::Status::Finished);
+        assert!(line.next_episode.is_none() && line.mal.is_none());
+        assert_eq!(
+            line.title.as_deref(),
+            Some("A season split in two, charted Part 2"),
+            "as its first half names it"
+        );
+
+        // Summer: the first half, which is the season's start.
+        let runs = charted("2019-07-01", "2019-09-30").await;
+        let cours = premiering(&state, &works, &runs, (SeasonName::Summer, 2019), false).await;
+        let line = &cours[&(split.id.clone(), 1)][0];
+        assert_eq!(
+            (line.anilist_id, line.part, line.starts.as_str()),
+            (Some(9_900_411), 1, "2019-07-07")
+        );
+        assert_eq!(line.last_episode, 6);
+    }
+
+    #[test]
+    fn a_chart_entry_without_cours_reads_as_it_always_has() {
+        let entry = Entry {
+            work_id: "w".into(),
+            kind: EntryKind::NewSeason,
+            season_number: Some(2),
+            starts: "2026-10-04".into(),
+            ends: None,
+            episodes: None,
+            aired: None,
+            next_episode: None,
+            sequel_of: None,
+            cours: Vec::new(),
+        };
+        let written = serde_json::to_value(&entry).unwrap();
+        assert!(written.get("cours").is_none(), "{written}");
+        // And a chart kept before it had them still reads.
+        let kept: Entry = serde_json::from_value(serde_json::json!({
+            "workId": "w", "kind": "continuing", "starts": "2026-07-01"
+        }))
+        .unwrap();
+        assert!(kept.cours.is_empty());
     }
 }

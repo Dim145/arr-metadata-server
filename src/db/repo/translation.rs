@@ -244,3 +244,85 @@ pub async fn clear_fetched(db: &Db, media_id: &str) -> Result<()> {
 
     Ok(())
 }
+
+// ─── seasons ─────────────────────────────────────────────────────────────────
+
+/// Every season's title and synopsis in every language held, by season
+/// number, each season's in the order the languages were written.
+pub async fn for_seasons(
+    db: &Db,
+    media_id: &str,
+) -> Result<HashMap<i32, Vec<crate::domain::Translation>>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT season_number, language, title, overview
+         FROM media_season_translation WHERE media_id = ?
+         ORDER BY season_number, language",
+    ))
+    .bind(media_id)
+    .fetch_all(db.pool())
+    .await?;
+
+    let mut out: HashMap<i32, Vec<crate::domain::Translation>> = HashMap::new();
+    for row in &rows {
+        out.entry(row.int("season_number")?)
+            .or_default()
+            .push(crate::domain::Translation {
+                language: row.text("language")?,
+                title: row.opt_text("title")?,
+                overview: row.opt_text("overview")?,
+                tagline: None,
+                is_manual: false,
+            });
+    }
+    Ok(out)
+}
+
+/// Write the seasons' titles and synopses in other languages in place of
+/// those held, in the work's own write — when one of its seasons carries
+/// any. A write that carries none says nobody gave them, as a refresh that
+/// did not reach TMDB's season documents does not: what is held stands.
+pub async fn replace_seasons(
+    db: &Db,
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    media_id: &str,
+    seasons: &[crate::domain::Season],
+) -> Result<()> {
+    if seasons.iter().all(|s| s.translations.is_empty()) {
+        return Ok(());
+    }
+    use sqlx::Arguments;
+
+    sqlx::query(db.sql("DELETE FROM media_season_translation WHERE media_id = ?"))
+        .bind(media_id)
+        .execute(&mut **tx)
+        .await?;
+
+    // A long series runs to a thousand of them: a few hundred a statement.
+    let rows: Vec<(i32, &crate::domain::Translation)> = seasons
+        .iter()
+        .flat_map(|s| s.translations.iter().map(|t| (s.season_number, t)))
+        .collect();
+    for chunk in rows.chunks(200) {
+        let sql = format!(
+            "INSERT INTO media_season_translation
+                 (media_id, season_number, language, title, overview)
+             VALUES {}
+             ON CONFLICT (media_id, season_number, language) DO NOTHING",
+            vec!["(?, ?, ?, ?, ?)"; chunk.len()].join(", ")
+        );
+        let mut args = sqlx::any::AnyArguments::default();
+        for (number, translation) in chunk {
+            let added = args
+                .add(media_id.to_string())
+                .and_then(|()| args.add(*number))
+                .and_then(|()| args.add(translation.language.clone()))
+                .and_then(|()| args.add(translation.title.clone()))
+                .and_then(|()| args.add(translation.overview.clone()));
+            added.map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
+        sqlx::query_with(db.sql(&sql), args)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}

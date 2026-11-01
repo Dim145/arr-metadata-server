@@ -530,15 +530,25 @@ fn credits(all: &[Credit]) -> Credits {
                 Some(CrewResource {
                     name: c.person_name.clone(),
                     // The job as TMDB names it, `Screenplay`, where it was
-                    // kept; else the kind of credit.
+                    // kept — a person may have locked it in the character;
+                    // else the kind of credit.
                     job: c
                         .character_name
                         .as_deref()
+                        .or(c.job.as_deref())
                         .map(str::trim)
                         .filter(|job| !job.is_empty())
                         .map(String::from)
                         .or_else(|| Some(capitalize(c.credit_type.as_str()))),
-                    department: Some(department_for(c.credit_type)),
+                    // TMDB's department — `Sound`, `Camera` — where it was
+                    // kept; else the kind's.
+                    department: Some(
+                        c.department
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|d| !d.is_empty())
+                            .map_or_else(|| department_for(c.credit_type), String::from),
+                    ),
                     order: Some(c.sort_order),
                     tmdb_id: c.tmdb_person_id,
                     credit_id: c.credit_tmdb_id.clone()?,
@@ -564,7 +574,8 @@ fn department_for(credit_type: CreditType) -> String {
         CreditType::Director => "Directing",
         CreditType::Producer => "Production",
         CreditType::Writer => "Writing",
-        _ => "Acting",
+        CreditType::Crew => "Crew",
+        CreditType::Actor | CreditType::Guest => "Acting",
     }
     .to_string()
 }
@@ -793,6 +804,8 @@ fn to_credits(credits: &Credits) -> Vec<Credit> {
         credit_tmdb_id: Some(member.credit_id.clone()).filter(|c| !c.is_empty()),
         sort_order: member.order.unwrap_or(i as i32),
         is_manual: false,
+        department: None,
+        job: None,
     });
 
     // The crew the catalogue keeps — directors, writers, producers — with
@@ -809,6 +822,8 @@ fn to_credits(credits: &Credits) -> Vec<Credit> {
             credit_tmdb_id: Some(member.credit_id.clone()).filter(|c| !c.is_empty()),
             sort_order: member.order.unwrap_or(i as i32),
             is_manual: false,
+            department: non_empty(member.department.as_deref()),
+            job: non_empty(member.job.as_deref()),
         })
     });
 
@@ -877,6 +892,8 @@ mod tests {
                 credit_tmdb_id: Some("52fe4726c3a36847f812048b".into()),
                 sort_order: 0,
                 is_manual: false,
+                department: None,
+                job: None,
             },
             Credit {
                 id: "2".into(),
@@ -888,6 +905,8 @@ mod tests {
                 credit_tmdb_id: Some("5751b41cc3a3685ba7002c1f".into()),
                 sort_order: 0,
                 is_manual: false,
+                department: None,
+                job: None,
             },
         ];
         it.images = vec![Image {
@@ -1408,6 +1427,45 @@ mod tests {
             ],
             "the composer is not filed as cast"
         );
+    }
+
+    /// One of the rest of the crew goes to Radarr with TMDB's department
+    /// and job; one of the kinds kept before with the job in its character,
+    /// as it always was, and its kind's department where none was kept.
+    #[test]
+    fn the_crew_goes_with_its_department_and_its_job() {
+        let credit = |kind: CreditType, job: &str, department: Option<&str>| Credit {
+            id: crate::db::new_id(),
+            credit_type: kind,
+            person_name: format!("Somebody {job}"),
+            character_name: Some(job.to_string()),
+            image: None,
+            tmdb_person_id: Some(1),
+            credit_tmdb_id: Some(format!("credit-{job}")),
+            sort_order: 0,
+            is_manual: false,
+            department: department.map(str::to_string),
+            job: Some(job.to_string()),
+        };
+        let sent = credits(&[
+            credit(CreditType::Director, "Director", None),
+            credit(CreditType::Crew, "Original Music Composer", Some("Sound")),
+            credit(CreditType::Writer, "Novel", Some("Writing")),
+        ]);
+        let crew: Vec<(Option<String>, Option<String>)> = sent
+            .crew
+            .into_iter()
+            .map(|c| (c.department, c.job))
+            .collect();
+        assert_eq!(
+            crew,
+            [
+                (Some("Directing".into()), Some("Director".into())),
+                (Some("Sound".into()), Some("Original Music Composer".into())),
+                (Some("Writing".into()), Some("Novel".into())),
+            ]
+        );
+        assert!(sent.cast.is_empty(), "nobody of the crew in the cast");
     }
 
     #[test]

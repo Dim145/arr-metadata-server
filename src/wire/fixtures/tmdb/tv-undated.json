@@ -1,0 +1,226 @@
+{
+ "adult": false,
+ "backdrop_path": null,
+ "created_by": [],
+ "episode_run_time": [],
+ "first_air_date": "",
+ "genres": [
+  {
+   "id": 99,
+   "name": "Documentary"
+  }
+ ],
+ "homepage": "",
+ "id": 312594,
+ "in_production": true,
+ "languages": [
+  "en"
+ ],
+ "last_air_date": null,
+ "last_episode_to_air": null,
+ "name": "Untitled Sundance Institute Project",
+ "next_episode_to_air": null,
+ "networks": [
+  {
+   "id": 453,
+   "logo_path": "/pqUTCleNUiTLAVlelGxUgWn1ELh.png",
+   "name": "Hulu",
+   "origin_country": "US"
+  }
+ ],
+ "number_of_episodes": 1,
+ "number_of_seasons": 1,
+ "origin_country": [
+  "US"
+ ],
+ "original_language": "en",
+ "original_name": "Untitled Sundance Institute Project",
+ "overview": "The Sundance Institute's journey as a…",
+ "popularity": 2.0239,
+ "poster_path": null,
+ "production_companies": [
+  {
+   "id": 106178,
+   "logo_path": null,
+   "name": "51 Entertainment",
+   "origin_country": "US"
+  },
+  {
+   "id": 26951,
+   "logo_path": "/g7DU8lrQwY4UHGeditUaaaO0v3x.png",
+   "name": "Loveless",
+   "origin_country": "US"
+  },
+  {
+   "id": 148495,
+   "logo_path": "/2fQRDickgp9vuDIxJTlDLEs7j0y.png",
+   "name": "Proximity Media",
+   "origin_country": "US"
+  }
+ ],
+ "production_countries": [
+  {
+   "iso_3166_1": "US",
+   "name": "United States of America"
+  }
+ ],
+ "seasons": [
+  {
+   "air_date": null,
+   "episode_count": 1,
+   "id": 497566,
+   "name": "Miniseries",
+   "overview": "",
+   "poster_path": null,
+   "season_number": 1,
+   "vote_average": 0.0
+  }
+ ],
+ "softcore": false,
+ "spoken_languages": [
+  {
+   "english_name": "English",
+   "iso_639_1": "en",
+   "name": "English"
+  }
+ ],
+ "status": "Planned",
+ "tagline": "",
+ "type": "Miniseries",
+ "vote_average": 0.0,
+ "vote_count": 0,
+ "external_ids": {
+  "imdb_id": "tt3938742",
+  "freebase_mid": null,
+  "freebase_id": null,
+  "tvdb_id": null,
+  "tvrage_id": null,
+  "wikidata_id": null,
+  "facebook_id": null,
+  "instagram_id": null,
+  "twitter_id": null
+ },
+ "credits": {
+  "cast": [],
+  "crew": [
+   {
+    "adult": false,
+    "gender": 1,
+    "id": 5968648,
+    "known_for_department": "Production",
+    "name": "Kelli Buchanan",
+    "original_name": "Kelli Buchanan",
+    "popularity": 0.3913,
+    "profile_path": null,
+    "credit_id": "697a55d6af9a7e5d5312f6e3",
+    "department": "Production",
+    "job": "Executive Producer"
+   },
+   {
+    "adult": false,
+    "gender": 2,
+    "id": 1056121,
+    "known_for_department": "Directing",
+    "name": "Ryan Coogler",
+    "original_name": "Ryan Coogler",
+    "popularity": 2.3183,
+    "profile_path": "/dux4DCDaL6c639DTXGiV7nm1wcN.jpg",
+    "credit_id": "697a55e357b55130f693e725",
+    "department": "Production",
+    "job": "Executive Producer"
+   },
+   {
+    "adult": false,
+    "gender": 1,
+    "id": 2246303,
+    "known_for_department": "Production",
+    "name": "Zinzi Coogler",
+    "original_name": "Zinzi Coogler",
+    "popularity": 0.5884,
+    "profile_path": "/iRqdMOiuGy7vDJV5HcSW48jl8rr.jpg",
+    "credit_id": "697a55f499d6746ea5fc1101",
+    "department": "Production",
+    "job": "Executive Producer"
+   }
+  ]
+ },
+ "content_ratings": {
+  "results": []
+ },
+ "images": {
+  "backdrops": [],
+  "logos": [],
+  "posters": []
+ },
+ "videos": {
+  "results": []
+ },
+ "keywords": {
+  "results": []
+ },
+ "aggregate_credits": {
+  "cast": [],
+  "crew": [
+   {
+    "adult": false,
+    "gender": 2,
+    "id": 1023724,
+    "known_for_department": "Directing",
+    "name": "Braden King",
+    "original_name": "Braden King",
+    "popularity": 0.6385,
+    "profile_path": null,
+    "jobs": [
+     {
+      "credit_id": "69d0e55a4ef4b22b7ea64bf7",
+      "job": "Director",
+      "episode_count": 1
+     }
+    ],
+    "department": "Directing",
+    "total_episode_count": 1
+   },
+   {
+    "adult": false,
+    "gender": 2,
+    "id": 1639084,
+    "known_for_department": "Production",
+    "name": "Sev Ohanian",
+    "original_name": "Sev Ohanian",
+    "popularity": 0.8849,
+    "profile_path": "/ziIu96t59hQRX26wdCB1b1Sdj5F.jpg",
+    "jobs": [
+     {
+      "credit_id": "697a564ed8cb66e621b165dd",
+      "job": "Executive Producer",
+      "episode_count": 1
+     }
+    ],
+    "department": "Production",
+    "total_episode_count": 1
+   },
+   {
+    "adult": false,
+    "gender": 1,
+    "id": 80988,
+    "known_for_department": "Acting",
+    "name": "Amy Redford",
+    "original_name": "Amy Redford",
+    "popularity": 1.1535,
+    "profile_path": "/1sCFWM7CszXmtgub5T53ZoW05Tu.jpg",
+    "jobs": [
+     {
+      "credit_id": "697a5677d8cb66e621b16603",
+      "job": "Consulting Producer",
+      "episode_count": 1
+     }
+    ],
+    "department": "Production",
+    "total_episode_count": 1
+   }
+  ]
+ },
+ "episode_groups": {
+  "results": []
+ }
+}

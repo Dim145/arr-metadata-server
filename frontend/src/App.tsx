@@ -36,6 +36,8 @@ const ListDetail = named(() => import('./routes/Lists'), 'ListDetail')
 // The catalogue by a genre, a network, a year or a decade, and two works side by side.
 const GenrePage = named(() => import('./routes/Facet'), 'GenrePage')
 const NetworkPage = named(() => import('./routes/Facet'), 'NetworkPage')
+const CompanyPage = named(() => import('./routes/Facet'), 'CompanyPage')
+const KeywordPage = named(() => import('./routes/Facet'), 'KeywordPage')
 const YearPage = named(() => import('./routes/Facet'), 'YearPage')
 const DecadePage = named(() => import('./routes/Facet'), 'DecadePage')
 const Compare = named(() => import('./routes/Compare'), 'Compare')
@@ -158,6 +160,8 @@ function Router() {
             <Route path="/seasons/:year/:season" element={<Seasons />} />
             <Route path="/genre/:slug" element={<GenrePage />} />
             <Route path="/network/:slug" element={<NetworkPage />} />
+            <Route path="/company/:slug" element={<CompanyPage />} />
+            <Route path="/keyword/:slug" element={<KeywordPage />} />
             <Route path="/year/:slug" element={<YearPage />} />
             <Route path="/decade/:slug" element={<DecadePage />} />
             <Route path="/compare" element={<Compare />} />

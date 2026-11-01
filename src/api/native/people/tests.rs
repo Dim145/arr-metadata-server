@@ -17,6 +17,8 @@ fn credit(kind: CreditType, name: &str, tmdb: Option<i64>, character: Option<&st
         credit_tmdb_id: None,
         sort_order: 0,
         is_manual: false,
+        department: None,
+        job: None,
     }
 }
 
@@ -539,4 +541,70 @@ fn somebody_is_read_off_tmdb_s_record_down_to_what_is_kept() {
     // is no person's.
     let unknown = read_details(&serde_json::json!({ "gender": 0, "imdb_id": "tt0903747" }));
     assert_eq!((unknown.gender, unknown.imdb_id), (None, None));
+}
+
+/// The page of somebody, read in a language.
+async fn read_in(state: &AppState, address: &str, language: &str) -> PersonPage {
+    let uri: Uri = format!("/people/x?language={language}")
+        .parse()
+        .expect("an address");
+    let Query(query) = Query::<PersonQuery>::try_from_uri(&uri).expect("a query");
+    page(
+        State(state.clone()),
+        Extension(Identity::Visitor),
+        Path(address.to_string()),
+        Query(query),
+    )
+    .await
+    .map(|Json(page)| page)
+    .expect("a page")
+}
+
+#[tokio::test]
+async fn a_biography_is_read_in_the_readers_language_where_one_is_kept() {
+    let state = crate::api::native::testing::server().await;
+    stored(&state, MediaKind::Movie, "Sans toit ni loi", 1985, |i| {
+        i.credits = vec![credit(
+            CreditType::Director,
+            "Agnès Varda Biographed",
+            Some(906_817),
+            None,
+        )];
+    })
+    .await;
+    let person = repo::person::find(&state.db, "906817")
+        .await
+        .expect("read")
+        .expect("filed");
+    repo::person::write_details(
+        &state.db,
+        &person.id,
+        &repo::person::Details {
+            biography: Some("A Belgian-born filmmaker.".into()),
+            translations: vec![crate::domain::person::PersonTranslation {
+                language: "fra".into(),
+                name: None,
+                biography: Some("Une cinéaste née en Belgique.".into()),
+            }],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("kept");
+
+    let biography = |page: PersonPage| page.details.and_then(|d| d.biography);
+    assert_eq!(
+        biography(read_in(&state, "906817", "fr").await).as_deref(),
+        Some("Une cinéaste née en Belgique.")
+    );
+    // The catalogue's own language, and one nothing is kept in: the
+    // record's own, TMDB not being asked here.
+    assert_eq!(
+        biography(read_in(&state, "906817", "en").await).as_deref(),
+        Some("A Belgian-born filmmaker.")
+    );
+    assert_eq!(
+        biography(read_in(&state, "906817", "de").await).as_deref(),
+        Some("A Belgian-born filmmaker.")
+    );
 }

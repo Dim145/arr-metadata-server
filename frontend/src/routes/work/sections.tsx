@@ -15,15 +15,17 @@ import { Link } from 'react-router'
 import { Artwork, PosterCard, PosterGrid, PosterShelf, VEILED, Veil, useVeiled } from '../../components/media'
 import { Lightbox, useLightbox } from '../../components/Theatre'
 import { Button, Chip, Glyph, SectionTitle, Shelf } from '../../components/ui'
+import { keywordPath } from '../../lib/facets'
 import { api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
-import { jobLabel, providerName, titleOrigin } from '../../lib/labels'
+import { jobLabel, languageName, providerName, titleOrigin } from '../../lib/labels'
 import {
   airTime,
   airValue,
   crew,
+  crewByDepartment,
   episodeCode,
   episodesOf,
   hasAired,
@@ -33,17 +35,25 @@ import {
   seasonName,
   seasonNumbers,
   seasonPoster,
+  videoPage,
+  videosOf,
+  type Department,
 } from '../../lib/media'
 import { airsWhenOn, releaseDay, releasedNotAired } from '../../lib/platforms'
 import { unveil } from '../../lib/prefs'
-import type { Credit, Episode, ItemPage, MediaItem, Relation, Similar as SimilarData } from '../../lib/types'
+import type { Credit, Episode, ItemPage, MediaItem, Relation, Similar as SimilarData, Video } from '../../lib/types'
 import { Fold } from './fold'
 import { SECTION_MARGIN } from './record'
 
-/** One person in a line of names: a way to the rest of their work here, where TMDB knows them. */
+/**
+ * One person in a line of names: a way to the rest of their work here — their
+ * own page where the caller gives it, else the catalogue narrowed to them
+ * where TMDB knows them.
+ */
 interface Named {
   name: string
   tmdbId?: number
+  to?: string
 }
 
 export function Synopsis({ item }: { item: MediaItem }) {
@@ -99,10 +109,11 @@ function People({ people }: { people: Named[] }) {
       {parts.map((part, index) => {
         if (part.type !== 'element') return <Fragment key={index}>{part.value}</Fragment>
         const person = people[names.indexOf(index)]
-        return person?.tmdbId ? (
+        const to = person?.to ?? (person?.tmdbId ? `/browse?person=${person.tmdbId}` : undefined)
+        return person && to ? (
           <Link
             key={index}
-            to={`/browse?person=${person.tmdbId}`}
+            to={to}
             aria-label={t.work.withPerson(person.name)}
             title={t.work.withPerson(person.name)}
             className="underline decoration-rule-bright underline-offset-4 transition-colors duration-150 hover:text-vermillion hover:decoration-vermillion"
@@ -204,6 +215,165 @@ export function CastList({
       {rest.length ? (
         <Fold label={t.work.wholeCast(credits.length)} className="mt-6">
           <ul className={cn('stagger mt-5', grid)}>{rest.map(row)}</ul>
+        </Fold>
+      ) : null}
+    </section>
+  )
+}
+
+/** How many departments of the crew stand open before the rest are folded. */
+const SHOWN_DEPARTMENTS = 3
+
+/**
+ * Everybody behind the camera, a department at a time — directing, writing,
+ * production, then music, camera, editing and the rest, as TMDB's crew is
+ * kept, the most telling jobs first — each job once with everybody who did
+ * it, each name the way to that person's page. The first departments stand
+ * open; the rest are folded, and found by the browser's search all the same.
+ *
+ * Only where it says more than the synopsis does: a director and a writer or
+ * two are named there already.
+ */
+export function CrewList({ item }: { item: MediaItem }) {
+  const { t, lang } = useI18n()
+  const departments = crewByDepartment(item.credits)
+  if (!crewShown(item, departments)) return null
+
+  const byCredit = item.people?.byCredit
+  // Everybody once, however many jobs they did.
+  const everybody = new Set(departments.flatMap((d) => d.jobs.flatMap((j) => j.people.map((p) => p.personName)))).size
+  const named = (credit: Credit): Named => {
+    const record = byCredit?.[credit.id]?.personId
+    return {
+      name: credit.personName,
+      tmdbId: credit.tmdbPersonId ?? undefined,
+      to: credit.tmdbPersonId
+        ? `/person/${credit.tmdbPersonId}`
+        : record
+          ? `/people/${encodeURIComponent(record)}`
+          : undefined,
+    }
+  }
+  const block = (department: Department) => (
+    <div key={department.department} className="min-w-0">
+      <h3 className="label">{t.work.departments[department.department] ?? department.department}</h3>
+      <dl className="mt-2 space-y-2.5">
+        {department.jobs.map((line) => (
+          <div key={line.job}>
+            <dt className="text-xs text-bone-faint">{jobLabel(line.job, lang)}</dt>
+            <dd className="mt-0.5 text-sm text-bone">
+              <People people={line.people.map(named)} />
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  )
+  const grid = 'grid gap-x-8 gap-y-7 sm:grid-cols-2 xl:grid-cols-3'
+  const rest = departments.slice(SHOWN_DEPARTMENTS)
+
+  return (
+    <section id="crew" className={SECTION_MARGIN}>
+      <SectionTitle>{t.work.crew}</SectionTitle>
+      <p className="-mt-3 mb-5 text-xs text-bone-faint">{t.work.crewLead}</p>
+      <div className={grid}>{departments.slice(0, SHOWN_DEPARTMENTS).map(block)}</div>
+      {rest.length ? (
+        <Fold label={t.work.wholeCrew(everybody)} className="mt-6">
+          <div className={cn('mt-5', grid)}>{rest.map(block)}</div>
+        </Fold>
+      ) : null}
+    </section>
+  )
+}
+
+/**
+ * Whether the crew has a section of its own: somebody beyond the directors,
+ * writers and producers, or more jobs than the synopsis names.
+ */
+export function crewShown(item: MediaItem, departments: Department[] = crewByDepartment(item.credits)): boolean {
+  const jobs = departments.reduce((n, department) => n + department.jobs.length, 0)
+  return departments.length > 0 && ((item.credits ?? []).some((c) => c.creditType === 'crew') || jobs > 6)
+}
+
+/** How many videos stand open before the rest are folded. */
+const SHOWN_VIDEOS = 6
+
+/**
+ * Every video the sources list for the work — trailers, teasers, clips — the
+ * trailer chosen for it first. Nothing is fetched from the sites that keep
+ * them until one is asked for, not even a still: a YouTube video plays here,
+ * in the trailer's own player, through YouTube's cookie-free address, which
+ * is the one this server's page policy lets frame; the others open on their
+ * own site.
+ */
+export function Videos({ item, onPlay }: { item: MediaItem; onPlay: (key: string, name: string) => void }) {
+  const { t, locale } = useI18n()
+  const videos = videosOf(item)
+  if (!videos.length) return null
+
+  const row = (video: Video) => {
+    const kind = video.videoType ? (t.work.videoTypes[video.videoType] ?? video.videoType) : undefined
+    const name = video.name?.trim() || kind || t.work.trailer
+    const facts = [
+      kind,
+      languageName(video.language ?? undefined, locale),
+      video.publishedAt ? fmt.shortDate(video.publishedAt.slice(0, 10), locale) : undefined,
+      video.size ? `${video.size}p` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    const youtube = video.site.toLowerCase() === 'youtube'
+    const page = videoPage(video)
+    const face = (
+      <>
+        <span
+          aria-hidden
+          className="grid size-10 shrink-0 place-items-center rounded-full border border-rule-bright text-bone-dim transition-colors duration-150 group-hover:border-vermillion group-hover:text-vermillion"
+        >
+          <Glyph name={youtube ? 'play' : 'external'} className="size-4" />
+        </span>
+        {/* Named by what it shows, the spaces spelt out: a checker reads the
+            text of side-by-side elements run together, and a name that does
+            not hold the text a reader sees fails WCAG's label in name. */}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium text-bone transition-colors duration-150 group-hover:text-vermillion">
+            {name}
+          </span>{' '}
+          <span className="block truncate text-xs text-bone-faint">{youtube ? facts : [facts, video.site].filter(Boolean).join(' · ')}</span>
+        </span>{' '}
+        {video.official ? <Chip className="shrink-0">{t.work.official}</Chip> : null}
+      </>
+    )
+    const line = 'group flex min-h-14 w-full items-center gap-3 rounded-card px-2 py-1.5 text-left transition-colors duration-150 hover:bg-ink-high'
+
+    return (
+      <li key={video.id || `${video.site}:${video.key}`}>
+        {youtube ? (
+          <button type="button" onClick={() => onPlay(video.key, name)} className={cn(line, 'cursor-pointer')}>
+            <span className="sr-only">{t.work.playVideo}</span>
+            {face}
+          </button>
+        ) : page ? (
+          <a href={page} target="_blank" rel="noreferrer noopener" className={line}>
+            {face}
+          </a>
+        ) : (
+          <div className={line}>{face}</div>
+        )}
+      </li>
+    )
+  }
+  const list = 'grid gap-x-6 gap-y-1 sm:grid-cols-2'
+  const rest = videos.slice(SHOWN_VIDEOS)
+
+  return (
+    <section id="videos" className={SECTION_MARGIN}>
+      <SectionTitle>{t.work.videos}</SectionTitle>
+      <p className="-mt-3 mb-4 max-w-prose text-xs text-bone-faint">{t.work.videosLead}</p>
+      <ul className={cn('-mx-2', list)}>{videos.slice(0, SHOWN_VIDEOS).map(row)}</ul>
+      {rest.length ? (
+        <Fold label={t.work.allVideos(videos.length)} className="mt-3">
+          <ul className={cn('-mx-2 mt-2', list)}>{rest.map(row)}</ul>
         </Fold>
       ) : null}
     </section>
@@ -805,6 +975,9 @@ export function AlsoKnownAs({ item }: { item: MediaItem }) {
 
   const titles = otherTitles(item)
   const keywords = item.keywords.filter((k) => k.trim())
+  // TMDB's keywords are things of their own, with a page each; the rest —
+  // AniList's tags — narrow the catalogue by their words.
+  const entities = new Map((item.keywordEntities ?? []).filter((k) => k.id).map((k) => [k.name.trim().toLocaleLowerCase(), k]))
 
   if (!titles.length && !keywords.length) return null
 
@@ -842,27 +1015,31 @@ export function AlsoKnownAs({ item }: { item: MediaItem }) {
     )
   }
 
-  const keyword = (word: string) => (
-    <li key={word}>
-      {/* Worn as a genre wears its chip, filled and edged in its colour —
-          the site's chip that leads somewhere — in the neutral a word has
-          where a genre has a tint; an outline alone is the chip that only
-          labels. Under the pointer its edge takes the colour of its text, as
-          a genre's does. */}
-      <Link
-        to={`/browse?keyword=${encodeURIComponent(word)}`}
-        className="hit group inline-flex min-h-8 items-center gap-1 rounded-full border border-bone-faint/35 bg-bone-faint/10 px-2.5 text-xs font-medium text-bone-dim transition-colors duration-150 hover:border-current hover:text-bone focus-visible:outline-offset-2"
-      >
-        <span
-          aria-hidden
-          className="font-mono text-body-sm leading-none text-bone-faint transition-colors duration-150 group-hover:text-vermillion"
+  const keyword = (word: string) => {
+    const entity = entities.get(word.trim().toLocaleLowerCase())
+    return (
+      <li key={word}>
+        {/* Worn as a genre wears its chip, filled and edged in its colour —
+            the site's chip that leads somewhere — in the neutral a word has
+            where a genre has a tint; an outline alone is the chip that only
+            labels. Under the pointer its edge takes the colour of its text, as
+            a genre's does. */}
+        <Link
+          to={entity?.id ? keywordPath(entity.id) : `/browse?keyword=${encodeURIComponent(word)}`}
+          title={entity?.id ? t.work.keywordPage(word) : undefined}
+          className="hit group inline-flex min-h-8 items-center gap-1 rounded-full border border-bone-faint/35 bg-bone-faint/10 px-2.5 text-xs font-medium text-bone-dim transition-colors duration-150 hover:border-current hover:text-bone focus-visible:outline-offset-2"
         >
-          #
-        </span>
-        {word}
-      </Link>
-    </li>
-  )
+          <span
+            aria-hidden
+            className="font-mono text-body-sm leading-none text-bone-faint transition-colors duration-150 group-hover:text-vermillion"
+          >
+            #
+          </span>
+          {word}
+        </Link>
+      </li>
+    )
+  }
 
   const titleList = 'grid gap-x-8 gap-y-2 sm:grid-cols-2'
   const keywordList = 'flex flex-wrap gap-x-1.5 gap-y-3'

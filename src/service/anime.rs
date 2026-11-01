@@ -153,7 +153,7 @@ fn primary_of_series(entries: &[Entry]) -> Option<&Entry> {
 
 /// The film itself, where the list files something else under the same TMDB
 /// id too.
-fn primary_of_movie(entries: &[Entry]) -> Option<&Entry> {
+pub fn primary_of_movie(entries: &[Entry]) -> Option<&Entry> {
     entries
         .iter()
         .filter(|e| e.mal_id.is_some() || e.anilist_id.is_some())

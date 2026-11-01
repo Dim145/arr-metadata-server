@@ -42,6 +42,9 @@ every one is kept twice. That is not hypothetical — it is what this server did
 before the rule existed, and for *One Piece* it answered with 2352 episodes for
 a show that has 1179.
 
+TMDB's numbering is not thrown away for all that: it is kept beside TheTVDB's, as
+an order a client can ask for — see [TMDB's own numbering](#tmdbs-own-numbering).
+
 Measured against the live APIs with all four providers configured:
 
 | Series | Numbered episodes | With absolute numbers | With overviews |
@@ -84,6 +87,36 @@ Radarr's own service, and merges all three.
 > to itself and would call itself forever. It detects that and answers `508`
 > with the fix in the message — but point the upstreams elsewhere, or turn
 > enrichment off, when that is your setup.
+
+### TMDB's own numbering
+
+TMDB cuts some series' seasons otherwise than TheTVDB does — One Piece into more
+of them, a season that aired in parts into as many — and the merge numbers the
+series as TheTVDB does. TMDB's own numbering is kept all the same, as an order
+beside the aired one: `tmdb-aired`, *TMDB (aired)*, written again at every refresh
+that reads TMDB's seasons, at no extra call, and kept as it was for a season TMDB
+could not give that time. Its places are TMDB's season and episode numbers, each
+carrying TMDB's record of the episode and naming the episode the series holds for
+it: the one of the same TMDB id when the two aired the same day, give or take one
+— the merge gives an episode TheTVDB numbers the TMDB id of TMDB's at the same
+numbers, which is another episode where the two number the series otherwise — or
+else the one episode the series holds that aired the day TMDB's did, when that day
+has one on each side. A place no held episode is known for is served as TMDB
+describes it.
+
+It is offered where the client's real source offers TMDB's numbering: on the site
+and in the editor, and to Plex, whose TMDB agent offers *TheMovieDB (Aired)*.
+TheTVDB's documents have no such order, so the season types of Sonarr's
+`/v2/tvdb` and of the TheTVDB relay do not list it; asked for by its key, it is
+answered all the same. It is what Skyhook's TMDB edition numbers a series by — see
+[Sonarr v5 by TMDB's id](sonarr-radarr.md#sonarr-v5-by-tmdbs-id) — and, like any
+order, it can be frozen as the aired numbering. It changes nothing of who numbers
+the series: TMDB does so in TheTVDB's place only while TheTVDB does not answer for
+it, `numbering.fallbackAfter` refreshes in a row — see
+[Who numbers a series](sonarr-radarr.md#who-numbers-a-series).
+
+A series held from before it was kept gains it at its next refresh, or the first
+time a client asks for the series in it, which reads TMDB's seasons once.
 
 ### TMDB's episode groups
 
@@ -193,6 +226,23 @@ AniList's score is its `weightedScore`, out of a hundred, shown out of ten;
 when it is missing, and is no longer asked for once AniList stops knowing it.
 Its relations are the third version of its list, `SAME_UNIVERSE` included: a
 work set in the same universe is shown after those sharing a character.
+
+The same map places every other entry of a series on its episodes: an entry
+runs from the episode after its offset in its TheTVDB season up to where the
+season's next entry starts, and is described from those episodes as the work
+serves them, corrections included — how many, how many have aired, its first
+and last day, whether it is still airing, the quarter it premiered in, the
+next episode by its number within the entry — and named as the work's sources
+named it beside the work, a first season naming its sequel. Nothing of it is
+stored: it is worked out on every read. Two entries the map starts at one place
+are told apart by their kind, a television series before a film or a special
+filed beside it; two of one kind, and a special the map gives no place or
+MyAnimeList no count of episodes, are left unplaced rather than guessed at.
+MyAnimeList describes each entry in its own words — its titles and synopsis,
+how many episodes it is to have, how far it has aired, its type, what it was
+adapted from, its studios and the entries related to it — read from what it
+answered at the work's last refresh for the work's own entry, and asked of it,
+in full, for the others when the season chart is asked to describe them.
 
 **IMDb's rating** is what Sonarr is given for a series — Skyhook's rating is
 IMDb's, republished — and otherwise the rating with the most votes behind it.

@@ -121,6 +121,18 @@ pub async fn picture(
         .into_response();
     };
 
+    // A picture of another source's, or one uploaded, that a document of
+    // TMDB's shape written here named by its key in the store
+    // (`tmdb.images = server`, [`kept_name`]): served from the store,
+    // whatever the size asked, and never asked of TMDB, which files nothing
+    // under such a name.
+    if kept_name(&file).is_some() {
+        if state.media.keyed(&file).is_none() {
+            return AppError::NotFound.into_response();
+        }
+        return crate::media::serve::get(State(state.clone()), method, Path(file), headers).await;
+    }
+
     // Kept here: TMDB's original, filed by the address the provider gave.
     // A file gone from the store is fetched from TMDB again.
     let origin = crate::providers::tmdb::image_url(&format!("/{file}"));
@@ -148,6 +160,19 @@ pub async fn picture(
         crate::media::file::MAX_IMAGE_BYTES,
     )
     .await
+}
+
+/// The name the gate serves a picture this server keeps under, where it is
+/// none of TMDB's: its key in the media store — sixty-four hex digits and
+/// `.jpg` or `.png`, the picture's own bytes rather than a copy made of
+/// them — which no name of TMDB's is. What a document of TMDB's shape
+/// written here names a source's picture, or one uploaded, by when TMDB's
+/// clients are sent here for pictures. None for any other key: a sound, a
+/// copy at a width, a WebP.
+pub fn kept_name(key: &str) -> Option<String> {
+    let parsed = crate::media::file::parse_key(key)?;
+    (parsed.made == crate::media::file::Made::Own && matches!(parsed.ext, "jpg" | "png"))
+        .then(|| format!("/{key}"))
 }
 
 /// The type a picture is served as, when the size and the name asked are
@@ -714,6 +739,68 @@ mod tests {
             HeaderMap::new(),
         )
         .await
+    }
+
+    #[test]
+    fn a_picture_of_another_sources_is_named_by_its_own_key_alone() {
+        let hash = "0123456789abcdef".repeat(4);
+        for ext in ["jpg", "png"] {
+            let key = format!("{hash}.{ext}");
+            assert_eq!(kept_name(&key), Some(format!("/{key}")));
+            // And the gate takes the name as one of a picture's.
+            assert!(picture_type("w500", &key).is_some());
+        }
+        for key in [
+            format!("{hash}.webp"),
+            format!("{hash}-480.webp"),
+            format!("{hash}-square.jpg"),
+            format!("{hash}.m4a"),
+            "kqjL17yufvn9OVLyXYpvtyrFfak.jpg".to_string(),
+            format!("{}.jpg", hash.to_uppercase()),
+        ] {
+            assert_eq!(kept_name(&key), None, "{key}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_picture_of_another_sources_kept_here_is_served_by_its_key() {
+        let stand_in = StandIn::start(nothing).await;
+        let (state, dir) = testing::server_keeping_media(&stand_in, None).await;
+        let bytes = vec![0xff, 0xd8, 0xff, 0xe0, 93, 0x4a, 0x46, 0x49, 0x46];
+        let (key, _) = crate::media::file::key_for(&bytes, "jpg");
+        state
+            .media
+            .store()
+            .expect("a store")
+            .put(&key, Bytes::from(bytes.clone()), "image/jpeg")
+            .await
+            .expect("kept");
+        state.media.remember(
+            "https://assets.fanart.tv/fanart/movies/1/movieposter/a.jpg",
+            &key,
+            Thumb::None,
+            "image/jpeg",
+        );
+        for size in ["original", "w342"] {
+            let answer = asked_of(&state, size, &key).await;
+            assert_eq!(answer.status(), StatusCode::OK, "{size}");
+            let body = axum::body::to_bytes(answer.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(&body[..], &bytes[..]);
+        }
+        // A name of the kind kept nowhere: none, and TMDB, which files
+        // nothing so, is not asked.
+        let missing = format!("{}.jpg", "f".repeat(64));
+        let answer = asked_of(&state, "w500", &missing).await;
+        assert_eq!(answer.status(), StatusCode::NOT_FOUND);
+        assert!(
+            stand_in
+                .asked_at(&format!("/t/p/w500/{missing}"))
+                .is_empty()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

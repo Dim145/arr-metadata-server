@@ -4,13 +4,15 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
+import { Link } from 'react-router'
 
+import { CompanyLine } from '../../components/companies'
 import { ExternalLink } from '../../components/elsewhere'
 import { Field, Genre, Glyph, Panel, PanelHead, Select } from '../../components/ui'
 import { ApiError, api, query } from '../../lib/api'
 import { cn } from '../../lib/cn'
-import { genrePath } from '../../lib/facets'
+import { companyPath, genrePath } from '../../lib/facets'
 import * as fmt from '../../lib/format'
 import { useI18n } from '../../lib/i18n'
 import { languageName, listedGenres, providerName, statusLabel } from '../../lib/labels'
@@ -25,7 +27,7 @@ import {
   otherCountries,
   releasesIn,
 } from '../../lib/releases'
-import type { CountryRelease, MediaItem, WhereToWatch as WhereToWatchData } from '../../lib/types'
+import type { Company, CompanyRole, CountryRelease, MediaItem, WhereToWatch as WhereToWatchData } from '../../lib/types'
 import { Fold } from './fold'
 
 /**
@@ -44,8 +46,32 @@ export function Record({ item, region }: { item: MediaItem; region: string }) {
   const onlyStudio =
     companies.length === 1 && companies[0]!.toLocaleLowerCase(locale) === item.studio?.toLocaleLowerCase(locale)
   const countries = (item.productionCountries ?? []).map((code) => countryName(code, locale))
+  // The network and the studio, as the work names them — locks and all —
+  // each the way to its page where a company of that name is credited in
+  // that role. The production companies are listed with their logos under
+  // the record, where there are any.
+  const credited = item.companies ?? []
+  const entity = (name: string | undefined, roles: CompanyRole[]): Company | undefined => {
+    const wanted = name?.trim().toLocaleLowerCase(locale)
+    if (!wanted) return undefined
+    return credited.find(
+      (c) => roles.includes(c.role) && c.company.id && c.company.name.trim().toLocaleLowerCase(locale) === wanted,
+    )?.company
+  }
+  const linked = (name: string | undefined, company: Company | undefined): ReactNode =>
+    name && company?.id ? (
+      <Link
+        to={companyPath(company.id)}
+        className="underline decoration-rule-bright underline-offset-4 transition-colors duration-150 hover:text-vermillion hover:decoration-vermillion"
+      >
+        {name}
+      </Link>
+    ) : (
+      name
+    )
+  const listedBelow = credited.some((c) => c.role === 'production')
 
-  const rows: [string, string | undefined, string?][] = [
+  const rows: [string, ReactNode, string?][] = [
     [t.work.status, statusLabel(item.status, t)],
     [
       item.kind === 'series' ? t.work.firstAired : t.work.released,
@@ -54,15 +80,15 @@ export function Record({ item, region }: { item: MediaItem; region: string }) {
     ],
     [t.work.lastAired, item.kind === 'series' ? fmt.longDate(item.lastAired, locale) : undefined],
     [t.work.runtime, fmt.runtime(item.runtime, locale)],
-    [t.work.network, item.network],
-    [t.work.studio, item.studio],
-    [t.work.companies, onlyStudio || !companies.length ? undefined : fmt.list(companies, locale)],
+    [t.work.network, linked(item.network, entity(item.network, ['network']))],
+    [t.work.studio, linked(item.studio, entity(item.studio, ['studio', 'production']))],
+    [t.work.companies, onlyStudio || !companies.length || listedBelow ? undefined : fmt.list(companies, locale)],
     [t.work.countries, countries.length ? fmt.list(countries, locale) : undefined],
     [t.work.certification, rated?.certification, rated?.country ? countryName(rated.country, locale) : undefined],
     [t.work.originalLanguage, languageName(item.originalLanguage, locale)],
   ]
 
-  const present = rows.filter((row): row is [string, string, string?] => Boolean(row[1]))
+  const present = rows.filter((row): row is [string, NonNullable<ReactNode>, string?] => Boolean(row[1]))
 
   return (
     <Panel id="details" className={SECTION_MARGIN}>
@@ -82,6 +108,52 @@ export function Record({ item, region }: { item: MediaItem; region: string }) {
           ))}
         </div>
       ) : null}
+    </Panel>
+  )
+}
+
+/** The roles a company can have on a work, in the order they are listed. */
+const ROLES: CompanyRole[] = ['network', 'production', 'studio', 'distributor']
+
+/** How many of one role stand open before the rest are folded: a film's producers run to thirty. */
+const SHOWN_COMPANIES = 4
+
+/**
+ * The networks and the companies credited on the work, a role at a time —
+ * as the sources list them, the first that lists any for a role giving it,
+ * the others completing them — each with its logo and where it is from,
+ * each the way to its own page.
+ */
+export function Companies({ item }: { item: MediaItem }) {
+  const { t } = useI18n()
+  const credited = item.companies ?? []
+  if (!credited.length) return null
+
+  const groups = ROLES.map((role) => ({ role, members: credited.filter((c) => c.role === role) })).filter(
+    (group) => group.members.length,
+  )
+  const line = (credit: (typeof credited)[number]) => (
+    <li key={`${credit.company.id || credit.company.name}-${credit.role}`}>
+      <CompanyLine company={credit.company} />
+    </li>
+  )
+
+  return (
+    <Panel id="companies" label={t.work.companiesTitle} className={SECTION_MARGIN}>
+      <PanelHead title={t.work.companiesTitle} />
+      <div className="divide-y divide-rule">
+        {groups.map((group) => (
+          <div key={group.role} className="px-5 py-3">
+            <h3 className="label">{t.work.companyRoles[group.role] ?? group.role}</h3>
+            <ul className="mt-1.5">{group.members.slice(0, SHOWN_COMPANIES).map(line)}</ul>
+            {group.members.length > SHOWN_COMPANIES ? (
+              <Fold label={t.work.moreProviders(group.members.length - SHOWN_COMPANIES)} className="mt-1">
+                <ul>{group.members.slice(SHOWN_COMPANIES).map(line)}</ul>
+              </Fold>
+            ) : null}
+          </div>
+        ))}
+      </div>
     </Panel>
   )
 }

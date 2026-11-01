@@ -1,5 +1,6 @@
 /**
- * Where a genre, a network, a year and a decade have pages of their own.
+ * Where a genre, a network, a year and a decade have pages of their own — and
+ * a company and a keyword, by this server's ids for them.
  *
  * A genre's page is addressed by its slug, which is the same in every
  * language: the server knows "Drama" and "Drame" as `drama` and answers to
@@ -37,6 +38,19 @@ export function networkPath(name: string): string {
   return `/network/${slugOf(name)}`
 }
 
+/**
+ * A network's or a company's page as an entity, by this server's id for it:
+ * the works it is credited on, whatever it did for them.
+ */
+export function companyPath(id: string): string {
+  return `/company/${encodeURIComponent(id)}`
+}
+
+/** A keyword's page, by this server's id for it. */
+export function keywordPath(id: string): string {
+  return `/keyword/${encodeURIComponent(id)}`
+}
+
 /** A year's page. */
 export function yearPath(year: number): string {
   return `/year/${year}`
@@ -48,10 +62,17 @@ export function decadePath(year: number): string {
 }
 
 /** What the pages of the catalogue are of, as their addresses say it. */
-export type FacetKind = 'genre' | 'network' | 'year' | 'decade'
+export type FacetKind = 'genre' | 'network' | 'year' | 'decade' | 'company' | 'keyword'
 
 /** The API path a page of the catalogue is read from. */
 export function facetApiPath(kind: FacetKind, key: string): string {
-  const plural = { genre: 'genres', network: 'networks', year: 'years', decade: 'decades' }[kind]
+  const plural = {
+    genre: 'genres',
+    network: 'networks',
+    year: 'years',
+    decade: 'decades',
+    company: 'companies',
+    keyword: 'keywords',
+  }[kind]
   return `/${plural}/${segment(key)}`
 }

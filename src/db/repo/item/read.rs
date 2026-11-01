@@ -12,7 +12,8 @@ use crate::{
     db::{Db, RowExt},
     domain::{
         AlternativeTitle, CoverType, Credit, CreditType, Episode, ExternalIds, ExternalSource,
-        Image, MediaItem, MediaKind, Rating, RatingValue, Relation, Season, Translation,
+        Image, ImageDetails, MediaItem, MediaKind, Rating, RatingValue, Relation, Season,
+        Translation,
         person::{People, PersonRef},
     },
 };
@@ -85,6 +86,10 @@ pub(super) fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         relations: Vec::new(),
         releases: Vec::new(),
         people: Default::default(),
+        companies: Vec::new(),
+        keyword_entities: Vec::new(),
+        videos: Vec::new(),
+        image_details: Default::default(),
         locked_fields: Vec::new(),
         primary_images: Default::default(),
         locked_texts: Vec::new(),
@@ -342,7 +347,16 @@ pub async fn find_id_by_slug(db: &Db, kind: MediaKind, slug: &str) -> Result<Opt
 
 /// Load every child collection onto `item`.
 pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
-    let (seasons, episodes, images, credits, alt_titles, ratings, translations, relations) = tokio::try_join!(
+    let (
+        seasons,
+        episodes,
+        (images, details),
+        credits,
+        alt_titles,
+        ratings,
+        translations,
+        relations,
+    ) = tokio::try_join!(
         load_seasons(db, &item.id),
         load_episodes(db, &item.id),
         load_images(db, &item.id),
@@ -352,7 +366,18 @@ pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
         load_translations(db, &item.id),
         load_relations(db, &item.id),
     )?;
-    item.releases = crate::db::repo::release::load(db, &item.id).await?;
+    let (releases, companies, keyword_entities, videos, mut season_texts) = tokio::try_join!(
+        crate::db::repo::release::load(db, &item.id),
+        crate::db::repo::company::of_work(db, &item.id),
+        crate::db::repo::keyword::of_work(db, &item.id),
+        crate::db::repo::video::of_work(db, &item.id),
+        crate::db::repo::translation::for_seasons(db, &item.id),
+    )?;
+    item.releases = releases;
+    item.companies = companies;
+    item.keyword_entities = keyword_entities;
+    item.videos = videos;
+    item.image_details = details;
 
     // Season-scoped images belong on their season, not on the work.
     let (season_images, item_images): (Vec<Image>, Vec<Image>) =
@@ -365,6 +390,9 @@ pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
             .filter(|i| i.season_number == Some(season.season_number))
             .cloned()
             .collect();
+        season.translations = season_texts
+            .remove(&season.season_number)
+            .unwrap_or_default();
     }
 
     let (credits, people) = credits;
@@ -403,6 +431,7 @@ async fn load_seasons(db: &Db, media_id: &str) -> Result<Vec<Season>> {
                 is_manual: row.flag("is_manual")?,
                 images: Vec::new(),
                 primary_images: Default::default(),
+                translations: Vec::new(),
             })
         })
         .collect()
@@ -458,9 +487,14 @@ pub(super) fn map_episode(row: &sqlx::any::AnyRow) -> Result<Episode> {
     })
 }
 
-async fn load_images(db: &Db, media_id: &str) -> Result<Vec<Image>> {
+/// A work's pictures, and what their sources say of them by address.
+async fn load_images(
+    db: &Db,
+    media_id: &str,
+) -> Result<(Vec<Image>, std::collections::BTreeMap<String, ImageDetails>)> {
     let rows = sqlx::query(db.sql(
-        "SELECT id, season_number, cover_type, url, language, sort_order, source, is_manual
+        "SELECT id, season_number, cover_type, url, language, sort_order, source, is_manual,
+                width, height, vote_average, vote_count
          FROM media_image WHERE media_id = ? ORDER BY cover_type, sort_order",
     ))
     .bind(media_id)
@@ -468,12 +502,24 @@ async fn load_images(db: &Db, media_id: &str) -> Result<Vec<Image>> {
     .await?;
 
     let mut images: Vec<Image> = rows.iter().map(map_image).collect::<Result<_>>()?;
+    let mut details = std::collections::BTreeMap::new();
+    for row in &rows {
+        let said = ImageDetails {
+            width: row.opt_int("width")?,
+            height: row.opt_int("height")?,
+            vote_average: row.opt_real("vote_average")?,
+            vote_count: row.opt_big("vote_count")?,
+        };
+        if !said.is_empty() {
+            details.insert(row.text("url")?, said);
+        }
+    }
 
     // SQL orders by the cover type's *name*, which puts clearlogo before poster.
     // Sort by meaning instead.
     images.sort_by_key(|i| (i.cover_type.priority(), i.sort_order));
 
-    Ok(images)
+    Ok((images, details))
 }
 
 /// The work held here that a relation's entry is, as a subquery on a row `r`
@@ -635,6 +681,7 @@ async fn load_credits(db: &Db, media_id: &str) -> Result<(Vec<Credit>, People)> 
     let rows = sqlx::query(db.sql(
         "SELECT c.id, c.credit_type, c.person_name, c.character_name, c.image,
                 c.tmdb_person_id, c.credit_tmdb_id, c.sort_order, c.is_manual, c.person_id,
+                c.department, c.job,
                 p.tmdb_id AS person_tmdb_id, p.imdb_id AS person_imdb_id,
                 p.tvdb_id AS person_tvdb_id
            FROM media_credit c LEFT JOIN person p ON p.id = c.person_id
@@ -680,6 +727,8 @@ pub(super) fn map_credit(row: &sqlx::any::AnyRow) -> Result<Credit> {
         credit_tmdb_id: row.opt_text("credit_tmdb_id")?,
         sort_order: row.int("sort_order")?,
         is_manual: row.flag("is_manual")?,
+        department: row.opt_text("department")?,
+        job: row.opt_text("job")?,
     })
 }
 

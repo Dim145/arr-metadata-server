@@ -4,6 +4,7 @@ import { episode, image, work } from './fixtures'
 import {
   adjacentEpisodes,
   airTime,
+  crewByDepartment,
   episodeCode,
   hasAired,
   hasSources,
@@ -18,9 +19,12 @@ import {
   seasonName,
   seasonNumbers,
   sized,
+  videoPage,
+  videosOf,
   type ImageRole,
   type Picture,
 } from './media'
+import type { Credit, Video } from './types'
 
 describe('an image in a role', () => {
   const tmdb = 'https://image.tmdb.org/t/p/original/abc.jpg'
@@ -259,5 +263,44 @@ describe('a work’s sources', () => {
     expect(hasSources(work())).toBe(false)
     expect(hasSources(work({ externalIds: { mal: [] } }))).toBe(false)
     expect(hasSources(work({ externalIds: { tmdb: 1399 } }))).toBe(true)
+  })
+})
+
+describe('the crew and the videos', () => {
+  const credit = (over: Partial<Credit>): Credit => ({
+    id: over.personName ?? 'x',
+    creditType: 'crew',
+    personName: 'Somebody',
+    sortOrder: 0,
+    isManual: false,
+    ...over,
+  })
+
+  it('files the crew a department at a time, each job once, in the order the credits come', () => {
+    const departments = crewByDepartment([
+      credit({ personName: 'An Actor', creditType: 'actor', sortOrder: 0 }),
+      credit({ personName: 'A Composer', department: 'Sound', job: 'Original Music Composer', characterName: 'Original Music Composer', sortOrder: 3 }),
+      credit({ personName: 'A Director', creditType: 'director', department: 'Directing', job: 'Director', sortOrder: 0 }),
+      // Entered by hand: no department, the job kept as its part.
+      credit({ personName: 'A Writer', creditType: 'writer', characterName: 'Screenplay', sortOrder: 1 }),
+      credit({ personName: 'Another Writer', creditType: 'writer', department: 'Writing', job: 'Screenplay', sortOrder: 2 }),
+      credit({ personName: 'A Writer', creditType: 'writer', department: 'Writing', job: 'Screenplay', sortOrder: 5 }),
+      credit({ personName: 'A Guest', creditType: 'guest', sortOrder: 6 }),
+    ])
+    expect(departments.map((d) => d.department)).toEqual(['Directing', 'Writing', 'Sound'])
+    expect(departments[1]!.jobs).toHaveLength(1)
+    expect(departments[1]!.jobs[0]!.people.map((p) => p.personName)).toEqual(['A Writer', 'Another Writer'])
+    expect(departments[2]!.jobs[0]!.job).toBe('Original Music Composer')
+    expect(crewByDepartment(undefined)).toEqual([])
+  })
+
+  it('offers the trailer chosen first, then the sources’ order, and says where each is kept', () => {
+    const video = (key: string, sortOrder: number, site = 'YouTube'): Video => ({ key, site, sortOrder, official: true })
+    const item = { trailerYoutubeId: 'chosen', videos: [video('first', 0), video('vimeo', 1, 'Vimeo'), video('chosen', 2)] }
+    expect(videosOf(item).map((v) => v.key)).toEqual(['chosen', 'first', 'vimeo'])
+    expect(videosOf({ videos: undefined })).toEqual([])
+    expect(videoPage(video('a b', 0))).toBe('https://www.youtube.com/watch?v=a%20b')
+    expect(videoPage(video('123', 0, 'Vimeo'))).toBe('https://vimeo.com/123')
+    expect(videoPage(video('x', 0, 'Dailymotion'))).toBeUndefined()
   })
 })

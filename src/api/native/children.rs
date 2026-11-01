@@ -1242,6 +1242,8 @@ mod tests {
             credit_tmdb_id: Some(format!("52fe4{person}")),
             sort_order: order,
             is_manual: false,
+            department: None,
+            job: None,
         })
         .collect();
         work.alternative_titles = ["Heat: The Movie", "L.A. Takedown"]

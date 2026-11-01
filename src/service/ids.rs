@@ -27,6 +27,25 @@
 //! id of nought or less for a work it adds, so the range is a positive one. A
 //! client asking by such an id is answered from the works entered by hand
 //! ([`crate::service::by_own_id`]); no source is asked, since none has it.
+//!
+//! Every dialect this server answers in hands a work the same number where
+//! it has to make one up, so that a client of one can pass it to a client
+//! of another — Seerr finds a series entered by hand in TMDB's search, reads
+//! the TheTVDB id TMDB's dialect gives it, and hands that to Sonarr, which
+//! asks Skyhook's dialect for it:
+//!
+//! | Dialect | A work a source names | Entered by hand | A series TMDB alone names | A Fan-Kai |
+//! |---|---|---|---|---|
+//! | Skyhook (Sonarr), [`for_client`] | TheTVDB's id | [`own`] | TMDB's id + [`SYNTHETIC_OFFSET`] | Fankai's id + [`FANKAI_OFFSET`] |
+//! | Radarr, [`for_client`] | TMDB's id | [`own`] | — | — |
+//! | TMDB's `/3`, [`for_tmdb`] | TMDB's id | [`own`] | TMDB's id | Fankai's id + [`FANKAI_OFFSET`] |
+//! | TheTVDB's `/v4`, [`for_client`] | TheTVDB's id | [`own`] | TMDB's id + [`SYNTHETIC_OFFSET`] | Fankai's id + [`FANKAI_OFFSET`] |
+//!
+//! In TMDB's dialect a series TheTVDB alone names has no id, and TMDB's
+//! clients are never shown it; where TMDB's dialect gives a series' TheTVDB
+//! id (`external_ids.tvdb_id`), it is the number Sonarr keeps the series
+//! under ([`for_client`]), made up or not. AniList's dialect hands nothing of
+//! its own yet: its relay answers no work itself.
 
 use crate::domain::{ExternalIds, MediaKind};
 
@@ -125,6 +144,24 @@ pub fn for_client(
         MediaKind::Movie => ids.tmdb,
     };
     named.or_else(|| is_manual.then(|| own(catalogue_id)))
+}
+
+/// The id a work is known by in TMDB's dialect — what the TMDB relay
+/// answers it under, and is asked for it by: TMDB's own; else, for a work no
+/// TMDB id names, the number Sonarr or Radarr keeps it under
+/// ([`for_client`]) where that number is one of this server's own — a
+/// Fan-Kai production's, a work entered by hand's — which TMDB's ids never
+/// reach. `None` for a series TheTVDB alone names: TheTVDB's ids and TMDB's
+/// overlap, and TMDB's clients have no way to it.
+pub fn for_tmdb(
+    kind: MediaKind,
+    catalogue_id: &str,
+    is_manual: bool,
+    ids: &ExternalIds,
+) -> Option<i64> {
+    ids.tmdb.or_else(|| {
+        for_client(kind, catalogue_id, is_manual, ids).filter(|id| *id >= FANKAI_OFFSET)
+    })
 }
 
 /// The id Sonarr keeps a series under from what names it elsewhere:
@@ -283,6 +320,69 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(for_client(MediaKind::Movie, id, true, &imdb), Some(own(id)));
+    }
+
+    #[test]
+    fn tmdbs_dialect_names_a_work_by_tmdbs_id_else_by_a_number_of_this_servers() {
+        let id = "01a17789-b167-736d-8873-605960d7e943";
+        let ids = |tmdb: Option<i64>, tvdb: Option<i64>, fankai: Option<i64>| ExternalIds {
+            tmdb,
+            tvdb,
+            fankai,
+            ..Default::default()
+        };
+        // TMDB's own, whatever else names it — a series TMDB alone names
+        // too, which Skyhook's dialect hands an id made of it.
+        let both = ids(Some(1396), Some(81189), None);
+        assert_eq!(for_tmdb(MediaKind::Series, id, false, &both), Some(1396));
+        let alone = ids(Some(1396), None, None);
+        assert_eq!(for_tmdb(MediaKind::Series, id, false, &alone), Some(1396));
+        assert_eq!(
+            for_client(MediaKind::Series, id, false, &alone),
+            to_synthetic(1396)
+        );
+        assert_eq!(for_tmdb(MediaKind::Movie, id, true, &alone), Some(1396));
+        // A Fan-Kai, and a work entered by hand: the number Sonarr keeps.
+        let recut = ids(None, None, Some(12));
+        assert_eq!(
+            for_tmdb(MediaKind::Series, id, false, &recut),
+            Some(200_000_012)
+        );
+        let nothing = ExternalIds::default();
+        assert_eq!(
+            for_tmdb(MediaKind::Series, id, true, &nothing),
+            Some(own(id))
+        );
+        assert_eq!(
+            for_tmdb(MediaKind::Movie, id, true, &nothing),
+            Some(own(id))
+        );
+        // TheTVDB's alone: none, its ids being of another space.
+        let tvdb = ids(None, Some(81189), None);
+        assert_eq!(for_tmdb(MediaKind::Series, id, false, &tvdb), None);
+        assert_eq!(for_tmdb(MediaKind::Series, id, false, &nothing), None);
+    }
+
+    #[test]
+    fn the_ranges_of_the_numbers_this_server_makes_do_not_meet() {
+        // TheTVDB's and TMDB's ids, then TMDB's made up, Fan-Kai's, and the
+        // works entered by hand, each below the next and all within the
+        // clients' 32-bit column.
+        let ranges = [
+            (1, SYNTHETIC_OFFSET - 1),
+            (SYNTHETIC_OFFSET, FANKAI_OFFSET - 1),
+            (FANKAI_OFFSET, OWN_OFFSET - 1),
+            (OWN_OFFSET, i64::from(i32::MAX)),
+        ];
+        for pair in ranges.windows(2) {
+            assert!(pair[0].1 < pair[1].0, "{pair:?}");
+        }
+        let (start, end) = (SYNTHETIC_OFFSET, FANKAI_OFFSET - 1);
+        assert!(from_synthetic(start).is_some() && from_synthetic(end).is_some());
+        assert!(from_fankai(start).is_none() && !is_own(end));
+        assert!(from_fankai(FANKAI_OFFSET).is_some() && from_fankai(OWN_OFFSET - 1).is_some());
+        assert!(from_synthetic(FANKAI_OFFSET).is_none() && !is_own(OWN_OFFSET - 1));
+        assert!(is_own(OWN_OFFSET) && from_fankai(OWN_OFFSET).is_none());
     }
 
     #[test]

@@ -220,12 +220,16 @@ impl OwnText {
 /// What an answer is built for.
 pub struct Asked<'a> {
     /// The id the client asked by, echoed back: Sonarr has stored it, and a
-    /// different one in the answer would orphan the series.
+    /// different one in the answer would orphan the series. A TheTVDB id, or
+    /// one this server made, for the TheTVDB edition; for the TMDB edition,
+    /// TMDB's id, or the one a work no TMDB id names is known by
+    /// ([`from_item_by_tmdb`]).
     pub client_id: i64,
     /// Three letters: the language the work's text was laid over in.
     pub language: &'a str,
-    /// [`OFFICIAL`], or one of the orders the work has: what its episodes
-    /// are numbered by.
+    /// What the episodes are numbered by: [`OFFICIAL`] or [`TMDB_DEFAULT`],
+    /// as the edition asked names its default, or one of the orders the
+    /// work has.
     pub season_type: &'a str,
     /// The work as it was fetched (see [`OwnText`]).
     pub own: &'a OwnText,
@@ -237,8 +241,17 @@ pub struct Asked<'a> {
     pub with_episodes: bool,
 }
 
-/// Render a work as Sonarr v5 expects it.
-pub fn from_item(item: &MediaItem, asked: &Asked<'_>) -> ShowResourceV2 {
+/// What both editions say of a series besides how its episodes are
+/// numbered: the first edition's document, and the work's names in every
+/// language it is held in.
+struct Head {
+    base: sonarr::ShowResource,
+    original_title: String,
+    original_language: Option<String>,
+    translations: Vec<TranslationResource>,
+}
+
+fn head(item: &MediaItem, asked: &Asked<'_>) -> Head {
     let base = sonarr::from_item(item, asked.client_id, asked.language);
 
     // Sonarr finds the original title by comparing this to each
@@ -267,6 +280,23 @@ pub fn from_item(item: &MediaItem, asked: &Asked<'_>) -> ShowResourceV2 {
         .map(|t| t.title.clone())
         .or_else(|| item.original_title.clone().filter(|t| !t.trim().is_empty()))
         .unwrap_or_else(|| base.title.clone());
+
+    Head {
+        base,
+        original_title,
+        original_language,
+        translations,
+    }
+}
+
+/// Render a work as Sonarr v5 expects it.
+pub fn from_item(item: &MediaItem, asked: &Asked<'_>) -> ShowResourceV2 {
+    let Head {
+        base,
+        original_title,
+        original_language,
+        translations,
+    } = head(item, asked);
 
     // An order the work has in name only — its places all name episodes the
     // work no longer holds, as after a refresh without TheTVDB — is no order
@@ -317,6 +347,356 @@ pub fn from_item(item: &MediaItem, asked: &Asked<'_>) -> ShowResourceV2 {
         seasons,
         episodes: asked.with_episodes.then_some(episodes),
         metadata_source: metadata_source(asked.client_id, asked.orders).to_string(),
+    }
+}
+
+// ─── the TMDB edition ────────────────────────────────────────────────────────
+
+/// What Skyhook's TMDB edition calls TMDB's own numbering: the season type
+/// every series has there, and what a type the series has not is answered
+/// in.
+pub const TMDB_DEFAULT: &str = "default";
+
+/// The name the TMDB edition gives TMDB's own numbering among its season
+/// types.
+const TMDB_DEFAULT_NAME: &str = "Default";
+
+/// A series as Skyhook's TMDB edition serves it, `/v2/tmdb/…`: what the
+/// TheTVDB edition says of it, asked by TMDB's id and numbered as TMDB
+/// numbers it — its episodes known by their TMDB ids, TMDB's episode groups
+/// its other orders under their bare ids — and without what the real service
+/// leaves out of this edition: alternative titles, a time of day, an
+/// episode's TheTVDB ids, its absolute number, where a special airs and its
+/// rating.
+#[derive(Clone, Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(as = SkyhookTmdbShowResource)]
+pub struct ShowResourceTmdb {
+    pub title: String,
+    /// As the TheTVDB edition writes it: see [`ShowResourceV2`].
+    pub original_title: String,
+    /// The id the TheTVDB edition knows the series by: TheTVDB's, or the
+    /// one this server made for a series TheTVDB does not list (see
+    /// [`ids::for_client`]), so that a series Sonarr holds under it is
+    /// known as the same. Left out for none, as the real service leaves it
+    /// out of a series TheTVDB does not list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tvdb_id: Option<i64>,
+    /// The id asked by, echoed back: TMDB's, or for a work no TMDB id names
+    /// — a Fan-Kai, a series entered by hand — the one Sonarr knows it by.
+    pub tmdb_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tv_rage_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tv_maze_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imdb_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overview: Option<String>,
+    pub slug: String,
+    pub formats: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_language: Option<String>,
+    pub language: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_aired: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_aired: Option<String>,
+    pub mal_ids: Vec<i64>,
+    pub anidb_ids: Vec<i64>,
+    pub ani_list_ids: Vec<i64>,
+    pub last_updated: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_network: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+    pub genres: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_rating: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rating: Option<RatingResource>,
+    pub translations: Vec<TranslationResource>,
+    /// TMDB's own numbering first, `default`; then TMDB's episode groups,
+    /// each under its id on TMDB, and the orders made here.
+    pub season_types: Vec<SeasonTypeResource>,
+    pub actors: Vec<ActorResource>,
+    pub images: Vec<ImageResource>,
+    pub seasons: Vec<SeasonResourceV2>,
+    /// Left out of a search result, as the real service leaves it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub episodes: Option<Vec<EpisodeResourceTmdb>>,
+    /// `tmdb`; `fankai` for a Fan-Kai, `local` for a series entered by hand
+    /// that nothing elsewhere names.
+    pub metadata_source: String,
+}
+
+/// An episode as Skyhook's TMDB edition serves it: known by its TMDB id.
+#[derive(Clone, Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(as = SkyhookTmdbEpisodeResource)]
+pub struct EpisodeResourceTmdb {
+    /// The id the series was asked by.
+    pub tmdb_show_id: i64,
+    /// TMDB's id for the episode; for one TMDB gave none — an episode
+    /// TheTVDB alone lists, a record written here — a negative one made of
+    /// what names it, the same at every answer.
+    pub tmdb_id: i64,
+    pub season_number: i32,
+    pub episode_number: i32,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub air_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub air_date_utc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finale_type: Option<String>,
+}
+
+/// Render a work as Skyhook's TMDB edition serves it (see
+/// [`ShowResourceTmdb`]), numbered by the season type asked: `default`,
+/// TMDB's own numbering; a TMDB group by its bare id; an order made here by
+/// its key; any other order by its key, as the TheTVDB edition answers one
+/// it does not offer. A type the series has not is answered in TMDB's own
+/// numbering — where the real service answers no episode at all, which
+/// would have Sonarr drop every one it holds.
+///
+/// TMDB's own numbering is the order kept of it (`tmdb-aired`), read at
+/// every refresh that reads TMDB's seasons. While none is kept that places
+/// an episode, the work's numbering stands in, as the aired order answers:
+/// TMDB's for a series TMDB numbers in TheTVDB's place, the one written here
+/// for a series entered by hand — TheTVDB's only where nothing better is to
+/// be had, which the edition's handler sees to (`api::sonarr`).
+pub fn from_item_by_tmdb(item: &MediaItem, asked: &Asked<'_>) -> ShowResourceTmdb {
+    let Head {
+        base,
+        original_title,
+        original_language,
+        translations,
+    } = head(item, asked);
+
+    let (numbered, as_aired) = by_tmdb_numbering(item, asked.orders, asked.season_type);
+    let (seasons, episodes) = tmdb_placed(item, &numbered, asked.client_id, as_aired);
+
+    ShowResourceTmdb {
+        title: base.title,
+        original_title,
+        tvdb_id: ids::for_client(
+            crate::domain::MediaKind::Series,
+            &item.id,
+            item.is_manual,
+            &item.external_ids,
+        ),
+        tmdb_id: asked.client_id,
+        tv_rage_id: base.tv_rage_id,
+        tv_maze_id: base.tv_maze_id,
+        imdb_id: base.imdb_id,
+        overview: base.overview,
+        slug: base.slug,
+        formats: formats(item),
+        original_country: base.original_country,
+        original_language,
+        language: asked.language.to_string(),
+        first_aired: base.first_aired,
+        last_aired: base.last_aired,
+        mal_ids: base.mal_ids,
+        anidb_ids: Vec::new(),
+        ani_list_ids: base.ani_list_ids,
+        last_updated: base.last_updated,
+        status: base.status,
+        // With the episodes alone, as the real service writes it: a search's
+        // result has none.
+        runtime: base.runtime.filter(|_| asked.with_episodes),
+        original_network: base.original_network,
+        network: base.network,
+        genres: base.genres,
+        content_rating: base.content_rating,
+        rating: base.rating,
+        translations,
+        season_types: tmdb_season_types(item, asked.orders),
+        actors: base.actors,
+        images: base.images,
+        seasons,
+        episodes: asked.with_episodes.then_some(episodes),
+        metadata_source: tmdb_metadata_source(asked.client_id, asked.orders).to_string(),
+    }
+}
+
+/// The order a season type of the TMDB edition names, other than TMDB's own
+/// numbering, when the series has it and it places an episode: a TMDB group
+/// by its bare id, or by this server's key for it; any other order by its
+/// key. None for `default`, and for a type the series has not.
+pub fn tmdb_edition_order<'a>(
+    item: &'a MediaItem,
+    orders: &'a [EpisodeOrder],
+    season_type: &str,
+) -> Option<&'a EpisodeOrder> {
+    let asked = season_type.trim();
+    if asked.eq_ignore_ascii_case(TMDB_DEFAULT) {
+        return None;
+    }
+    let group = format!("{}{asked}", orders::TMDB_GROUP);
+    orders::in_use(item, orders, asked).or_else(|| orders::in_use(item, orders, &group))
+}
+
+/// The places a series is answered with by TMDB's id, for the season type
+/// asked, and whether they are the work's own numbering as it aired.
+fn by_tmdb_numbering<'a>(
+    item: &'a MediaItem,
+    orders: &'a [EpisodeOrder],
+    season_type: &str,
+) -> (Vec<Placed<'a>>, bool) {
+    match tmdb_edition_order(item, orders, season_type) {
+        Some(order) => (orders::served(item, order), false),
+        None => tmdbs_own(item, orders),
+    }
+}
+
+/// TMDB's own numbering of a series, as clients are given it: the order
+/// kept of it, or while none is kept that places an episode, the work's
+/// numbering — the order frozen as it, when one is — and whether that is the
+/// work's own numbering as it aired.
+fn tmdbs_own<'a>(item: &'a MediaItem, orders: &'a [EpisodeOrder]) -> (Vec<Placed<'a>>, bool) {
+    match orders::in_use(item, orders, orders::TMDB_AIRED) {
+        Some(order) => (orders::served(item, order), false),
+        None => match orders::as_official(item, orders) {
+            Some(frozen) => (frozen, false),
+            None => (orders::aired_placements(item), true),
+        },
+    }
+}
+
+/// The TMDB edition's season types: TMDB's own numbering, then each TMDB
+/// group that places or announces an episode, by its bare id as the real
+/// service names it — whatever TheTVDB keeps beside it, which this edition
+/// does not list — then the orders made here, each under its own name, told
+/// apart from another of the same name by its source.
+fn tmdb_season_types(item: &MediaItem, orders: &[EpisodeOrder]) -> Vec<SeasonTypeResource> {
+    let (own, as_aired) = tmdbs_own(item, orders);
+    let mut default = counted(TMDB_DEFAULT, TMDB_DEFAULT_NAME, &own);
+    if as_aired {
+        // As the aired order is offered: its seasons with no episode too.
+        default.season_numbers = sorted_distinct(
+            item.seasons
+                .iter()
+                .map(|s| s.season_number)
+                .chain(own.iter().map(|p| p.season_number)),
+        );
+    }
+
+    let listed: Vec<&EpisodeOrder> = orders
+        .iter()
+        .filter(|order| !order.is_default && order.key != orders::TMDB_AIRED)
+        .filter(|order| {
+            order.source == crate::providers::names::TMDB
+                || order.source == crate::db::repo::order::LOCAL
+        })
+        .filter(|order| orders::size(item, order) > 0)
+        .collect();
+    let names = orders::client_names(item, orders, &listed, TMDB_DEFAULT_NAME);
+
+    let mut types = vec![default];
+    for (order, name) in listed.into_iter().zip(names) {
+        let kind = match order.source.as_str() {
+            crate::providers::names::TMDB => order
+                .key
+                .strip_prefix(orders::TMDB_GROUP)
+                .unwrap_or(&order.key),
+            _ => order.key.as_str(),
+        };
+        types.push(if order.episodes.is_empty() {
+            // A TMDB group not read yet: what TMDB lists it with.
+            SeasonTypeResource {
+                name,
+                kind: kind.to_string(),
+                season_numbers: Vec::new(),
+                episode_count: order.announced.unwrap_or(0),
+            }
+        } else {
+            counted(kind, &name, &orders::served(item, order))
+        });
+    }
+    types
+}
+
+/// The seasons and episodes of the TMDB edition, as `placements` number
+/// them. A season lends the aired season of its number its pictures, and
+/// its name only where the numbering is the work's own as it aired
+/// (`as_aired`), as the TheTVDB edition lends them.
+fn tmdb_placed(
+    item: &MediaItem,
+    placements: &[Placed<'_>],
+    client_id: i64,
+    as_aired: bool,
+) -> (Vec<SeasonResourceV2>, Vec<EpisodeResourceTmdb>) {
+    let mut seasons = placed_seasons(item, placements);
+    if as_aired {
+        for season in &mut seasons {
+            season.title = item
+                .seasons
+                .iter()
+                .find(|s| s.season_number == season.season_number)
+                .and_then(|s| own_season_title(s.title.as_deref(), s.season_number));
+        }
+    }
+    let episodes = placements
+        .iter()
+        .map(|placed| {
+            let e = sonarr::episode_resource(&placed.episode, client_id);
+            EpisodeResourceTmdb {
+                tmdb_show_id: client_id,
+                tmdb_id: tmdb_episode_id(placed),
+                season_number: placed.season_number,
+                episode_number: placed.episode_number,
+                title: e.title,
+                air_date: e.air_date,
+                air_date_utc: e.air_date_utc,
+                runtime: e.runtime,
+                overview: e.overview,
+                image: e.image,
+                finale_type: e.finale_type,
+            }
+        })
+        .collect();
+    (seasons, episodes)
+}
+
+/// The id an episode is known by in the TMDB edition: TMDB's, as the order
+/// names it; else one made of its TheTVDB id, or of what names a record of
+/// an order's own — negative, never one of TMDB's, the same at every answer.
+fn tmdb_episode_id(placed: &Placed<'_>) -> i64 {
+    match (placed.tmdb_id, placed.episode.tvdb_id) {
+        (Some(tmdb), _) => tmdb,
+        (None, Some(tvdb)) => ids::own_episode(&format!("tvdb:{tvdb}")),
+        (None, None) => orders::own_episode_id(&placed.episode),
+    }
+}
+
+/// Who numbers the episodes in the TMDB edition: TMDB, but for a Fan-Kai,
+/// numbered by Fankai, and a series entered by hand that nothing elsewhere
+/// names, numbered here.
+fn tmdb_metadata_source(client_id: i64, orders: &[EpisodeOrder]) -> &'static str {
+    match orders::aired(orders).map(|order| order.source.as_str()) {
+        Some("fankai") => return "fankai",
+        Some(crate::db::repo::order::LOCAL) => return crate::db::repo::order::LOCAL,
+        _ => {}
+    }
+    if ids::from_fankai(client_id).is_some() {
+        "fankai"
+    } else if ids::is_own(client_id) {
+        crate::db::repo::order::LOCAL
+    } else {
+        "tmdb"
     }
 }
 
@@ -392,7 +772,10 @@ fn translations(
 /// The orders Sonarr may ask the series in: the aired one — numbered by the
 /// order frozen as it, when one is — then each other order the catalogue
 /// offers for it (`orders::offered`), under its own name, told apart from
-/// another of the same name by its source (`orders::client_names`).
+/// another of the same name by its source (`orders::client_names`). Not
+/// TMDB's own numbering, which TheTVDB's documents do not have: it is what
+/// Skyhook's TMDB edition answers by ([`from_item_by_tmdb`]). Asked for by
+/// its key, it is answered all the same.
 fn season_types(item: &MediaItem, orders: &[EpisodeOrder]) -> Vec<SeasonTypeResource> {
     let official = match orders::as_official(item, orders) {
         Some(frozen) => counted(OFFICIAL, orders::AIRED_LABEL, &frozen),
@@ -410,7 +793,10 @@ fn season_types(item: &MediaItem, orders: &[EpisodeOrder]) -> Vec<SeasonTypeReso
     };
 
     let mut types = vec![official];
-    let offered = orders::offered(item, orders);
+    let offered: Vec<&EpisodeOrder> = orders::offered(item, orders)
+        .into_iter()
+        .filter(|order| order.key != orders::TMDB_AIRED)
+        .collect();
     let names = orders::client_names(item, orders, &offered, orders::AIRED_LABEL);
     for (order, name) in offered.into_iter().zip(names) {
         types.push(if order.episodes.is_empty() {
@@ -495,31 +881,9 @@ fn placed(
     placements: &[Placed<'_>],
     client_id: i64,
 ) -> (Vec<SeasonResourceV2>, Vec<EpisodeResourceV2>) {
-    let first_years = first_years(
-        placements
-            .iter()
-            .map(|placed| (placed.season_number, placed.episode.air_date.as_deref())),
-    );
-    let mut aired: HashMap<i32, &Season> = HashMap::new();
-    for season in &item.seasons {
-        aired.entry(season.season_number).or_insert(season);
-    }
-
-    let mut seasons: BTreeMap<i32, SeasonResourceV2> = BTreeMap::new();
+    let seasons = placed_seasons(item, placements);
     let mut episodes = Vec::with_capacity(placements.len());
     for placed in placements {
-        seasons
-            .entry(placed.season_number)
-            .or_insert_with(|| SeasonResourceV2 {
-                season_number: placed.season_number,
-                title: None,
-                year: first_years.get(&placed.season_number).copied(),
-                images: aired
-                    .get(&placed.season_number)
-                    .map(|season| season_images(season))
-                    .unwrap_or_default(),
-            });
-
         let mut resource = episode_resource(&placed.episode, client_id);
         resource.season_number = placed.season_number;
         resource.episode_number = placed.episode_number;
@@ -539,7 +903,38 @@ fn placed(
         episodes.push(resource);
     }
 
-    (seasons.into_values().collect(), episodes)
+    (seasons, episodes)
+}
+
+/// The seasons an order's places fall in, each once: no name of their own,
+/// the year of the first episode placed in each, the aired season of the
+/// same number's pictures.
+fn placed_seasons(item: &MediaItem, placements: &[Placed<'_>]) -> Vec<SeasonResourceV2> {
+    let first_years = first_years(
+        placements
+            .iter()
+            .map(|placed| (placed.season_number, placed.episode.air_date.as_deref())),
+    );
+    let mut aired: HashMap<i32, &Season> = HashMap::new();
+    for season in &item.seasons {
+        aired.entry(season.season_number).or_insert(season);
+    }
+
+    let mut seasons: BTreeMap<i32, SeasonResourceV2> = BTreeMap::new();
+    for placed in placements {
+        seasons
+            .entry(placed.season_number)
+            .or_insert_with(|| SeasonResourceV2 {
+                season_number: placed.season_number,
+                title: None,
+                year: first_years.get(&placed.season_number).copied(),
+                images: aired
+                    .get(&placed.season_number)
+                    .map(|season| season_images(season))
+                    .unwrap_or_default(),
+            });
+    }
+    seasons.into_values().collect()
 }
 
 fn episode_resource(episode: &Episode, client_id: i64) -> EpisodeResourceV2 {
@@ -1399,5 +1794,472 @@ mod tests {
                 client_id
             );
         }
+    }
+
+    // ─── the TMDB edition ────────────────────────────────────────────────────
+
+    /// A TMDB place: TMDB's id and record, and the episode the series holds
+    /// for it by TheTVDB's id, where it holds one — as `orders` links it.
+    fn tmdb_place(tmdb_id: i64, tvdb_id: Option<i64>, season: i32, number: i32) -> PlacedEpisode {
+        PlacedEpisode {
+            tmdb_id: Some(tmdb_id),
+            tvdb_id,
+            record: Some(OrderRecord {
+                title: format!("TMDB's {tmdb_id}"),
+                overview: Some("As TMDB tells it.".into()),
+                aired: Some("2024-10-04".into()),
+                runtime: Some(24),
+                image: Some(format!("https://image.tmdb.org/t/p/original/{tmdb_id}.jpg")),
+                finale_type: None,
+            }),
+            ..PlacedEpisode::of_tvdb(0, season, number)
+        }
+    }
+
+    /// TMDB's own numbering of *Rurouni Kenshin*, as a refresh keeps it:
+    /// the Kyoto arc's first episode at the end of a first season, and one
+    /// episode the series does not hold.
+    fn tmdb_aired(places: Vec<PlacedEpisode>) -> EpisodeOrder {
+        EpisodeOrder {
+            kind: OrderKind::Aired,
+            source: "tmdb".into(),
+            ..order(
+                orders::TMDB_AIRED,
+                crate::domain::orders::TMDB_AIRED_LABEL,
+                places,
+            )
+        }
+    }
+
+    fn kenshins_tmdb_orders() -> Vec<EpisodeOrder> {
+        let mut all = orders();
+        all.push(tmdb_aired(vec![
+            tmdb_place(904, Some(4), 0, 1),
+            tmdb_place(901, Some(1), 1, 1),
+            tmdb_place(902, Some(2), 1, 2),
+            tmdb_place(903, Some(3), 1, 3),
+            tmdb_place(905, None, 1, 4),
+        ]));
+        all.push(EpisodeOrder {
+            kind: OrderKind::Dvd,
+            source: "tmdb".into(),
+            source_ref: Some("69f50757054263b7bc87e32a".into()),
+            ..order(
+                "tmdb-69f50757054263b7bc87e32a",
+                "DVD / PVOD",
+                vec![
+                    tmdb_place(901, Some(1), 1, 1),
+                    tmdb_place(902, Some(2), 2, 1),
+                ],
+            )
+        });
+        all.push(EpisodeOrder {
+            kind: OrderKind::Custom,
+            source: "local".into(),
+            ..order("ams-mine", "Mine", vec![placed(2, 1, 1, None)])
+        });
+        all
+    }
+
+    fn asked_by_tmdb<'a>(
+        own: &'a OwnText,
+        orders: &'a [EpisodeOrder],
+        season_type: &'a str,
+    ) -> Asked<'a> {
+        Asked {
+            client_id: 209867,
+            ..asked(own, orders, season_type)
+        }
+    }
+
+    fn tmdb_numbers(show: &ShowResourceTmdb) -> Vec<(i32, i32, i64)> {
+        show.episodes
+            .as_deref()
+            .unwrap()
+            .iter()
+            .map(|e| (e.season_number, e.episode_number, e.tmdb_id))
+            .collect()
+    }
+
+    #[test]
+    fn tmdbs_own_numbering_is_no_season_type_of_thetvdbs_and_answered_by_its_key() {
+        let it = series();
+        let own = own(&it);
+        let orders = kenshins_tmdb_orders();
+
+        let show = from_item(&it, &asked(&own, &orders, OFFICIAL));
+        let kinds: Vec<&str> = show.season_types.iter().map(|t| t.kind.as_str()).collect();
+        // TheTVDB's documents have no such order; the orders made here, as
+        // before — and TMDB's DVD group not, which holds fewer episodes than
+        // TheTVDB's DVD order.
+        assert_eq!(kinds, ["official", "dvd", "absolute", "ams-mine"]);
+
+        // Asked for by its key, it numbers the series all the same.
+        let show = from_item(&it, &asked(&own, &orders, orders::TMDB_AIRED));
+        let numbered: Vec<(i32, i32, Option<i64>)> = show
+            .episodes
+            .as_deref()
+            .unwrap()
+            .iter()
+            .map(|e| (e.season_number, e.episode_number, e.tvdb_id))
+            .collect();
+        assert_eq!(numbered[3], (1, 3, Some(3)));
+    }
+
+    #[test]
+    fn the_tmdb_edition_numbers_a_series_as_tmdb_does_each_episode_by_its_tmdb_id() {
+        let it = series();
+        let own = own(&it);
+        let orders = kenshins_tmdb_orders();
+
+        let show = from_item_by_tmdb(&it, &asked_by_tmdb(&own, &orders, TMDB_DEFAULT));
+        assert_eq!(
+            tmdb_numbers(&show),
+            [
+                (0, 1, 904),
+                (1, 1, 901),
+                (1, 2, 902),
+                (1, 3, 903),
+                (1, 4, 905)
+            ]
+        );
+        let episodes = show.episodes.as_deref().unwrap();
+        // The episodes the series holds, as it holds them; TMDB's record of
+        // the one it does not.
+        assert_eq!(episodes[3].title, "Episode 3");
+        assert_eq!(episodes[4].title, "TMDB's 905");
+        assert!(episodes.iter().all(|e| e.tmdb_show_id == 209867));
+        assert_eq!(show.tmdb_id, 209867);
+        assert_eq!(show.tvdb_id, Some(416802));
+        assert_eq!(show.metadata_source, "tmdb");
+
+        // TMDB's own numbering, then TMDB's group by its bare id, then the
+        // order made here; none of TheTVDB's.
+        let types: Vec<(&str, &str, &[i32], i32)> = show
+            .season_types
+            .iter()
+            .map(|t| {
+                (
+                    t.kind.as_str(),
+                    t.name.as_str(),
+                    t.season_numbers.as_slice(),
+                    t.episode_count,
+                )
+            })
+            .collect();
+        assert_eq!(
+            types,
+            [
+                ("default", "Default", &[0, 1][..], 4),
+                ("69f50757054263b7bc87e32a", "DVD / PVOD", &[1, 2][..], 2),
+                ("ams-mine", "Mine", &[1][..], 1),
+            ]
+        );
+
+        // A group asked for by its bare id, as the real service names it.
+        let show = from_item_by_tmdb(
+            &it,
+            &asked_by_tmdb(&own, &orders, "69f50757054263b7bc87e32a"),
+        );
+        assert_eq!(tmdb_numbers(&show), [(1, 1, 901), (2, 1, 902)]);
+
+        // A type the series has not, `official` among them: TMDB's own
+        // numbering, where the real service answers no episode at all.
+        for season_type in [OFFICIAL, "nonsense", "Default"] {
+            let show = from_item_by_tmdb(&it, &asked_by_tmdb(&own, &orders, season_type));
+            assert_eq!(tmdb_numbers(&show).len(), 5, "{season_type:?}");
+        }
+
+        // What the TMDB edition leaves out.
+        let show = from_item_by_tmdb(&it, &asked_by_tmdb(&own, &orders, TMDB_DEFAULT));
+        let sent = serde_json::to_value(&show).unwrap();
+        for key in ["alternativeTitles", "timeOfDay"] {
+            assert!(sent.get(key).is_none(), "{key}");
+        }
+        for key in [
+            "tvdbId",
+            "tvdbShowId",
+            "metadataId",
+            "absoluteEpisodeNumber",
+        ] {
+            assert!(sent["episodes"][0].get(key).is_none(), "{key}");
+        }
+        assert_eq!(sent["episodes"][0]["tmdbId"], 904);
+    }
+
+    #[test]
+    fn without_tmdbs_own_numbering_the_tmdb_edition_answers_as_the_series_is_numbered() {
+        let mut it = series();
+        it.episodes[1].tmdb_id = Some(901);
+        let own = own(&it);
+        let orders = vec![aired_order("tvdb")];
+
+        let show = from_item_by_tmdb(&it, &asked_by_tmdb(&own, &orders, TMDB_DEFAULT));
+        let numbered = tmdb_numbers(&show);
+        assert_eq!(
+            numbered
+                .iter()
+                .map(|(s, n, _)| (*s, *n))
+                .collect::<Vec<_>>(),
+            [(0, 1), (1, 1), (1, 2), (2, 1)]
+        );
+        // TMDB's id where the series holds one; else one made of TheTVDB's,
+        // negative, the same at every answer.
+        assert_eq!(numbered[1].2, 901);
+        assert!(numbered[0].2 < 0);
+        let again = from_item_by_tmdb(&it, &asked_by_tmdb(&own, &orders, TMDB_DEFAULT));
+        assert_eq!(tmdb_numbers(&again), numbered);
+        // The work's own seasons, named as they aired.
+        assert_eq!(show.seasons[1].title.as_deref(), Some("東京編"));
+        assert_eq!(show.season_types[0].season_numbers, [0, 1, 2]);
+    }
+
+    #[test]
+    fn a_work_no_tmdb_id_names_says_who_numbers_it() {
+        let mut it = series();
+        it.external_ids = ExternalIds::default();
+        it.external_ids.fankai = Some(12);
+        let own = own(&it);
+        let fankai = vec![aired_order("fankai")];
+        let mut by = asked_by_tmdb(&own, &fankai, TMDB_DEFAULT);
+        by.client_id = 200_000_012;
+        let show = from_item_by_tmdb(&it, &by);
+        assert_eq!(show.metadata_source, "fankai");
+        assert_eq!(show.tmdb_id, 200_000_012);
+        assert_eq!(show.tvdb_id, Some(200_000_012));
+
+        it.external_ids = ExternalIds::default();
+        it.is_manual = true;
+        let own_id = ids::own(&it.id);
+        by.orders = &[];
+        by.client_id = own_id;
+        let show = from_item_by_tmdb(&it, &by);
+        assert_eq!(show.metadata_source, "local");
+        assert_eq!(show.tvdb_id, Some(own_id));
+    }
+
+    /// Skyhook's TMDB edition for *Breaking Bad*, `/v2/tmdb/shows/eng/1396/
+    /// default`, as the real service answered it on 2026-11-01: reduced to
+    /// three entries a list, its free texts cut to a few words.
+    const REAL_TMDB_DEFAULT: &str = r#"{
+  "title": "Breaking Bad",
+  "originalTitle": "Breaking Bad",
+  "tvdbId": 81189,
+  "tmdbId": 1396,
+  "tvRageId": 18164,
+  "tvMazeId": 169,
+  "imdbId": "tt0903747",
+  "overview": "Walter White, a New…",
+  "slug": "breaking-bad",
+  "formats": ["scripted"],
+  "originalCountry": "usa",
+  "originalLanguage": "eng",
+  "language": "eng",
+  "firstAired": "2008-01-20",
+  "lastAired": "2013-09-29",
+  "malIds": [],
+  "anidbIds": [],
+  "aniListIds": [],
+  "lastUpdated": "2026-11-01T11:26:20.3737133Z",
+  "status": "Ended",
+  "runtime": 48,
+  "originalNetwork": "AMC",
+  "network": "AMC",
+  "genres": ["Crime", "Drama"],
+  "contentRating": "16",
+  "rating": {"count": 19012, "value": "9.0"},
+  "translations": [
+    {"language": "eng", "overview": "Walter White, a New…"},
+    {"language": "deu", "overview": "Ein krebskranker Chemielehrer tut…"},
+    {"language": "fra", "title": "Breaking Bad : Le…", "overview": "En phase terminale d'un…"}
+  ],
+  "seasonTypes": [
+    {"name": "Default", "type": "default", "seasonNumbers": [0, 1, 2], "episodeCount": 62},
+    {"name": "DVD / PVOD", "type": "69f50757054263b7bc87e32a", "seasonNumbers": [1, 2, 3], "episodeCount": 62}
+  ],
+  "actors": [
+    {"name": "Bryan Cranston", "character": "Walter White", "image": "https://image.tmdb.org/t/p/original/7Jahy5LZX2Fo8fGJltMreAI49hC.jpg"},
+    {"name": "Aaron Paul", "character": "Jesse Pinkman", "image": "https://image.tmdb.org/t/p/original/8Ac9uuoYwZoYVAIJfRLzzLsGGJn.jpg"},
+    {"name": "Anna Gunn", "character": "Skyler White", "image": "https://image.tmdb.org/t/p/original/adppyeu1a4REN3khtgmXusrapFi.jpg"}
+  ],
+  "images": [
+    {"coverType": "Poster", "url": "https://image.tmdb.org/t/p/original/ztkUQFLlC19CCMYHW9o1zWhJRNq.jpg"},
+    {"coverType": "Fanart", "url": "https://image.tmdb.org/t/p/original/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg"},
+    {"coverType": "Clearlogo", "url": "https://image.tmdb.org/t/p/original/chw44B2VnLha8iiTdyZcIW0ZELC.png"}
+  ],
+  "seasons": [
+    {"seasonNumber": 0, "year": 2009, "title": "Specials", "images": [{"coverType": "Poster", "url": "https://image.tmdb.org/t/p/original/40dT79mDEZwXkQiZNBgSaydQFDP.jpg"}]},
+    {"seasonNumber": 1, "year": 2008, "images": [{"coverType": "Poster", "url": "https://image.tmdb.org/t/p/original/1BP4xYv9ZG4ZVHkL7ocOziBbSYH.jpg"}]},
+    {"seasonNumber": 2, "year": 2009, "images": [{"coverType": "Poster", "url": "https://image.tmdb.org/t/p/original/e3oGYpoTUhOFK0BJfloru5ZmGV.jpg"}]}
+  ],
+  "episodes": [
+    {"tmdbShowId": 1396, "tmdbId": 62131, "seasonNumber": 0, "episodeNumber": 1, "title": "Good Cop / Bad…", "airDate": "2009-02-17", "airDateUtc": "2009-02-18T02:00:00Z", "runtime": 3, "overview": "Season 1 Minisode 1:…", "image": "https://image.tmdb.org/t/p/original/t729tFVXPetnJlJ2VsUZQz0rX6v.jpg"},
+    {"tmdbShowId": 1396, "tmdbId": 62133, "seasonNumber": 0, "episodeNumber": 2, "title": "Wedding Day", "airDate": "2009-02-17", "airDateUtc": "2009-02-18T02:00:00Z", "runtime": 5, "overview": "Season 1 Minisode 2:…", "image": "https://image.tmdb.org/t/p/original/wT62P6ZnjKgZXk0M5hHl4e5zSjB.jpg"},
+    {"tmdbShowId": 1396, "tmdbId": 62132, "seasonNumber": 0, "episodeNumber": 3, "title": "TwaüghtHammër", "airDate": "2009-02-17", "airDateUtc": "2009-02-18T02:00:00Z", "runtime": 5, "overview": "Season 1 Minisode 3:…", "image": "https://image.tmdb.org/t/p/original/gUHAqFw3Ptzya96JFFE9xVfMjze.jpg"}
+  ],
+  "metadataSource": "tmdb"
+}"#;
+
+    /// What this edition writes besides, or leaves out, against the real
+    /// service's first entry of a list:
+    /// - a translation's title: a language is listed here only under the
+    ///   name the series goes by in it, which Sonarr names it by; the real
+    ///   service lists one with an overview alone, as its first;
+    /// - a season's title: the real service names the specials, its first
+    ///   season, and no other here; an order's seasons are named none here;
+    /// - an episode's finale type: written for a finale, which the real
+    ///   service's first episode, a special, is not.
+    const TMDB_EDITION_ALLOWED: &[&str] = &[
+        "translations[].title",
+        "seasons[].title",
+        "episodes[].finaleType",
+    ];
+
+    /// *Breaking Bad* as the catalogue holds it, TheTVDB numbering it, with
+    /// TMDB's own numbering and its DVD group kept beside.
+    fn breaking_bad() -> (MediaItem, Vec<EpisodeOrder>) {
+        let picture = |kind: &str, url: &str, season: Option<i32>| -> Image {
+            serde_json::from_value(serde_json::json!({
+                "id": url, "seasonNumber": season, "coverType": kind, "url": url,
+                "sortOrder": 0, "isManual": false
+            }))
+            .expect("an image")
+        };
+        let mut it = MediaItem::empty(MediaKind::Series);
+        it.title = "Breaking Bad".into();
+        it.original_title = Some("Breaking Bad".into());
+        it.original_language = Some("en".into());
+        it.original_country = Some("usa".into());
+        it.overview = Some("A chemistry teacher.".into());
+        it.slug = "breaking-bad".into();
+        it.first_aired = Some("2008-01-20".into());
+        it.last_aired = Some("2013-09-29".into());
+        it.status = Some("ended".into());
+        it.runtime = Some(48);
+        it.network = Some("AMC".into());
+        it.genres = vec!["Crime".into(), "Drama".into()];
+        it.content_rating = Some("TV-MA".into());
+        it.ratings = vec![crate::domain::Rating {
+            source: "tmdb".into(),
+            value: Some(8.9),
+            votes: Some(19012),
+            rating_type: Some("user".into()),
+        }];
+        it.external_ids = ExternalIds {
+            tvdb: Some(81189),
+            tmdb: Some(1396),
+            imdb: Some("tt0903747".into()),
+            tvrage: Some(18164),
+            tvmaze: Some(169),
+            ..Default::default()
+        };
+        it.translations = vec![translation(
+            "fra",
+            "Breaking Bad : Le chimiste",
+            Some("En phase terminale."),
+        )];
+        it.credits = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "c1", "creditType": "actor", "personName": "Bryan Cranston",
+                "characterName": "Walter White", "image": "https://x/bc.jpg",
+                "sortOrder": 0, "isManual": false
+            }))
+            .expect("a credit"),
+        ];
+        it.images = vec![
+            picture("poster", "https://x/poster.jpg", None),
+            picture("fanart", "https://x/fanart.jpg", None),
+        ];
+        it.seasons = (0..=2)
+            .map(|number| {
+                let mut s = season(number, None, None);
+                s.images = vec![picture(
+                    "poster",
+                    &format!("https://x/s{number}.jpg"),
+                    Some(number),
+                )];
+                s
+            })
+            .collect();
+        it.episodes = [
+            (0, 1, 1_000_001, 62131, "2009-02-17"),
+            (1, 1, 349232, 62085, "2008-01-20"),
+            (1, 2, 349235, 62086, "2008-01-27"),
+            (2, 1, 438906, 62094, "2009-03-08"),
+        ]
+        .into_iter()
+        .map(|(season, number, tvdb_id, tmdb_id, aired)| {
+            let mut e = episode(season, number, tvdb_id, aired);
+            e.tmdb_id = Some(tmdb_id);
+            e.runtime = Some(47);
+            e.overview = Some("What happens.".into());
+            e.image = Some(format!("https://x/{tvdb_id}.jpg"));
+            e
+        })
+        .collect();
+        it.episodes[2].finale_type = Some("season".into());
+
+        let orders = vec![
+            aired_order("tvdb"),
+            tmdb_aired(vec![
+                tmdb_place(62131, Some(1_000_001), 0, 1),
+                tmdb_place(62085, Some(349232), 1, 1),
+                tmdb_place(62086, Some(349235), 1, 2),
+                tmdb_place(62094, Some(438906), 2, 1),
+            ]),
+            EpisodeOrder {
+                kind: OrderKind::Dvd,
+                source: "tmdb".into(),
+                source_ref: Some("69f50757054263b7bc87e32a".into()),
+                ..order(
+                    "tmdb-69f50757054263b7bc87e32a",
+                    "DVD / PVOD",
+                    vec![tmdb_place(62085, Some(349232), 1, 1)],
+                )
+            },
+        ];
+        (it, orders)
+    }
+
+    #[test]
+    fn the_tmdb_edition_is_shaped_as_the_real_services() {
+        let real: serde_json::Value = serde_json::from_str(REAL_TMDB_DEFAULT).expect("JSON");
+        let (it, orders) = breaking_bad();
+        let own = OwnText::of(&it, "eng");
+        let asked = Asked {
+            client_id: 1396,
+            language: "eng",
+            season_type: TMDB_DEFAULT,
+            own: &own,
+            orders: &orders,
+            with_episodes: true,
+        };
+        let ours = serde_json::to_value(from_item_by_tmdb(&it, &asked)).unwrap();
+        crate::wire::contract::assert_same_shape(&real, &ours, TMDB_EDITION_ALLOWED);
+        assert_eq!(ours["tvdbId"], 81189);
+        assert_eq!(ours["tmdbId"], 1396);
+        assert_eq!(ours["seasonTypes"][1]["type"], "69f50757054263b7bc87e32a");
+
+        // A search's result, as the real service answers `tmdb:1396` — the
+        // same document, it checked the same day, without the episodes and
+        // the runtime they are counted from.
+        let mut found = real;
+        let fields = found.as_object_mut().expect("an object");
+        fields.remove("episodes");
+        fields.remove("runtime");
+        let searched = Asked {
+            with_episodes: false,
+            ..asked
+        };
+        let ours = serde_json::to_value(vec![from_item_by_tmdb(&it, &searched)]).unwrap();
+        let in_a_list: Vec<String> = TMDB_EDITION_ALLOWED
+            .iter()
+            .map(|path| format!("[].{path}"))
+            .collect();
+        crate::wire::contract::assert_same_shape(
+            &serde_json::json!([found]),
+            &ours,
+            &in_a_list.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
     }
 }

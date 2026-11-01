@@ -3,8 +3,8 @@
 The interface has two sides: a catalogue anyone allowed to may browse, and an
 administration for the people who maintain it. This page covers how they are laid out
 and how to move about them: the bar along the foot of a phone, the catalogue as a
-list, the pages of a genre, a network and a year, two works side by side, the
-administration's tables, its palette and its keys, the Settings page, and the Jobs page.
+list, the pages of a genre, a network and a year, of a company and a keyword, two works side by
+side, the administration's tables, its palette and its keys, the Settings page, and the Jobs page.
 What the administration's catalogue and
 dashboard do is in [Editing](editing.md).
 
@@ -64,6 +64,32 @@ is the slug of its name, `canal` for *Canal+*; a decade's answers to any of its 
 becomes its first. A link to one of these pages carries a preview of it — its name, its note or how
 many works it holds, and the poster of the one rated highest — whenever a reader with no credential
 may see the catalogue, as a work's and a selection's do.
+
+## A company, a keyword
+
+A work's page lists, beside its record, the networks and the companies credited on it, a role at a
+time — the network, production, the studio, distribution — each with its logo and where it is from,
+and each the way to its own page: `/company/{id}`, by this server's id for it, a network's and a
+company's alike. The network and the studio the record names lead there too, where a company of
+that name is credited in that role; the list of production companies under the record gives way to
+the logos. A logo stands on a plaque of paper whatever the theme, as TMDB draws its logos for a
+white page. TMDB's keywords, among the work's keywords, lead to theirs, `/keyword/{id}`; AniList's
+tags still narrow the catalogue by their word.
+
+Such a page opens as a genre's does — what it is, its name, its logo, how many works it holds that
+you may see — then what it did for them and for how many (*Production · 3*), where it is from, the
+way to it on TMDB, the five works rated highest and every one of them in the catalogue's own list.
+It carries no programmer's note. The list is `/browse?company={id}`, or `?keywordId={id}`, which a
+link may give on its own: a chip names the company or the keyword, and takes it off. The network's
+page by the slug of its name, `/network/hbo`, is still there, and goes by the works' texts.
+
+The same page lists the rest of the crew under the cast — everybody TMDB credits behind the camera,
+a department at a time, the most telling jobs first, the first three departments open and the rest
+folded — and, after the pictures, every video the sources list, the trailer chosen for the work
+first. Nothing is fetched from YouTube or Vimeo for the list, not even a still: a YouTube video
+plays in the trailer's own player once asked for, the others open on their own site. A season's
+title and synopsis, and a person's biography, are in the reader's language where TMDB gave them in
+it.
 
 ## Two works side by side
 
@@ -153,10 +179,13 @@ settings — every one is described in the [settings reference](settings.md) —
 that have a page of their own: signing in and the APIs are on **Opening & APIs**, the order of
 the sources on **Sources**, the media store on **Media**, the cache's spaces on **Cache**,
 Sonarr's and Radarr's connections on **Sonarr & Radarr**, and the destinations of notifications
-on **Notifications**. The relays' own settings — whose key they ask with, whether they answer
-with the last answer kept when their service fails (`relays.staleIfError`), where TMDB's clients
-fetch the pictures (`tmdb.images`) — are set on **Opening & APIs**, each with what it changes
-said under it, and listed here as well.
+on **Notifications**. The relays' own settings — whose key they ask with, what they answer
+themselves from the catalogue (`tmdb.relayMode`, `tvdb.relayMode`: *Ask the service*, or *The
+catalogue first*, which answers the works held here in the service's shape without asking it),
+whether they answer with the last answer kept when their service fails (`relays.staleIfError`),
+where TMDB's clients fetch the pictures (`tmdb.images`) — are set on **Opening & APIs**, each with
+what it changes said under it, and listed here as well. How much of TMDB's crew and of its pictures
+a work keeps, `tmdb.crewLimit` and `tmdb.imageLimit`, stand beside the cast's, `tmdb.castLimit`.
 
 - **Search.** A setting is found by its title, its key, a word of what explains it or the name
   of its group; every word typed has to be found. Accents and the ligatures œ and æ are folded:
@@ -188,6 +217,7 @@ be cancelled, and stops after the work in hand.
 |---|---|---|
 | Refresh what is due | `refresh.sweep` | Works whose details have aged, asked of their sources again, a batch at a time |
 | Refresh everything | `refresh.all` | Every work that has an identifier elsewhere, one after the other; can be stopped |
+| Fill in from the answers kept | `refresh.replay` | What this version keeps of TMDB's and TheTVDB's answers and earlier ones let go — the networks and companies with their ids and logos, TMDB's keywords and videos, each picture's language, size and votes, each crew credit's department and job — filled into every work from the answers kept with it, without asking either; by hand, once after an upgrade. TMDB's answers over six months old are passed over; the rest of the crew and the seasons' texts in other languages wait for each work's next refresh. Never beside a refresh in bulk |
 | Anime identifier list | `import.anime` | The list that ties AniList and MyAnimeList to TheTVDB and TMDB, downloaded whole |
 | IMDb ratings | `import.imdb` | IMDb's ratings file, downloaded whole and kept for the works held here |
 | IMDb titles by region | `imdb.akas` | IMDb's titles file read through weekly once switched on, the titles of the works held kept; can be stopped. See [IMDb's titles and episodes](sources.md#imdbs-titles-by-region-and-its-episodes) |

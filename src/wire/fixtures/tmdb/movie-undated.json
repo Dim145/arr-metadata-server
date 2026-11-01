@@ -1,0 +1,110 @@
+{
+ "adult": false,
+ "backdrop_path": null,
+ "belongs_to_collection": null,
+ "budget": 0,
+ "genres": [],
+ "homepage": "",
+ "id": 1752360,
+ "imdb_id": null,
+ "origin_country": [
+  "US"
+ ],
+ "original_language": "en",
+ "original_title": "Untitled Project",
+ "overview": "Feature film set in Berlin.",
+ "popularity": 1.1162,
+ "poster_path": null,
+ "production_companies": [
+  {
+   "id": 274287,
+   "logo_path": "/i26EH7ArX9CEU9ZAn0yPwvJ3ol7.png",
+   "name": "FAROL",
+   "origin_country": "FR"
+  }
+ ],
+ "production_countries": [],
+ "release_date": "",
+ "revenue": 0,
+ "runtime": 0,
+ "softcore": false,
+ "spoken_languages": [],
+ "status": "Released",
+ "tagline": "",
+ "title": "Untitled Project",
+ "video": false,
+ "vote_average": 0.0,
+ "vote_count": 0,
+ "external_ids": {
+  "imdb_id": null,
+  "wikidata_id": null,
+  "facebook_id": null,
+  "instagram_id": null,
+  "twitter_id": null
+ },
+ "credits": {
+  "cast": [],
+  "crew": [
+   {
+    "adult": false,
+    "gender": 0,
+    "id": 5690946,
+    "known_for_department": "Production",
+    "name": "Christian Évora",
+    "original_name": "Christian Évora",
+    "popularity": 0.3775,
+    "profile_path": null,
+    "credit_id": "6a8575cb175da9f624da4703",
+    "department": "Production",
+    "job": "Producer"
+   },
+   {
+    "adult": false,
+    "gender": 2,
+    "id": 2997323,
+    "known_for_department": "Production",
+    "name": "Marco Tulio Pires",
+    "original_name": "Marco Tulio Pires",
+    "popularity": 0.3746,
+    "profile_path": "/jz6cjBqKgUZO2VAZU5L5n6B1Yb8.jpg",
+    "credit_id": "6a8575ed29e3b6b211b58073",
+    "department": "Production",
+    "job": "Producer"
+   },
+   {
+    "adult": true,
+    "gender": 2,
+    "id": 1436364,
+    "known_for_department": "Directing",
+    "name": "Matt Lambert",
+    "original_name": "Matt Lambert",
+    "popularity": 0.0,
+    "profile_path": "/yeaGMxuCTCK1DQO9QyjPzyKoQoa.jpg",
+    "credit_id": "6a883a438e6a4a33c0430cb3",
+    "department": "Directing",
+    "job": "Director"
+   }
+  ]
+ },
+ "release_dates": {
+  "results": []
+ },
+ "images": {
+  "backdrops": [],
+  "logos": [],
+  "posters": []
+ },
+ "videos": {
+  "results": []
+ },
+ "keywords": {
+  "keywords": []
+ },
+ "releases": {
+  "countries": []
+ },
+ "trailers": {
+  "quicktime": [],
+  "youtube": []
+ }
+}

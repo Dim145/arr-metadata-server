@@ -1,0 +1,74 @@
+{
+ "page": 1,
+ "results": [
+  {
+   "adult": false,
+   "backdrop_path": "/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg",
+   "genre_ids": [
+    18,
+    80
+   ],
+   "id": 1396,
+   "origin_country": [
+    "US"
+   ],
+   "original_language": "en",
+   "original_name": "Breaking Bad",
+   "overview": "Walter White, a New Mexico chemistry…",
+   "popularity": 172.2222,
+   "poster_path": "/anFx9aTOOYqgS3v7x3R84Kz67ly.jpg",
+   "first_air_date": "2008-01-20",
+   "softcore": false,
+   "name": "Breaking Bad",
+   "vote_average": 8.959,
+   "vote_count": 19013
+  },
+  {
+   "adult": false,
+   "backdrop_path": null,
+   "genre_ids": [
+    18,
+    9648
+   ],
+   "id": 232533,
+   "origin_country": [
+    "CN"
+   ],
+   "original_language": "zh",
+   "original_name": "绝命卦师",
+   "overview": "During the Ming Dynasty, the emperor…",
+   "popularity": 3.7659,
+   "poster_path": "/n8dKkbPkdEPFCFmjNvrUl1gUAYr.jpg",
+   "first_air_date": "2016-04-11",
+   "softcore": false,
+   "name": "Breaking Bad Fortune Teller",
+   "vote_average": 7.5,
+   "vote_count": 1
+  },
+  {
+   "adult": false,
+   "backdrop_path": null,
+   "genre_ids": [
+    35,
+    80,
+    18
+   ],
+   "id": 337563,
+   "origin_country": [
+    "IT"
+   ],
+   "original_language": "it",
+   "original_name": "Breaking Bad: Original Minisodes",
+   "overview": "",
+   "popularity": 2.9116,
+   "poster_path": "/dMXwKX2u98yuAXrslSRmteztMoE.jpg",
+   "first_air_date": "2009-02-17",
+   "softcore": false,
+   "name": "Breaking Bad: Original Minisodes",
+   "vote_average": 0.0,
+   "vote_count": 0
+  }
+ ],
+ "total_pages": 1,
+ "total_results": 5
+}

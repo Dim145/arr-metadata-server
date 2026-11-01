@@ -4,7 +4,9 @@
 //! and the clients that use it have that address compiled in: Yamtrack's
 //! imports, the anime trackers. Resolved to this server, their queries are
 //! handed on to AniList and the answers handed back, with the fields a person
-//! locked here written into every entry they carry.
+//! locked here written into every entry they carry — and into an entry that
+//! is one season or cour of a work, as the anime identifier list places it
+//! ([`service::cour`]), what was corrected of when that one airs.
 //!
 //! AniList has no API key. A client that reads somebody's private lists
 //! carries that person's own token, which travels with the request as it
@@ -35,7 +37,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::any,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use utoipa_axum::router::OpenApiRouter;
 
@@ -44,9 +46,12 @@ use crate::{
     auth::secrets,
     cache,
     db::repo,
-    domain::{CoverType, ExternalSource, MediaItem},
+    domain::{CoverType, ExternalSource, MediaItem, MediaKind},
     error::{AppError, AppResult},
-    service,
+    service::{
+        self,
+        cour::{Cour, Next, Status},
+    },
     state::AppState,
 };
 
@@ -527,28 +532,41 @@ impl Named {
 /// The works of the catalogue an answer's entries are, by either
 /// identifier, when a person locked something on them.
 struct Held {
-    works: HashMap<String, MediaItem>,
+    works: HashMap<String, Work>,
     by_anilist: HashMap<i64, String>,
     by_mal: HashMap<i64, String>,
 }
 
+/// A work an answer's entries are, and the entries the anime identifier
+/// list splits it into ([`service::cour`]).
+struct Work {
+    item: MediaItem,
+    cours: Vec<Cour>,
+}
+
 impl Held {
     /// The work an entry is: by AniList's id, which numbers anime and manga
-    /// alike in one sequence; or, on an anime alone, by MyAnimeList's.
-    fn of(&self, object: &serde_json::Map<String, Value>) -> Option<&MediaItem> {
-        let by_anilist = object
-            .get("id")
+    /// alike in one sequence; or, on an anime alone, by MyAnimeList's. And
+    /// which of its seasons or cours the entry is, where the list places it.
+    fn of(&self, object: &Map<String, Value>) -> Option<(&MediaItem, Option<&Cour>)> {
+        let anilist = object.get("id").and_then(Value::as_i64);
+        let mal = object
+            .get("idMal")
             .and_then(Value::as_i64)
-            .and_then(|id| self.by_anilist.get(&id));
-        let id = match by_anilist {
+            .filter(|_| is_anime(object));
+        let id = match anilist.and_then(|id| self.by_anilist.get(&id)) {
             Some(id) => id,
-            None if is_anime(object) => object
-                .get("idMal")
-                .and_then(Value::as_i64)
-                .and_then(|id| self.by_mal.get(&id))?,
-            None => return None,
+            None => mal.and_then(|id| self.by_mal.get(&id))?,
         };
-        self.works.get(id)
+        let work = self.works.get(id)?;
+        let placed = |found: &dyn Fn(&Cour) -> bool| {
+            work.cours
+                .iter()
+                .find(|cour| cour.span.is_some() && found(cour))
+        };
+        let cour = placed(&|cour| anilist.is_some() && cour.anilist == anilist)
+            .or_else(|| placed(&|cour| mal.is_some() && cour.mal == mal));
+        Some((&work.item, cour))
     }
 }
 
@@ -575,6 +593,7 @@ async fn patch(state: &AppState, answer: &mut Value) -> AppResult<bool> {
     let mal =
         repo::item::held_external_ids(&state.db, ExternalSource::Mal, &as_text(&named.mal)).await?;
 
+    let now = chrono::Utc::now();
     let mut held = Held {
         works: HashMap::new(),
         by_anilist: HashMap::new(),
@@ -591,7 +610,8 @@ async fn patch(state: &AppState, answer: &mut Value) -> AppResult<bool> {
             continue;
         }
         state.media.for_clients(&mut item);
-        held.works.insert(media_id.clone(), item);
+        let cours = service::cour::of_work(state, &item, now).await;
+        held.works.insert(media_id.clone(), Work { item, cours });
         // The same value may name a work under both sources; each map says
         // which one it is under.
         let _ = value;
@@ -613,7 +633,7 @@ async fn patch(state: &AppState, answer: &mut Value) -> AppResult<bool> {
     if held.works.is_empty() {
         return Ok(false);
     }
-    Ok(write_entries(data, &held))
+    Ok(write_entries(data, &held, now.timestamp()))
 }
 
 /// Whether an object is an entry of AniList's — a `Media` — this catalogue
@@ -705,23 +725,24 @@ fn collect_entries(value: &Value, named: &mut Named) {
     }
 }
 
-/// Write each work's locks into every entry of the answer that is it.
-fn write_entries(value: &mut Value, held: &Held) -> bool {
+/// Write each work's locks into every entry of the answer that is it, as
+/// of `now`, in seconds since the epoch.
+fn write_entries(value: &mut Value, held: &Held, now: i64) -> bool {
     let mut changed = false;
     match value {
         Value::Object(object) => {
             if is_entry(object)
-                && let Some(item) = held.of(object)
+                && let Some((item, cour)) = held.of(object)
             {
-                changed |= write_entry(object, item);
+                changed |= write_entry(object, item, cour, now);
             }
             for child in object.values_mut() {
-                changed |= write_entries(child, held);
+                changed |= write_entries(child, held, now);
             }
         }
         Value::Array(items) => {
             for child in items {
-                changed |= write_entries(child, held);
+                changed |= write_entries(child, held, now);
             }
         }
         _ => {}
@@ -730,8 +751,15 @@ fn write_entries(value: &mut Value, held: &Held) -> bool {
 }
 
 /// The work's locks, in AniList's names: only the fields the client asked
-/// for, since a GraphQL answer carries nothing it was not asked.
-fn write_entry(object: &mut serde_json::Map<String, Value>, item: &MediaItem) -> bool {
+/// for, since a GraphQL answer carries nothing it was not asked. Where the
+/// entry is one of the work's seasons or cours (`cour`), what was corrected
+/// of when the work airs is written as it bears on that one.
+fn write_entry(
+    object: &mut Map<String, Value>,
+    item: &MediaItem,
+    cour: Option<&Cour>,
+    now: i64,
+) -> bool {
     let mut changed = false;
     if relay::is_locked(item, "title")
         && let Some(Value::Object(title)) = object.get_mut("title")
@@ -777,6 +805,305 @@ fn write_entry(object: &mut serde_json::Map<String, Value>, item: &MediaItem) ->
         object.insert("bannerImage".to_string(), Value::String(url));
         changed = true;
     }
+    changed |= take_hidden_synonyms(object, item);
+    if relay::is_locked(item, "isAdult") && object.contains_key("isAdult") {
+        object.insert("isAdult".to_string(), Value::Bool(item.is_adult));
+        changed = true;
+    }
+    if relay::is_locked(item, "studio")
+        && let Some(name) = item.studio.as_deref().filter(|n| !n.trim().is_empty())
+        && let Some(Value::Object(studios)) = object.get_mut("studios")
+    {
+        changed |= write_studio(studios, name);
+    }
+    if let Some(cour) = cour {
+        changed |= write_airing(object, item, cour, now);
+    }
+    changed
+}
+
+/// A name or a title as it is compared: its case and the blanks around it
+/// aside.
+fn folded(text: &str) -> String {
+    text.trim().to_lowercase()
+}
+
+/// AniList's other names for an entry, less those a person hid here among
+/// the work's other titles: told by their text alone, as TheTVDB's are,
+/// since AniList's carry no language. Whether any was taken out.
+fn take_hidden_synonyms(object: &mut Map<String, Value>, item: &MediaItem) -> bool {
+    if item.hidden.alternative_titles.is_empty() {
+        return false;
+    }
+    let Some(Value::Array(synonyms)) = object.get_mut("synonyms") else {
+        return false;
+    };
+    let hidden: Vec<String> = item
+        .hidden
+        .alternative_titles
+        .iter()
+        .map(|title| folded(&title.title))
+        .collect();
+    let before = synonyms.len();
+    synonyms.retain(|synonym| {
+        !synonym
+            .as_str()
+            .is_some_and(|text| hidden.contains(&folded(text)))
+    });
+    synonyms.len() != before
+}
+
+/// What a client may ask of a studio that a name locked here can be
+/// written over: anything else — its id, its address, its favourites —
+/// names a studio of AniList's, which a name cannot become.
+const STUDIO_RENAMABLE: &[&str] = &["name", "isAnimationStudio", "__typename"];
+
+/// The main studio locked here, in AniList's list of an entry's studios —
+/// its `nodes`, its `edges`, or both, as the client asked them.
+///
+/// A studio AniList lists under that name is put first, and made the one
+/// main studio where the list says which are. One it does not list is
+/// written over the name of its first main studio, only where the client
+/// asked nothing else that names a studio of AniList's ([`STUDIO_RENAMABLE`]):
+/// an id cannot be made up, and a studio's id beside another's name sends a
+/// client to the wrong one. Whether anything changed.
+fn write_studio(studios: &mut Map<String, Value>, name: &str) -> bool {
+    let wanted = folded(name);
+    let named = |node: &Value| {
+        node.get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|theirs| folded(theirs) == wanted)
+    };
+    let renamable = |node: &Map<String, Value>| {
+        node.keys()
+            .all(|key| STUDIO_RENAMABLE.contains(&key.as_str()))
+    };
+    let mut changed = false;
+
+    if let Some(Value::Array(nodes)) = studios.get_mut("nodes") {
+        match nodes.iter().position(named) {
+            Some(0) => {}
+            Some(at) => {
+                let node = nodes.remove(at);
+                nodes.insert(0, node);
+                changed = true;
+            }
+            None => {
+                if let Some(Value::Object(first)) = nodes.first_mut()
+                    && renamable(first)
+                {
+                    first.insert("name".to_string(), Value::String(name.to_string()));
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    if let Some(Value::Array(edges)) = studios.get_mut("edges") {
+        let chosen = match edges
+            .iter()
+            .position(|edge| edge.get("node").is_some_and(named))
+        {
+            Some(at) => Some(at),
+            None => {
+                let main = edges
+                    .iter()
+                    .position(|edge| edge.get("isMain") == Some(&Value::Bool(true)))
+                    .unwrap_or(0);
+                match edges.get_mut(main).and_then(|edge| edge.get_mut("node")) {
+                    Some(Value::Object(theirs)) if renamable(theirs) => {
+                        theirs.insert("name".to_string(), Value::String(name.to_string()));
+                        changed = true;
+                        Some(main)
+                    }
+                    _ => None,
+                }
+            }
+        };
+        if let Some(at) = chosen {
+            if at != 0 {
+                let edge = edges.remove(at);
+                edges.insert(0, edge);
+                changed = true;
+            }
+            for (place, edge) in edges.iter_mut().enumerate() {
+                if let Value::Object(edge) = edge
+                    && let Some(main) = edge.get_mut("isMain")
+                    && *main != Value::Bool(place == 0)
+                {
+                    *main = Value::Bool(place == 0);
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// What a person corrected here of when the work airs, written into the
+/// entry that is one of its seasons or cours, or the whole of it.
+///
+/// - **Its schedule.** Where an air date or time was locked on one of the
+///   entry's episodes, or an episode made by hand among them, the entry is
+///   described from the episodes as they are served ([`Cour`]): its first
+///   day, how far it has got, the next episode to air — its number counted
+///   from the entry's first — or none once it has finished, and its last
+///   day then. Its count of episodes is written only where an episode made
+///   here is among them and it has finished: a count still growing says
+///   nothing a correction made.
+/// - **The work's own.** Its status, locked: ended is every entry
+///   finished, upcoming every one not yet released, and continuing says
+///   something only of an entry that is the whole work. Its first day,
+///   locked, is the start of the entry that opens the work; its last day,
+///   locked, the end of the entry that closes a work that ended. A film's
+///   day in cinemas is its start and its end, as AniList dates one.
+///
+/// What the work says outweighs what its episodes do. A lock left empty
+/// leaves AniList's value.
+fn write_airing(object: &mut Map<String, Value>, item: &MediaItem, cour: &Cour, now: i64) -> bool {
+    let mut start: Option<String> = None;
+    let mut end: Option<String> = None;
+    let mut status: Option<Status> = None;
+    let mut episodes: Option<i64> = None;
+    // Some(None) is none to air.
+    let mut next: Option<Option<&Next>> = None;
+
+    if cour.corrected {
+        start.clone_from(&cour.starts);
+        end.clone_from(&cour.ends);
+        status = cour.status;
+        if cour.made_here && cour.status == Some(Status::Finished) {
+            episodes = Some(cour.episodes);
+        }
+        next = match (&cour.next, cour.status) {
+            (Some(coming), _) => Some(Some(coming)),
+            (None, Some(Status::Finished)) => Some(None),
+            _ => None,
+        };
+    }
+
+    let film = item.kind == MediaKind::Movie;
+    if relay::is_locked(item, "status") {
+        let said = match (item.status.as_deref(), film) {
+            (Some("ended"), false) | (Some("released" | "inCinemas"), true) => {
+                Some(Status::Finished)
+            }
+            (Some("upcoming"), false) | (Some("announced" | "tba"), true) => {
+                Some(Status::NotYetReleased)
+            }
+            (Some("continuing"), false) if cour.whole => Some(Status::Releasing),
+            _ => None,
+        };
+        if let Some(said) = said {
+            status = Some(said);
+            if said == Status::Finished {
+                next = Some(None);
+            }
+        }
+    }
+    let day_of = |date: &Option<String>| {
+        date.as_deref()
+            .and_then(|d| d.trim().get(..10))
+            .filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok())
+            .map(String::from)
+    };
+    if film {
+        if relay::is_locked(item, "inCinemas")
+            && let Some(day) = day_of(&item.in_cinemas)
+        {
+            start = Some(day.clone());
+            end = Some(day);
+        }
+    } else {
+        if relay::is_locked(item, "firstAired")
+            && cour.opens_work
+            && let Some(day) = day_of(&item.first_aired)
+        {
+            start = Some(day);
+        }
+        if relay::is_locked(item, "lastAired")
+            && cour.ends_work
+            && item.status.as_deref() == Some("ended")
+            && let Some(day) = day_of(&item.last_aired)
+        {
+            end = Some(day);
+        }
+    }
+
+    let mut changed = false;
+    if let Some(day) = start {
+        changed |= write_date(object, "startDate", &day);
+    }
+    if let Some(day) = end {
+        changed |= write_date(object, "endDate", &day);
+    }
+    if let Some(status) = status
+        && object.contains_key("status")
+    {
+        object.insert(
+            "status".to_string(),
+            Value::String(status.anilist().to_string()),
+        );
+        changed = true;
+    }
+    if let Some(count) = episodes
+        && object.contains_key("episodes")
+    {
+        object.insert("episodes".to_string(), Value::from(count));
+        changed = true;
+    }
+    match next {
+        Some(None) => {
+            if object
+                .get("nextAiringEpisode")
+                .is_some_and(|theirs| !theirs.is_null())
+            {
+                object.insert("nextAiringEpisode".to_string(), Value::Null);
+                changed = true;
+            }
+        }
+        // Over the one AniList gave: what a client asked of it is known
+        // only from what came back, and its id is AniList's.
+        Some(Some(coming)) => {
+            if let Some(Value::Object(theirs)) = object.get_mut("nextAiringEpisode") {
+                for (key, value) in [
+                    ("airingAt", coming.airing_at),
+                    ("timeUntilAiring", coming.airing_at - now),
+                    ("episode", i64::from(coming.episode)),
+                ] {
+                    if let Some(slot) = theirs.get_mut(key) {
+                        *slot = Value::from(value);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        None => {}
+    }
+    changed
+}
+
+/// A day, `YYYY-MM-DD`, written into AniList's date of an entry — its
+/// `year`, `month` and `day`, those the client asked for.
+fn write_date(object: &mut Map<String, Value>, key: &str, day: &str) -> bool {
+    let Some(Value::Object(date)) = object.get_mut(key) else {
+        return false;
+    };
+    let Ok(day) = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d") else {
+        return false;
+    };
+    use chrono::Datelike as _;
+    let mut changed = false;
+    for (part, value) in [
+        ("year", day.year()),
+        ("month", day.month() as i32),
+        ("day", day.day() as i32),
+    ] {
+        if let Some(slot) = date.get_mut(part) {
+            *slot = Value::from(value);
+            changed = true;
+        }
+    }
     changed
 }
 
@@ -791,7 +1118,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::domain::MediaKind;
     use serde_json::json;
 
     #[test]
@@ -1278,13 +1604,21 @@ mod tests {
         item
     }
 
+    /// Now, as the writers are given it: 1 November 2026, 12:00 UTC.
+    const NOW: i64 = 1_793_534_400;
+
     fn held(anilist: &[i64], mal: &[i64], item: MediaItem) -> Held {
+        held_split(anilist, mal, item, Vec::new())
+    }
+
+    /// [`held`], with the entries the list splits the work into.
+    fn held_split(anilist: &[i64], mal: &[i64], item: MediaItem, cours: Vec<Cour>) -> Held {
         let mut held = Held {
             works: HashMap::new(),
             by_anilist: HashMap::new(),
             by_mal: HashMap::new(),
         };
-        held.works.insert("work".into(), item);
+        held.works.insert("work".into(), Work { item, cours });
         for id in anilist {
             held.by_anilist.insert(*id, "work".into());
         }
@@ -1312,7 +1646,8 @@ mod tests {
 
         assert!(write_entries(
             &mut answer["data"],
-            &held(&[1], &[], locked_anime())
+            &held(&[1], &[], locked_anime()),
+            NOW
         ));
 
         let first = &answer["data"]["Page"]["media"][0];
@@ -1350,7 +1685,8 @@ mod tests {
 
         assert!(write_entries(
             &mut answer["data"],
-            &held(&[], &[16498], locked_anime())
+            &held(&[], &[16498], locked_anime()),
+            NOW
         ));
         assert_eq!(
             answer["data"]["anime"]["lists"][0]["entries"][0]["media"]["title"]["userPreferred"],
@@ -1407,7 +1743,8 @@ mod tests {
         // The work held under AniList's 1 is not the tag numbered 1.
         assert!(!write_entries(
             &mut answer["data"],
-            &held(&[1], &[], locked_anime())
+            &held(&[1], &[], locked_anime()),
+            NOW
         ));
         assert_eq!(
             answer["data"]["Media"]["tags"][0]["description"],
@@ -1492,7 +1829,8 @@ mod tests {
         item.primary_images.poster = Some("img1".into());
         assert!(write_entries(
             &mut answer["data"],
-            &held(&[], &[1, 21], item)
+            &held(&[], &[1, 21], item),
+            NOW
         ));
 
         let anime = &answer["data"]["anime"]["lists"][0]["entries"];
@@ -1567,12 +1905,433 @@ mod tests {
         });
         item.primary_images.poster = Some("img1".into());
         let mut object = json!({ "id": 1, "coverImage": { "extraLarge": "https://s4.anilist.co/a.jpg", "color": "#fff" } });
-        assert!(write_entry(object.as_object_mut().unwrap(), &item));
+        assert!(write_entry(
+            object.as_object_mut().unwrap(),
+            &item,
+            None,
+            NOW
+        ));
         assert_eq!(
             object["coverImage"]["extraLarge"],
             json!("https://ams.example/media/abc")
         );
         assert_eq!(object["coverImage"]["color"], json!("#fff"));
         assert!(object["coverImage"].get("large").is_none());
+    }
+
+    // ─── the locks written in this wave ──────────────────────────────────────
+
+    use crate::service::cour::Span;
+
+    fn object(value: Value) -> Map<String, Value> {
+        let Value::Object(object) = value else {
+            unreachable!()
+        };
+        object
+    }
+
+    #[test]
+    fn a_title_hidden_here_leaves_anilists_other_names() {
+        let mut item = locked_anime();
+        item.hidden.alternative_titles = vec![crate::domain::AlternativeTitle {
+            id: "t".into(),
+            title: "Hidden One".into(),
+            title_type: None,
+            language: Some("eng".into()),
+            is_manual: false,
+        }];
+        let mut entry = object(json!({ "id": 1, "synonyms": [" hidden one ", "Kept", 3] }));
+        assert!(write_entry(&mut entry, &item, None, NOW));
+        assert_eq!(entry["synonyms"], json!(["Kept", 3]));
+        // Nothing hidden: nothing taken.
+        let mut entry = object(json!({ "id": 1, "synonyms": ["Kept"] }));
+        assert!(!take_hidden_synonyms(&mut entry, &locked_anime()));
+    }
+
+    #[test]
+    fn a_locked_adult_flag_is_written_where_it_was_asked() {
+        let mut item = locked_anime();
+        item.is_adult = true;
+        let mut entry = object(json!({ "id": 1, "isAdult": false }));
+        write_entry(&mut entry, &item, None, NOW);
+        assert_eq!(entry["isAdult"], json!(false), "not locked");
+
+        item.locked_fields.push("item/isAdult".into());
+        assert!(write_entry(&mut entry, &item, None, NOW));
+        assert_eq!(entry["isAdult"], json!(true));
+        let mut unasked = object(json!({ "id": 1 }));
+        write_entry(&mut unasked, &item, None, NOW);
+        assert!(unasked.get("isAdult").is_none());
+    }
+
+    #[test]
+    fn a_locked_main_studio_leads_and_never_takes_another_studios_id() {
+        let studios = |value: Value| object(value);
+
+        // Listed under that name: put first.
+        let mut listed =
+            studios(json!({ "nodes": [{ "name": "Aniplex" }, { "name": "madhouse " }] }));
+        assert!(write_studio(&mut listed, "Madhouse"));
+        assert_eq!(
+            listed["nodes"],
+            json!([{ "name": "madhouse " }, { "name": "Aniplex" }])
+        );
+
+        // Not listed: written over the first, where nothing names it.
+        let mut named =
+            studios(json!({ "nodes": [{ "name": "Other", "isAnimationStudio": true }] }));
+        assert!(write_studio(&mut named, "Madhouse"));
+        assert_eq!(
+            named["nodes"][0],
+            json!({ "name": "Madhouse", "isAnimationStudio": true })
+        );
+        // …and left as it came where its id was asked.
+        let mut kept = studios(json!({ "nodes": [{ "id": 5, "name": "Other" }] }));
+        assert!(!write_studio(&mut kept, "Madhouse"));
+        assert_eq!(kept["nodes"][0]["name"], json!("Other"));
+
+        // Edges: the one of that name first, and the one main studio.
+        let mut edges = studios(json!({ "edges": [
+            { "isMain": false, "node": { "id": 1, "name": "Aniplex" } },
+            { "isMain": true, "node": { "id": 11, "name": "Other" } },
+            { "isMain": false, "node": { "id": 12, "name": "Madhouse" } }
+        ]}));
+        assert!(write_studio(&mut edges, "Madhouse"));
+        assert_eq!(
+            edges["edges"],
+            json!([
+                { "isMain": true, "node": { "id": 12, "name": "Madhouse" } },
+                { "isMain": false, "node": { "id": 1, "name": "Aniplex" } },
+                { "isMain": false, "node": { "id": 11, "name": "Other" } }
+            ])
+        );
+        let mut unknown = studios(
+            json!({ "edges": [{ "isMain": true, "node": { "id": 11, "name": "Other" } }] }),
+        );
+        assert!(!write_studio(&mut unknown, "Madhouse"));
+        let mut bare = studios(json!({ "edges": [
+            { "node": { "name": "Aniplex" } },
+            { "isMain": true, "node": { "name": "Other" } }
+        ]}));
+        assert!(write_studio(&mut bare, "Madhouse"));
+        assert_eq!(
+            bare["edges"],
+            json!([
+                { "isMain": true, "node": { "name": "Madhouse" } },
+                { "node": { "name": "Aniplex" } }
+            ])
+        );
+    }
+
+    /// The second half of a split season, airing, its next episode — the
+    /// season's 11th, its own 5th — three hours on.
+    fn second_half() -> Cour {
+        Cour {
+            anilist: Some(3),
+            mal: None,
+            format: Some("TV".into()),
+            span: Some(Span::Season {
+                number: 2,
+                first: 7,
+                last: None,
+            }),
+            whole: false,
+            opens_work: false,
+            ends_work: true,
+            closed: false,
+            episodes: 6,
+            aired: 4,
+            numbers: Some((7, 12)),
+            starts: Some("2026-10-04".into()),
+            ends: None,
+            status: Some(Status::Releasing),
+            quarter: None,
+            next: Some(Next {
+                episode: 5,
+                episode_number: 11,
+                airing_at: NOW + 3 * 3600,
+                day: "2026-11-01".into(),
+            }),
+            corrected: true,
+            made_here: false,
+        }
+    }
+
+    fn as_anilist_has_it() -> Map<String, Value> {
+        object(json!({
+            "id": 3,
+            "status": "FINISHED",
+            "startDate": { "year": 2026, "month": 10, "day": 5 },
+            "endDate": { "year": 2026, "month": 12, "day": 20 },
+            "episodes": 12,
+            "nextAiringEpisode": { "id": 77, "airingAt": 1, "timeUntilAiring": 1, "episode": 6 }
+        }))
+    }
+
+    #[test]
+    fn a_cour_whose_schedule_was_corrected_here_is_written_as_its_episodes_say() {
+        let item = locked_anime();
+        let mut entry = as_anilist_has_it();
+        assert!(write_entry(&mut entry, &item, Some(&second_half()), NOW));
+        assert_eq!(entry["status"], json!("RELEASING"));
+        assert_eq!(
+            entry["startDate"],
+            json!({ "year": 2026, "month": 10, "day": 4 })
+        );
+        // Not finished: its end and its count are AniList's.
+        assert_eq!(entry["endDate"]["day"], json!(20));
+        assert_eq!(entry["episodes"], json!(12));
+        assert_eq!(
+            entry["nextAiringEpisode"],
+            json!({ "id": 77, "airingAt": NOW + 10_800, "timeUntilAiring": 10_800, "episode": 5 })
+        );
+
+        // Nothing corrected: AniList's, all of it.
+        let untouched = Cour {
+            corrected: false,
+            ..second_half()
+        };
+        let mut entry = as_anilist_has_it();
+        assert!(!write_airing(&mut entry, &item, &untouched, NOW));
+        assert_eq!(entry, as_anilist_has_it());
+
+        // Finished, with an episode made here: its end, its count, nothing
+        // more to air.
+        let finished = Cour {
+            closed: true,
+            made_here: true,
+            episodes: 7,
+            status: Some(Status::Finished),
+            ends: Some("2026-11-15".into()),
+            next: None,
+            ..second_half()
+        };
+        let mut entry = as_anilist_has_it();
+        assert!(write_airing(&mut entry, &item, &finished, NOW));
+        assert_eq!(
+            entry["endDate"],
+            json!({ "year": 2026, "month": 11, "day": 15 })
+        );
+        assert_eq!(entry["episodes"], json!(7));
+        assert_eq!(entry["nextAiringEpisode"], Value::Null);
+        assert_eq!(entry["status"], json!("FINISHED"));
+    }
+
+    #[test]
+    fn the_works_own_dates_and_status_say_what_they_can_of_each_entry() {
+        let mut item = locked_anime();
+        item.status = Some("ended".into());
+        item.first_aired = Some("2026-01-02".into());
+        item.last_aired = Some("2026-11-08".into());
+        item.locked_fields.extend([
+            "item/firstAired".into(),
+            "item/lastAired".into(),
+            "item/status".into(),
+        ]);
+        let untouched = |cour: Cour| Cour {
+            corrected: false,
+            ..cour
+        };
+
+        // The entry that closes it: its end, and finished.
+        let mut last = as_anilist_has_it();
+        assert!(write_airing(
+            &mut last,
+            &item,
+            &untouched(second_half()),
+            NOW
+        ));
+        assert_eq!(last["status"], json!("FINISHED"));
+        assert_eq!(
+            last["endDate"],
+            json!({ "year": 2026, "month": 11, "day": 8 })
+        );
+        assert_eq!(
+            last["startDate"]["day"],
+            json!(5),
+            "it does not open the work"
+        );
+        assert_eq!(last["nextAiringEpisode"], Value::Null);
+
+        // The one that opens it: its start.
+        let opening = untouched(Cour {
+            opens_work: true,
+            ends_work: false,
+            ..second_half()
+        });
+        let mut first = as_anilist_has_it();
+        assert!(write_airing(&mut first, &item, &opening, NOW));
+        assert_eq!(
+            first["startDate"],
+            json!({ "year": 2026, "month": 1, "day": 2 })
+        );
+        assert_eq!(first["endDate"]["month"], json!(12), "it does not close it");
+
+        // Continuing says something of the whole work alone.
+        item.status = Some("continuing".into());
+        let mut part = as_anilist_has_it();
+        write_airing(&mut part, &item, &untouched(second_half()), NOW);
+        assert_eq!(part["status"], json!("FINISHED"), "AniList's");
+        assert_eq!(
+            part["endDate"]["month"],
+            json!(12),
+            "a work going on has no end"
+        );
+        let whole = untouched(Cour {
+            whole: true,
+            ..second_half()
+        });
+        let mut all = as_anilist_has_it();
+        write_airing(&mut all, &item, &whole, NOW);
+        assert_eq!(all["status"], json!("RELEASING"));
+
+        // A film's day in cinemas is its start and its end.
+        let mut film = locked_anime();
+        film.kind = MediaKind::Movie;
+        film.in_cinemas = Some("2001-07-20".into());
+        film.locked_fields.push("item/inCinemas".into());
+        let mut entry = as_anilist_has_it();
+        assert!(write_airing(&mut entry, &film, &whole, NOW));
+        assert_eq!(
+            entry["startDate"],
+            json!({ "year": 2001, "month": 7, "day": 20 })
+        );
+        assert_eq!(entry["endDate"], entry["startDate"]);
+    }
+
+    #[tokio::test]
+    async fn each_entry_of_a_split_series_is_written_as_the_cour_it_is() {
+        use chrono::{Datelike as _, TimeDelta, Utc};
+
+        use crate::domain::fields::Scope;
+
+        let state = server("http://127.0.0.1:9").await;
+        let now = Utc::now();
+        let at = |days: i64| now + TimeDelta::days(days);
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.id = crate::db::new_id();
+        item.title = "A cour-split series the relay writes".into();
+        item.slug = crate::domain::make_slug(&item.title, None);
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        item.status = Some("continuing".into());
+        item.external_ids.tvdb = Some(9_900_101);
+        item.external_ids.anilist = vec![9_900_111, 9_900_112];
+        item.alternative_titles = vec![crate::domain::AlternativeTitle {
+            id: crate::db::new_id(),
+            title: "Hidden one".into(),
+            title_type: None,
+            language: Some("eng".into()),
+            is_manual: false,
+        }];
+        // Six weeks in summer; then three weekly up to a week ago, and
+        // three from three days on.
+        item.episodes = (1..=12)
+            .map(|n| {
+                let day = match n {
+                    1..=6 => at(-140 + 7 * n),
+                    7..=9 => at(-70 + 7 * n),
+                    _ => at(-67 + 7 * n),
+                };
+                let mut episode = crate::db::repo::child::blank_episode(1, n as i32);
+                episode.is_manual = false;
+                episode.air_date = Some(day.format("%Y-%m-%d").to_string());
+                episode.air_date_utc = Some(day.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+                episode
+            })
+            .collect();
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        repo::anime::replace_all(
+            &state.db,
+            &[9_900_111, 9_900_112].map(|anilist| repo::anime::Entry {
+                anilist_id: Some(anilist),
+                tvdb_id: Some(9_900_101),
+                tvdb_season: Some(1),
+                tvdb_offset: (anilist == 9_900_112).then_some(6),
+                kind: Some("TV".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        // The tenth episode — the second half's fourth — moved a day earlier.
+        let moved = (at(2) + TimeDelta::hours(1))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        repo::override_field::set(
+            &state.db,
+            &item.id,
+            Scope::Episode {
+                season: 1,
+                episode: 10,
+            },
+            "airDateUtc",
+            Some(&json!(moved)),
+            None,
+        )
+        .await
+        .unwrap();
+        repo::override_field::set(
+            &state.db,
+            &item.id,
+            Scope::Item,
+            "isAdult",
+            Some(&json!(true)),
+            None,
+        )
+        .await
+        .unwrap();
+        repo::override_field::set_in(
+            &state.db,
+            &item.id,
+            "alternativeTitle:eng:Hidden one",
+            "hidden",
+            "",
+            Some(&json!(true)),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let first = json!({ "id": 9_900_111, "type": "ANIME", "status": "RELEASING",
+            "startDate": { "year": 2000, "month": 1, "day": 1 }, "nextAiringEpisode": null });
+        let mut answer = json!({ "data": { "Page": { "media": [
+            first.clone(),
+            { "id": 9_900_112, "type": "ANIME", "status": "NOT_YET_RELEASED", "isAdult": false,
+              "startDate": { "year": 2000, "month": 1, "day": 1 },
+              "endDate": { "year": null, "month": null, "day": null }, "episodes": 99,
+              "nextAiringEpisode": { "id": 1, "airingAt": 0, "timeUntilAiring": 0, "episode": 9 },
+              "synonyms": ["Hidden one", "Kept"] }
+        ]}}});
+        assert!(patch(&state, &mut answer).await.unwrap());
+
+        let media = &answer["data"]["Page"]["media"];
+        // The first half: nothing of it was corrected, and it is AniList's.
+        assert_eq!(media[0], first);
+        let second = &media[1];
+        assert_eq!(second["status"], json!("RELEASING"));
+        let started = at(-21);
+        assert_eq!(
+            second["startDate"],
+            json!({ "year": started.year(), "month": started.month(), "day": started.day() })
+        );
+        assert_eq!(second["endDate"]["year"], Value::Null);
+        assert_eq!(second["episodes"], json!(99), "its count is still growing");
+        let moved_at = chrono::DateTime::parse_from_rfc3339(&moved)
+            .unwrap()
+            .timestamp();
+        assert_eq!(second["nextAiringEpisode"]["airingAt"], json!(moved_at));
+        assert_eq!(second["nextAiringEpisode"]["episode"], json!(4));
+        assert_eq!(second["nextAiringEpisode"]["id"], json!(1), "AniList's own");
+        assert_eq!(second["isAdult"], json!(true));
+        assert_eq!(second["synonyms"], json!(["Kept"]));
     }
 }

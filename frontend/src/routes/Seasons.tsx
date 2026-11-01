@@ -14,7 +14,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useLocation, useParams, useSearchParams } from 'react-router'
 
 import { Trailer } from '../components/Theatre'
@@ -35,6 +35,7 @@ import {
   type SeasonRef,
   around,
   chartQuery,
+  describedQuery,
   formatDay,
   isSeason,
   mondayOf,
@@ -44,7 +45,15 @@ import {
   weekday,
   weeksOf,
 } from '../lib/seasons'
-import type { MediaItem, SeasonCandidate, SeasonChart as ChartData, SeasonEntry, SeasonEntryKind } from '../lib/types'
+import type {
+  MalEntry,
+  MediaItem,
+  SeasonCandidate,
+  SeasonChart as ChartData,
+  SeasonCour,
+  SeasonEntry,
+  SeasonEntryKind,
+} from '../lib/types'
 import { NotFound } from './NotFound'
 
 /** The kinds, in the order the programme runs them. */
@@ -912,6 +921,7 @@ function ProgrammeCard({
             {t.seasons.nextEpisode(entry.nextEpisode.episodeNumber, when(entry.nextEpisode.airDate))}
           </p>
         ) : null}
+        {entry.cours?.length ? <Cours cours={entry.cours} chart={chart} today={today} when={when} /> : null}
       </div>
 
       <div className="col-span-2 flex min-w-0 flex-col sm:col-span-1 sm:col-start-2">
@@ -942,6 +952,138 @@ function ProgrammeCard({
         </div>
       </div>
     </article>
+  )
+}
+
+/**
+ * The AniList and MyAnimeList entries of a season that premiere in the
+ * quarter, as the anime identifier list places them on its episodes: the
+ * season itself where it is one entry, or the cour of it that starts here —
+ * the second half of a split season, among those carrying on. Each says its
+ * part, its episodes, how far it has aired and what airs next, counted from
+ * its own first episode. Raised above the card's link, as its genres are.
+ */
+function Cours({
+  cours,
+  chart,
+  today,
+  when,
+}: {
+  cours: SeasonCour[]
+  chart: ChartData
+  today: string
+  when: (day: string) => string
+}) {
+  const { t } = useI18n()
+
+  return (
+    <ul aria-label={t.seasons.cour.label} className="relative z-10 mt-2 space-y-1.5">
+      {cours.map((cour) => (
+        <CourLine key={`${cour.anilistId ?? ''}:${cour.malId ?? ''}:${cour.part}`} cour={cour} chart={chart} today={today} when={when} />
+      ))}
+    </ul>
+  )
+}
+
+/** Where a cour is described among the cours of a chart described: by its AniList id, else its MyAnimeList one. */
+function describedIn(chart: ChartData | undefined, cour: SeasonCour): MalEntry | undefined {
+  const all = (chart?.entries ?? []).flatMap((entry) => entry.cours ?? [])
+  const same = all.find(
+    (other) =>
+      (cour.anilistId !== undefined && other.anilistId === cour.anilistId) ||
+      (cour.malId !== undefined && other.malId === cour.malId),
+  )
+  return same?.mal ?? undefined
+}
+
+/**
+ * One cour, and MyAnimeList's description of it once the reader asks: the
+ * chart is asked again with every cour described, once for all of them —
+ * MyAnimeList is slow to ask, and nothing of it is fetched before.
+ */
+function CourLine({
+  cour,
+  chart,
+  today,
+  when,
+}: {
+  cour: SeasonCour
+  chart: ChartData
+  today: string
+  when: (day: string) => string
+}) {
+  const { t, lang } = useI18n()
+  const c = t.seasons.cour
+  const [open, setOpen] = useState(false)
+  const id = useId()
+  const described = useQuery({
+    ...describedQuery({ year: chart.year, season: chart.season }, lang, today),
+    enabled: open && !cour.mal,
+  })
+  const mal = cour.mal ?? describedIn(described.data, cour)
+
+  const facts = [
+    cour.parts > 1 ? c.part(cour.part, cour.parts) : undefined,
+    c.episodes(cour.firstEpisode, cour.lastEpisode),
+    c.status[cour.status] ?? cour.status,
+  ].filter(Boolean)
+  const source = mal?.source ? c.sources[mal.source] : undefined
+
+  return (
+    <li className="rounded-card border border-rule bg-ink px-3 py-2 text-xs leading-relaxed text-bone-dim">
+      <p className="flex flex-wrap items-baseline gap-x-2">
+        <span className="font-medium text-bone">{cour.title ?? c.premieres}</span>
+        <span className="font-mono text-bone-faint tabular-nums">{facts.join(' · ')}</span>
+      </p>
+      <p>{cour.title ? `${c.premieres} · ${when(cour.starts)}` : when(cour.starts)}</p>
+      {cour.nextEpisode ? (
+        <p className="text-vermillion">{c.next(cour.nextEpisode.episode, when(cour.nextEpisode.airDate))}</p>
+      ) : null}
+      <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+        {cour.anilistId ? <ExternalLink href={`https://anilist.co/anime/${cour.anilistId}`}>{c.onAnilist}</ExternalLink> : null}
+        {cour.malId ? <ExternalLink href={`https://myanimelist.net/anime/${cour.malId}`}>{c.onMal}</ExternalLink> : null}
+        {cour.malId ? (
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={id}
+            onClick={() => setOpen(!open)}
+            className="inline-flex min-h-6 cursor-pointer items-center gap-1 text-bone-dim underline decoration-dotted underline-offset-2 transition-colors duration-150 hover:text-bone"
+          >
+            <Glyph name="chevronRight" className={cn('size-3 transition-transform duration-150 motion-reduce:transition-none', open && 'rotate-90')} />
+            {c.describe}
+          </button>
+        ) : null}
+      </p>
+      {open ? (
+        <div id={id} className="mt-1.5 border-t border-rule pt-1.5">
+          {mal ? (
+            <>
+              {mal.synopsis ? <p className="line-clamp-4 text-bone-dim">{mal.synopsis}</p> : null}
+              <p className="mt-1 text-bone-faint">
+                {[
+                  mal.episodes ? c.planned(mal.episodes) : undefined,
+                  source ? c.source(source) : undefined,
+                  mal.studios?.length ? c.studios(mal.studios.join(', ')) : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            </>
+          ) : described.isPending ? (
+            <p role="status" className="text-bone-faint">
+              {c.describing}
+            </p>
+          ) : described.isError ? (
+            <p role="alert" className="text-status-error">
+              {c.describeFailed}
+            </p>
+          ) : (
+            <p className="text-bone-faint">{c.undescribed}</p>
+          )}
+        </div>
+      ) : null}
+    </li>
   )
 }
 

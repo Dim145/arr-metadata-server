@@ -21,7 +21,7 @@ use crate::{
         editorial::{Note, Scope},
         item::Facets,
     },
-    domain::{CreditType, Episode, MediaItem, MediaKind},
+    domain::{Company, CreditType, Episode, Keyword, MediaItem, MediaKind},
     error::{AppError, AppResult},
     service,
     state::AppState,
@@ -39,6 +39,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(calendar))
         .routes(routes!(genre))
         .routes(routes!(network))
+        .routes(routes!(company))
+        .routes(routes!(keyword))
         .routes(routes!(year))
         .routes(routes!(decade))
         .routes(routes!(compare))
@@ -571,11 +573,16 @@ pub enum FacetKind {
     Network,
     Year,
     Decade,
+    /// A network or a company as an entity, by this server's id for it.
+    Company,
+    /// One of TMDB's keywords, by this server's id for it.
+    Keyword,
 }
 
 /// A page of the catalogue: a genre's, a network's or a studio's, a year's,
-/// a decade's — what it is called, how many works it holds, the five rated
-/// highest, how to list the rest, and what the programmer wrote about it.
+/// a decade's, a company's or a keyword's — what it is called, how many works
+/// it holds, the five rated highest, how to list the rest, and what the
+/// programmer wrote about it.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FacetPage {
@@ -600,9 +607,21 @@ pub struct FacetPage {
     /// `/facets`: `{"genre": "drama"}`, `{"yearFrom": "1990", "yearTo": "1999"}`.
     pub filter: BTreeMap<String, String>,
     /// The programmer's note on it: in the reader's language, else in
-    /// English, else the one written last.
+    /// English, else the one written last. A company and a keyword have
+    /// none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<Note>,
+    /// A company's page: the network or the company itself — its kind, the
+    /// ids its sources file it under, its logo and its country.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company: Option<Company>,
+    /// What it did for the works the reader may see, by role, and for how
+    /// many: `{"network": 12}`, `{"production": 3, "distributor": 1}`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub roles: BTreeMap<String, i64>,
+    /// A keyword's page: the keyword itself, with TMDB's id for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyword: Option<Keyword>,
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -655,6 +674,7 @@ async fn genre(
                 names: genre.names,
                 filters,
                 shown,
+                entity: Entity::default(),
             },
             language.as_deref(),
         )
@@ -706,6 +726,7 @@ async fn network(
                 names: BTreeMap::new(),
                 filters,
                 shown,
+                entity: Entity::default(),
             },
             language.as_deref(),
         )
@@ -741,6 +762,133 @@ pub(crate) async fn network_named(
         .insert(key, named.clone().unwrap_or_default())
         .await;
     Ok(named)
+}
+
+/// The longest id an entity's address is looked up by: this server's ids
+/// are far shorter, and nothing longer is worth a query.
+const ENTITY_ID: usize = 64;
+
+/// A network's or a company's page, by this server's id for it — a work's
+/// `companies[].company.id`: the works it is credited on that the reader may
+/// see, whatever it did for them, and how many it did what for. The
+/// network's page by the slug of its name, `/networks/{slug}`, stands
+/// beside it: that one goes by the works' texts, locks and all.
+#[utoipa::path(
+    get, path = "/companies/{id}", tag = TAG,
+    operation_id = "browse_company",
+    params(("id" = String, Path, description = "This server's id for the network or the company"), PageQuery),
+    responses(
+        (status = 200, body = FacetPage),
+        (status = 400, description = "The language is not one"),
+        (status = 404, description = "No network or company has that id, or none of its works is one this reader may see"),
+    ),
+)]
+async fn company(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(asked): Path<String>,
+    Query(query): Query<PageQuery>,
+) -> AppResult<Json<FacetPage>> {
+    let language = crate::api::extract::language(query.language.as_deref())?;
+    let asked = asked.trim();
+    if asked.is_empty() || asked.len() > ENTITY_ID {
+        return Err(AppError::NotFound);
+    }
+    let company = repo::company::get(&state.db, asked)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
+    let mut roles: BTreeMap<String, i64> = BTreeMap::new();
+    for credited in repo::company::works_of(&state.db, &company.id, adult).await? {
+        *roles.entry(credited.role.as_str().to_string()).or_default() += 1;
+    }
+    let filters = repo::item::Query {
+        company: Some(company.id.clone()),
+        ..Default::default()
+    };
+    let shown = BTreeMap::from([("company".to_string(), company.id.clone())]);
+    let page = facet_page(
+        &state,
+        &identity,
+        Listing {
+            kind: FacetKind::Company,
+            slug: company.id.clone(),
+            name: company.name.clone(),
+            names: BTreeMap::new(),
+            filters,
+            shown,
+            entity: Entity {
+                company: Some(company),
+                roles,
+                keyword: None,
+            },
+        },
+        language.as_deref(),
+    )
+    .await?;
+    // Credited on nothing this reader may see: nobody to them, as a
+    // network's page is.
+    if page.count == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(page))
+}
+
+/// A keyword's page, by this server's id for it — a work's
+/// `keywordEntities[].id`: the works the reader may see that TMDB gives it.
+/// The texts of a work's `keywords`, AniList's tags among them, are still
+/// listed by `GET /items?keyword=`.
+#[utoipa::path(
+    get, path = "/keywords/{id}", tag = TAG,
+    operation_id = "browse_keyword",
+    params(("id" = String, Path, description = "This server's id for the keyword"), PageQuery),
+    responses(
+        (status = 200, body = FacetPage),
+        (status = 400, description = "The language is not one"),
+        (status = 404, description = "No keyword has that id, or none of its works is one this reader may see"),
+    ),
+)]
+async fn keyword(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    Path(asked): Path<String>,
+    Query(query): Query<PageQuery>,
+) -> AppResult<Json<FacetPage>> {
+    let language = crate::api::extract::language(query.language.as_deref())?;
+    let asked = asked.trim();
+    if asked.is_empty() || asked.len() > ENTITY_ID {
+        return Err(AppError::NotFound);
+    }
+    let keyword = repo::keyword::get(&state.db, asked)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let filters = repo::item::Query {
+        keyword_id: Some(keyword.id.clone()),
+        ..Default::default()
+    };
+    let shown = BTreeMap::from([("keywordId".to_string(), keyword.id.clone())]);
+    let page = facet_page(
+        &state,
+        &identity,
+        Listing {
+            kind: FacetKind::Keyword,
+            slug: keyword.id.clone(),
+            name: keyword.name.clone(),
+            names: BTreeMap::new(),
+            filters,
+            shown,
+            entity: Entity {
+                keyword: Some(keyword),
+                ..Entity::default()
+            },
+        },
+        language.as_deref(),
+    )
+    .await?;
+    if page.count == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(page))
 }
 
 /// A year's page: the works that came out in it, as their pages date them.
@@ -830,6 +978,7 @@ fn years(kind: FacetKind, from: i32, to: i32) -> Listing {
             ("yearFrom".to_string(), from.to_string()),
             ("yearTo".to_string(), to.to_string()),
         ]),
+        entity: Entity::default(),
     }
 }
 
@@ -843,6 +992,15 @@ struct Listing {
     filters: repo::item::Query,
     /// The same, as the list's own parameters.
     shown: BTreeMap<String, String>,
+    entity: Entity,
+}
+
+/// The entity a company's or a keyword's page is of; nothing for the rest.
+#[derive(Default)]
+struct Entity {
+    company: Option<Company>,
+    roles: BTreeMap<String, i64>,
+    keyword: Option<Keyword>,
 }
 
 /// A page, read: how many works it holds that the reader may see, the five
@@ -863,14 +1021,20 @@ async fn facet_page(
     let (found, count) = repo::item::search_counted(&state.db, &filters).await?;
     let best = cards(state, identity, found, language).await?;
 
+    // A company and a keyword have no note: the programmer writes of the
+    // pages a reader browses to, which these are not yet.
     let scope = match listing.kind {
-        FacetKind::Genre => Scope::Genre,
-        FacetKind::Network => Scope::Network,
-        FacetKind::Year => Scope::Year,
-        FacetKind::Decade => Scope::Decade,
+        FacetKind::Genre => Some(Scope::Genre),
+        FacetKind::Network => Some(Scope::Network),
+        FacetKind::Year => Some(Scope::Year),
+        FacetKind::Decade => Some(Scope::Decade),
+        FacetKind::Company | FacetKind::Keyword => None,
     };
     let reader = language.map_or_else(|| "en".to_string(), repo::genre::language_of);
-    let note = repo::editorial::read(&state.db, scope, &listing.slug, &reader).await?;
+    let note = match scope {
+        Some(scope) => repo::editorial::read(&state.db, scope, &listing.slug, &reader).await?,
+        None => None,
+    };
 
     Ok(FacetPage {
         kind: listing.kind,
@@ -881,6 +1045,9 @@ async fn facet_page(
         best,
         filter: listing.shown,
         note,
+        company: listing.entity.company,
+        roles: listing.entity.roles,
+        keyword: listing.entity.keyword,
     })
 }
 
@@ -1464,6 +1631,8 @@ mod tests {
             credit_tmdb_id: None,
             sort_order: place,
             is_manual: false,
+            department: None,
+            job: None,
         }
     }
 
@@ -1493,6 +1662,8 @@ mod tests {
             FacetKind::Network => network(state, identity, path, query).await,
             FacetKind::Year => year(state, identity, path, query).await,
             FacetKind::Decade => decade(state, identity, path, query).await,
+            FacetKind::Company => company(state, identity, path, query).await,
+            FacetKind::Keyword => keyword(state, identity, path, query).await,
         }
         .map(|Json(page)| page)
     }
@@ -1623,6 +1794,133 @@ mod tests {
             page_of(&state, FacetKind::Network, "nobody", "en").await,
             Err(AppError::NotFound)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_company_and_a_keyword_are_pages_by_this_servers_id_for_them() {
+        use crate::domain::{Company, CompanyCredit, CompanyKind, CompanyRole, Keyword};
+
+        let state = super::super::testing::server().await;
+        let credit = |kind: CompanyKind, role: CompanyRole, tmdb_id: i64| CompanyCredit {
+            company: Company {
+                id: String::new(),
+                kind,
+                name: "Quillmoor Pictures".into(),
+                tmdb_id: Some(tmdb_id),
+                tvdb_id: None,
+                logo: Some("https://image.tmdb.org/t/p/original/quillmoor.png".into()),
+                country: Some("GB".into()),
+            },
+            role,
+            sort_order: 0,
+            source: Some("tmdb".into()),
+        };
+        let lighthouse = || Keyword {
+            id: String::new(),
+            tmdb_id: Some(77_301),
+            name: "quillmoor lighthouse".into(),
+        };
+        stored(&state, MediaKind::Movie, "Quillmoor Made", |w| {
+            w.companies = vec![
+                credit(CompanyKind::Company, CompanyRole::Production, 66_101),
+                credit(CompanyKind::Network, CompanyRole::Network, 66_101),
+            ];
+            w.keyword_entities = vec![lighthouse()];
+            w.ratings = rated(7.5);
+        })
+        .await;
+        stored(&state, MediaKind::Movie, "Quillmoor Sold", |w| {
+            w.companies = vec![credit(
+                CompanyKind::Company,
+                CompanyRole::Distributor,
+                66_101,
+            )];
+            w.ratings = rated(6.5);
+        })
+        .await;
+        // For adults: neither listed nor counted for a visitor.
+        stored(&state, MediaKind::Movie, "Quillmoor After Dark", |w| {
+            w.is_adult = true;
+            w.companies = vec![credit(
+                CompanyKind::Company,
+                CompanyRole::Production,
+                66_101,
+            )];
+            w.keyword_entities = vec![lighthouse()];
+        })
+        .await;
+        crate::service::listing::relist_stale(&state.db, false, 100)
+            .await
+            .expect("listed");
+
+        let maker = repo::company::by_tmdb(&state.db, CompanyKind::Company, 66_101)
+            .await
+            .expect("read")
+            .expect("kept");
+        let page = page_of(&state, FacetKind::Company, &maker.id, "en")
+            .await
+            .expect("a page");
+        assert_eq!(
+            (page.slug.as_str(), page.name.as_str()),
+            (maker.id.as_str(), "Quillmoor Pictures")
+        );
+        assert_eq!(page.count, 2);
+        let best: Vec<&str> = page.best.iter().map(|w| w.title.as_str()).collect();
+        assert_eq!(best, ["Quillmoor Made", "Quillmoor Sold"]);
+        assert_eq!(page.filter["company"], maker.id);
+        assert_eq!(
+            page.roles,
+            BTreeMap::from([
+                ("distributor".to_string(), 1),
+                ("production".to_string(), 1)
+            ])
+        );
+        let shown = page.company.expect("the company");
+        assert_eq!(
+            (shown.kind, shown.country.as_deref()),
+            (CompanyKind::Company, Some("GB"))
+        );
+        assert!(page.keyword.is_none() && page.note.is_none());
+
+        // TMDB's network of the same number is another page.
+        let network = repo::company::by_tmdb(&state.db, CompanyKind::Network, 66_101)
+            .await
+            .expect("read")
+            .expect("kept");
+        assert_ne!(network.id, maker.id);
+        let page = page_of(&state, FacetKind::Company, &network.id, "en")
+            .await
+            .expect("a page");
+        assert_eq!(page.count, 1);
+        assert_eq!(page.roles, BTreeMap::from([("network".to_string(), 1)]));
+
+        let kept = repo::keyword::by_tmdb(&state.db, 77_301)
+            .await
+            .expect("read")
+            .expect("kept");
+        let page = page_of(&state, FacetKind::Keyword, &kept.id, "en")
+            .await
+            .expect("a page");
+        assert_eq!(
+            (page.name.as_str(), page.count),
+            ("quillmoor lighthouse", 1)
+        );
+        assert_eq!(page.filter["keywordId"], kept.id);
+        assert_eq!(page.keyword.and_then(|k| k.tmdb_id), Some(77_301));
+        assert!(page.roles.is_empty() && page.company.is_none());
+
+        // An id nothing has, or one the size of a page, is no page.
+        for asked in ["nobody", &"x".repeat(200)] {
+            for kind in [FacetKind::Company, FacetKind::Keyword] {
+                assert!(
+                    matches!(
+                        page_of(&state, kind, asked, "en").await,
+                        Err(AppError::NotFound)
+                    ),
+                    "{asked}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

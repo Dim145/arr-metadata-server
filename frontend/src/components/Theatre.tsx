@@ -175,21 +175,25 @@ export function Lightbox({
 export function Trailer({
   youtubeId,
   title,
+  name,
   open,
   onClose,
 }: {
   youtubeId: string
   title: string
+  /** What the video is called, where it is another than the work's trailer: a teaser, a clip. */
+  name?: string
   open: boolean
   onClose: () => void
 }) {
   const { t } = useI18n()
+  const heading = name ? `${title} — ${name}` : t.trailer.of(title)
 
   return (
-    <Theatre open={open} onClose={onClose} label={t.trailer.of(title)}>
+    <Theatre open={open} onClose={onClose} label={heading}>
       <div className="flex h-full flex-col items-center justify-center gap-4 px-4 py-6">
         <div className="flex w-full max-w-5xl items-center justify-between gap-3">
-          <p className="min-w-0 truncate font-display text-lg text-bone">{t.trailer.of(title)}</p>
+          <p className="min-w-0 truncate font-display text-lg text-bone">{heading}</p>
           <div className="flex shrink-0 items-center gap-1">
             <ExternalLink href={trailerPage(youtubeId)} className="min-h-11 px-2 text-sm text-bone-dim">
               {t.trailer.onYoutube}
@@ -201,7 +205,7 @@ export function Trailer({
         <div className="aspect-video w-full max-w-5xl overflow-hidden rounded-panel border border-rule bg-ink">
           <iframe
             src={trailerEmbed(youtubeId)}
-            title={t.trailer.of(title)}
+            title={heading}
             className="size-full"
             allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
             allowFullScreen

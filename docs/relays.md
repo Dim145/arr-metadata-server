@@ -4,7 +4,9 @@ Clients that ask TMDB, TheTVDB or AniList themselves — Jellyseerr and Overseer
 Yamtrack, Jellyfin's TheTVDB plugin, the anime trackers — reach those services
 through this server once their names resolve here. Each request is handed on to
 the real service, and its answer is handed back with the fields locked in this
-catalogue written in. The routes are the TMDB relay (`/3/*`, and the public lists of
+catalogue written in; or, where an administrator chose so, TMDB's and TheTVDB's
+relays answer the works this catalogue holds themselves, in the service's shape,
+and ask the service for the rest. The routes are the TMDB relay (`/3/*`, and the public lists of
 `/4/list/*`), the TheTVDB relay (`/v4/*`) and the AniList relay
 (`graphql.anilist.co`, on the clients' door) — and, where an administrator chose it,
 TMDB's pictures under `/tmdb-images/*`, on the interface's door.
@@ -12,8 +14,8 @@ TMDB's pictures under `/tmdb-images/*`, on the interface's door.
 [Pointing your stack at this server](integration.md#tmdb-clients) says how to
 redirect a client and make it trust the certificate. This page says whose key the
 services are asked with, what is written into their answers, what is taken out
-of them, what answers when a service fails, and how TMDB's pictures can come from
-this server.
+of them, what answers when a service fails, how TMDB's pictures can come from
+this server, and how the relays answer from the catalogue.
 
 The TMDB and TheTVDB relays read and do not write: a request that is not a `GET`
 or a `HEAD` is refused with `403` whoever asks, TheTVDB's sign-in aside.
@@ -177,7 +179,17 @@ and reads them, `altdvd` and `alttwo` from what was read; whatever only TheTVDB 
 answer is `503`. See [Orders](sonarr-radarr.md#orders).
 
 **AniList** (`graphql.anilist.co`): the title, description, genres and pictures of
-each entry the answer carries. AniList has no key to choose.
+each entry the answer carries; its other names, less the titles hidden here; its
+adult flag; its main studio — the studio AniList lists under the locked name put
+first and made the one main studio, or written over the name of the first where
+the client asked nothing else of it, never beside another studio's id. Where the
+entry is one season or cour of a work, as the anime identifier list places it, what
+was corrected here of when the work airs is written as it bears on that entry: a
+schedule corrected on its episodes gives its first day, its status and its next
+episode — counted from the entry's first — and once it has finished its last day
+and nothing more to air; the work's own status, first and last day, locked, say
+what they can of each entry, a film's day in cinemas its start and its end.
+Nothing is written of an entry nobody corrected. AniList has no key to choose.
 
 An AniList answer is kept an hour, and AniList's genre and tag lists, asked alone,
 half a day. One to a query signed with a person's token, to a mutation, or about
@@ -305,14 +317,20 @@ The gate, `GET /tmdb-images/{size}/{file}`, is on the interface's door:
 - a picture the media store keeps — TMDB's original, fetched for a work of the
   catalogue — is served from the store, whatever the size asked: this version makes
   no smaller copy of it for a TMDB client;
+- a picture of another source, or one uploaded, that a document written here in
+  TMDB's shape names by its key in the media store (see
+  [Answering from the catalogue](#answering-from-the-catalogue)) is served from the
+  store too, whatever the size asked, and never asked of TMDB; a key the store does
+  not hold is `404`;
 - any other is fetched from image.tmdb.org at the size asked and handed on as it
   comes, kept nowhere: `404` when TMDB has no such picture at that size, `502` when
   TMDB cannot be reached;
 - only TMDB's sizes are taken — those its configuration lists, `original`, `w45`
   to `w1280` and `h632`, and the crops of its site (`w600_and_h900_bestv2`,
   `w300_and_h450_face`, `w1920_and_h800_multi_faces`…) — and only a picture's name
-  as TMDB gives it, ending in `.jpg` or `.png`; anything else is `400`. Nothing but
-  TMDB's pictures can be had through it.
+  as TMDB gives it, or a key of the media store, ending in `.jpg` or `.png`;
+  anything else is `400`. Nothing but TMDB's pictures and the ones this server
+  keeps can be had through it.
 
 It is guarded as the TMDB relay is — `api.tmdb` off or `AMS_TMDB_PASSTHROUGH=false`
 answer `503` there too — except that a key policy (`AMS_TMDB_AUTH=apikey`) reads as
@@ -325,12 +343,109 @@ picture is no call to TMDB's API: **Opening & APIs** does not count it among the
 relay's calls, and the metrics file it under the `media` surface. Keep the gate to
 the operator's own clients: the pictures are TMDB's and their owners'.
 
+## Answering from the catalogue
+
+The TMDB and TheTVDB relays can answer the works this catalogue holds themselves,
+in their service's shape, without asking the service. **Opening & APIs** chooses it
+relay by relay, with `tmdb.relayMode` and `tvdb.relayMode`:
+
+| Value | A work held here | Anything else |
+|---|---|---|
+| `relay` (default) | the service's document, with the locks written in | the service's |
+| `local-first` | this server's own document, in the service's shape | the service's |
+
+A work is held here when its id in the service's dialect names it, it is switched
+on, and it is not for adults where this server hides them. Its document is written
+from the catalogue — the merged values, the locks, the translations held, without
+what a person hid — then, for what the catalogue does not keep, from the service's
+own document of the work as it was last fetched, and is empty or null, as the
+service writes it, where neither says anything. Neither the service nor a key of
+its own is needed: such a document is answered before any key is looked for, with
+`Content-Type: application/json;charset=utf-8` and no `Age`, and counted under
+`ams_relay_local_total{relay="tmdb"}` or `{relay="tvdb"}`. Everything else goes
+through the relay as before. AniList's relay always asks AniList.
+
+### TMDB's clients
+
+- `/3/movie/{id}` and `/3/tv/{id}`, with `credits`, `aggregate_credits`, `images`,
+  `videos`, `keywords`, `external_ids`, `release_dates`, `content_ratings`,
+  `alternative_titles`, `translations`, `episode_groups`, `recommendations` and the
+  older `releases`, `trailers` and `casts` appended, and each of them asked on its
+  own. What belongs to another of TMDB's resources — where to watch, reviews,
+  lists, works like this one — is asked of TMDB through the relay where TMDB knows
+  the work, and is empty where it cannot be asked. More than twenty appended is
+  TMDB's to refuse.
+- A series' seasons and episodes (`/3/tv/{id}/season/{n}`, `…/episode/{e}`, and
+  `season/{n}…` appended), in TMDB's own numbering: a series TheTVDB numbers
+  otherwise is answered in the order kept of TMDB's numbering (`tmdb-aired`, see
+  [Orders](sonarr-radarr.md#orders)), read from TMDB once where no refresh kept it
+  yet; a work entered by hand in its own. A season or an episode goes to TMDB only
+  when TMDB's numbering could not be read, or when the catalogue lacks it for a
+  series TMDB knows.
+- `/3/find/{id}` by an IMDb, TheTVDB, Wikidata or TVRage id; by TheTVDB's, the
+  number Sonarr keeps a series under too.
+- The first page of `/3/search/movie`, `/tv` and `/multi`: the works the catalogue
+  finds by the term first — entered by hand and corrected ones among them — then
+  TMDB's, none twice, `total_results` counting both. When TMDB fails and nothing
+  kept stands in, the catalogue's works alone.
+
+A work goes by TMDB's id; a Fan-Kai, or a work entered by hand that TMDB does not
+list, by the number Sonarr or Radarr keeps it under. A series only TheTVDB lists
+has no id in TMDB's dialect, and is not among the catalogue's search results.
+
+The document is in the language asked (`language=`, TMDB's `en-US` when none is):
+in the catalogue's own, the work as it is held; in another, what was locked in
+that language, else the translation held, else what TMDB answers a language it has
+nothing in — the original title, an empty overview, `Season 1`, `Episode 1`. A
+text locked in every language is the catalogue's own text, as the relay writes it.
+The companies, keywords, crew, videos and pictures are the catalogue's — the
+pictures in every language held, `include_image_language` honoured — and a work
+not refreshed since this version reads them from TMDB's document of it. A picture
+is named by TMDB's path; one of another source, or uploaded, only where TMDB's
+clients are sent to this server for pictures (`tmdb.images = server`), by its key
+in the media store, which the gate serves.
+
+A series' `external_ids.tvdb_id` is the number Sonarr keeps it under — TheTVDB's
+id, or one this server made for a series TMDB alone names, a Fan-Kai or a work
+entered by hand — so that Seerr hands Sonarr a number Skyhook's dialect answers. In
+either mode, the relay gives that number in place of a `tvdb_id` TMDB leaves null
+for a series held here.
+
+### TheTVDB's clients
+
+A series or a film is answered here when the catalogue holds it under the id
+asked: its TheTVDB id, or the number Sonarr keeps it under — TMDB's id plus
+100 000 000 for a series only TMDB lists, Fankai's plus 200 000 000, the number
+made of the catalogue's own id for a work entered by hand. Its record, extended or
+short, with its translations or its episodes; its pictures; its text in one
+language; a page of its episodes in any order it holds; its seasons and episodes,
+by TheTVDB's ids or by the negative ids this server gives those TheTVDB has none
+for: all are written here, in TheTVDB's shape.
+
+For what the catalogue does not keep — the characters, lists and tags, the
+pictures' ids, the seasons of the other orders — TheTVDB's own record of the series
+as last fetched is read; the companies, the pictures' sizes and scores and the
+trailers are the catalogue's, a work not refreshed since this version reading them
+from that record too. A record is in the work's own language, as TheTVDB writes
+one; a document in a language says what the catalogue holds in it and nothing
+else — an episode with no text in it has no name, as at TheTVDB. A text in a
+language held nowhere here is TheTVDB's to answer, or its `404` for a work it does
+not know; so is an order the catalogue holds none of, and everything that is not a
+series or a film — a person, a list, a company.
+
+A search lists, on its first page, the series and films the catalogue finds by the
+term before TheTVDB's own results, none twice, and counts them with TheTVDB's; when
+TheTVDB fails, the catalogue's alone. A search by an id elsewhere
+(`/search/remoteid/`, an IMDb or TMDB id) does the same. With `relay`, the pages of
+the orders this server answers itself (see [What is written into the
+answers](#what-is-written-into-the-answers)) are written as they always were.
+
 ## Answers worth knowing
 
 | Answer | When |
 |---|---|
 | `200` with `Age` | The service failed, and what was kept answered instead (see [When a service fails](#when-a-service-fails)). |
-| `400` | A TheTVDB sign-in that is none — no key, or a key named both `apikey` and `apiKey` — or, under `/tmdb-images/`, a size or a name that is not TMDB's. |
+| `400` | A TheTVDB sign-in that is none — no key, or a key named both `apikey` and `apiKey` — or, under `/tmdb-images/`, a size or a name that is not TMDB's; or, with `tvdb.relayMode = local-first`, a page of a held series' episodes narrowed to a number with no season (`episodeNumber` without `season`), refused as TheTVDB refuses it. |
 | `401`, `own_key_required` | With `client`, a key issued here was presented. |
 | `401` | Under a key policy, no key this server takes was presented. |
 | `403` | A member's key while **Members too** is off (`relay_not_for_members`), or a write, or TheTVDB's operator account asked for with a key issued here. |

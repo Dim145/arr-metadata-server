@@ -27,14 +27,18 @@ const TVDB_TYPE_NAMES: Record<string, string> = {
 
 type Named = Pick<EpisodeOrder, 'key' | 'label' | 'source' | 'isDefault'>
 
+/** TMDB's own numbering, kept beside TheTVDB's as an order of its own. */
+export const TMDB_AIRED = 'tmdb-aired'
+
 /**
- * What an order is called: the aired one, and one of TheTVDB's named only by
- * its type, in the reader's language (`words`, the dictionary's
- * `season.order`); any other by its own name.
+ * What an order is called: the aired one, one of TheTVDB's named only by its
+ * type, and TMDB's own numbering, in the reader's language (`words`, the
+ * dictionary's `season.order`); any other by its own name.
  */
 export function orderName(order: Named | undefined, words: Record<string, string>): string {
   if (!order || order.isDefault) return words.official ?? 'official'
   if (order.source === 'tvdb' && TVDB_TYPE_NAMES[order.key] === order.label) return words[order.key] ?? order.label
+  if (order.source === 'tmdb' && order.key === TMDB_AIRED) return words[TMDB_AIRED] ?? order.label
   return order.label
 }
 

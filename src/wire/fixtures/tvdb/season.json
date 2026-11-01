@@ -1,0 +1,26 @@
+{
+ "status": "success",
+ "data": {
+  "id": 963,
+  "seriesId": 70753,
+  "type": {
+   "id": 1,
+   "name": "Aired Order",
+   "type": "official",
+   "alternateName": null
+  },
+  "number": 1,
+  "nameTranslations": [],
+  "overviewTranslations": [],
+  "image": "https://artworks.thetvdb.com/banners/seasons/70753-1.jpg",
+  "imageType": 7,
+  "companies": {
+   "studio": null,
+   "network": null,
+   "production": null,
+   "distributor": null,
+   "special_effects": null
+  },
+  "lastUpdated": "2026-07-13 01:23:55"
+ }
+}

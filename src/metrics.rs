@@ -155,6 +155,8 @@ struct Registry {
     /// Answers a relay gave from what it kept, its service failing: by
     /// relay, and by where the answer came from.
     relay_stale: [[AtomicU64; 2]; RELAYS.len()],
+    /// Answers a relay gave itself, from the catalogue: by relay.
+    relay_local: [AtomicU64; RELAYS.len()],
 }
 
 static REGISTRY: Registry = Registry {
@@ -165,6 +167,7 @@ static REGISTRY: Registry = Registry {
     upstream_time: [const { Histogram::new() }; PROVIDERS.len()],
     pool_wait: Histogram::with(&WAIT_BOUNDS),
     relay_stale: [const { [const { AtomicU64::new(0) }; 2] }; RELAYS.len()],
+    relay_local: [const { AtomicU64::new(0) }; RELAYS.len()],
 };
 
 /// The index of a surface's name in [`SURFACES`].
@@ -179,10 +182,12 @@ fn surface(name: &str) -> usize {
 pub fn surface_of(path: &str) -> usize {
     let name = if path.starts_with("/v1/tvdb/")
         || path.starts_with("/v2/tvdb/")
+        || path.starts_with("/v2/tmdb/")
         || path == "/v1/scenemapping"
     {
-        // Sonarr's: Skyhook's two editions in its place, and
-        // services.sonarr.tv's list.
+        // Sonarr's: Skyhook's editions in its place — the first, the
+        // second by TheTVDB's id and by TMDB's — and services.sonarr.tv's
+        // list.
         "sonarr"
     } else if path.starts_with("/v1/") {
         "radarr"
@@ -273,6 +278,15 @@ pub fn upstream(provider: &str, started: Instant, status: Option<reqwest::Status
 pub fn relay_stale(relay: &str, from_database: bool) {
     if let Some(index) = RELAYS.iter().position(|r| *r == relay) {
         REGISTRY.relay_stale[index][usize::from(from_database)].fetch_add(1, Relaxed);
+    }
+}
+
+/// Count an answer a relay gave itself, from the catalogue, in its
+/// service's shape, without asking the service (`*.relayMode =
+/// local-first`). Nothing is counted under a relay this does not know.
+pub fn relay_local(relay: &str) {
+    if let Some(index) = RELAYS.iter().position(|r| *r == relay) {
+        REGISTRY.relay_local[index].fetch_add(1, Relaxed);
     }
 }
 
@@ -395,6 +409,18 @@ pub fn render(gauges: &[Metric]) -> String {
                 REGISTRY.relay_stale[r][f].load(Relaxed)
             ));
         }
+    }
+
+    out.push_str(
+        "# HELP ams_relay_local_total Answers a relay gave itself, from the catalogue, in its \
+         service's shape, without asking the service.\n",
+    );
+    out.push_str("# TYPE ams_relay_local_total counter\n");
+    for (r, relay) in RELAYS.iter().enumerate() {
+        out.push_str(&format!(
+            "ams_relay_local_total{{relay=\"{relay}\"}} {}\n",
+            REGISTRY.relay_local[r].load(Relaxed)
+        ));
     }
 
     out.push_str(
@@ -725,6 +751,11 @@ mod tests {
             "sonarr"
         );
         assert_eq!(SURFACES[surface_of("/v1/tvdb/search/en")], "sonarr");
+        assert_eq!(
+            SURFACES[surface_of("/v2/tmdb/shows/eng/1396/default")],
+            "sonarr"
+        );
+        assert_eq!(SURFACES[surface_of("/v2/tmdb/search")], "sonarr");
         assert_eq!(SURFACES[surface_of("/v1/movie/550")], "radarr");
         assert_eq!(SURFACES[surface_of("/v1/search")], "radarr");
         assert_eq!(SURFACES[surface_of("/plex")], "plex");
@@ -836,6 +867,24 @@ mod tests {
         );
         assert!(text.contains("ams_relay_stale_total{relay=\"anilist\",from=\"memory\"} "));
         assert!(text.contains("ams_relay_stale_total{relay=\"tmdb\",from=\"database\"} "));
+    }
+
+    #[test]
+    fn a_local_answer_is_counted_by_relay() {
+        let read = |r: usize| REGISTRY.relay_local[r].load(Relaxed);
+        let before = read(0);
+        relay_local("tmdb");
+        relay_local("tmdb");
+        relay_local("nobody");
+        // At the least: the relays' own tests count theirs meanwhile.
+        assert!(read(0) >= before + 2);
+
+        let text = render(&[]);
+        assert!(
+            text.contains("# TYPE ams_relay_local_total counter\n"),
+            "{text}"
+        );
+        assert!(text.contains("ams_relay_local_total{relay=\"tvdb\"} "));
     }
 
     #[test]

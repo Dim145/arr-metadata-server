@@ -1,0 +1,443 @@
+{
+ "status": "success",
+ "data": {
+  "id": 70753,
+  "name": "Covington Cross",
+  "slug": "covington-cross",
+  "image": "https://artworks.thetvdb.com/banners/posters/70753-2.jpg",
+  "nameTranslations": [
+   "ces",
+   "eng",
+   "fra"
+  ],
+  "overviewTranslations": [
+   "ces",
+   "eng",
+   "fra"
+  ],
+  "aliases": [],
+  "firstAired": "1992-08-25",
+  "lastAired": "1992-10-31",
+  "nextAired": "",
+  "score": 107,
+  "status": {
+   "id": 2,
+   "name": "Ended",
+   "recordType": "series",
+   "keepUpdated": false
+  },
+  "originalCountry": "usa",
+  "originalLanguage": "eng",
+  "defaultSeasonType": 1,
+  "isOrderRandomized": false,
+  "lastUpdated": "2026-07-13 01:23:56",
+  "averageRuntime": 45,
+  "episodes": null,
+  "overview": "This is a fanciful …",
+  "year": "1992",
+  "artworks": [
+   {
+    "id": 37876,
+    "image": "https://artworks.thetvdb.com/banners/fanart/original/70753-1.jpg",
+    "thumbnail": "https://artworks.thetvdb.com/banners/fanart/original/70753-1_t.jpg",
+    "language": null,
+    "type": 3,
+    "score": 100001,
+    "width": 1280,
+    "height": 720,
+    "includesText": false,
+    "thumbnailWidth": 0,
+    "thumbnailHeight": 0,
+    "updatedAt": 0,
+    "status": {
+     "id": 0,
+     "name": null
+    },
+    "tagOptions": null
+   },
+   {
+    "id": 1276926,
+    "image": "https://artworks.thetvdb.com/banners/posters/70753-2.jpg",
+    "thumbnail": "https://artworks.thetvdb.com/banners/posters/70753-2_t.jpg",
+    "language": "eng",
+    "type": 2,
+    "score": 100001,
+    "width": 680,
+    "height": 1000,
+    "includesText": true,
+    "thumbnailWidth": 0,
+    "thumbnailHeight": 0,
+    "updatedAt": 0,
+    "status": {
+     "id": 0,
+     "name": null
+    },
+    "tagOptions": null
+   },
+   {
+    "id": 1258828,
+    "image": "https://artworks.thetvdb.com/banners/posters/70753-1.jpg",
+    "thumbnail": "https://artworks.thetvdb.com/banners/posters/70753-1_t.jpg",
+    "language": "eng",
+    "type": 2,
+    "score": 100000,
+    "width": 680,
+    "height": 1000,
+    "includesText": true,
+    "thumbnailWidth": 0,
+    "thumbnailHeight": 0,
+    "updatedAt": 0,
+    "status": {
+     "id": 0,
+     "name": null
+    },
+    "tagOptions": null
+   }
+  ],
+  "companies": [
+   {
+    "id": 5,
+    "name": "ABC (US)",
+    "slug": "abc-us",
+    "nameTranslations": [
+     "eng"
+    ],
+    "overviewTranslations": [],
+    "aliases": [
+     {
+      "language": "eng",
+      "name": "American Broadcasting Company"
+     }
+    ],
+    "country": "usa",
+    "primaryCompanyType": 1,
+    "activeDate": null,
+    "inactiveDate": null,
+    "companyType": {
+     "companyTypeId": 1,
+     "companyTypeName": "Network"
+    },
+    "parentCompany": {
+     "id": null,
+     "name": null,
+     "relation": {
+      "id": null,
+      "typeName": null
+     }
+    },
+    "tagOptions": null
+   }
+  ],
+  "originalNetwork": {
+   "id": 5,
+   "name": "ABC (US)",
+   "slug": "abc-us",
+   "nameTranslations": [
+    "eng"
+   ],
+   "overviewTranslations": [],
+   "aliases": [
+    {
+     "language": "eng",
+     "name": "American Broadcasting Company"
+    }
+   ],
+   "country": "usa",
+   "primaryCompanyType": 1,
+   "activeDate": null,
+   "inactiveDate": null,
+   "companyType": {
+    "companyTypeId": 1,
+    "companyTypeName": "Network"
+   },
+   "parentCompany": {
+    "id": null,
+    "name": null,
+    "relation": {
+     "id": null,
+     "typeName": null
+    }
+   },
+   "tagOptions": [
+    {
+     "id": 492,
+     "tag": 24,
+     "tagName": "Company Type",
+     "name": "Linear Cable",
+     "helpText": "Free ad-supported TV. Examples: …"
+    }
+   ]
+  },
+  "latestNetwork": {
+   "id": 5,
+   "name": "ABC (US)",
+   "slug": "abc-us",
+   "nameTranslations": [
+    "eng"
+   ],
+   "overviewTranslations": [],
+   "aliases": [
+    {
+     "language": "eng",
+     "name": "American Broadcasting Company"
+    }
+   ],
+   "country": "usa",
+   "primaryCompanyType": 1,
+   "activeDate": null,
+   "inactiveDate": null,
+   "companyType": {
+    "companyTypeId": 1,
+    "companyTypeName": "Network"
+   },
+   "parentCompany": {
+    "id": null,
+    "name": null,
+    "relation": {
+     "id": null,
+     "typeName": null
+    }
+   },
+   "tagOptions": [
+    {
+     "id": 492,
+     "tag": 24,
+     "tagName": "Company Type",
+     "name": "Linear Cable",
+     "helpText": "Free ad-supported TV. Examples: …"
+    }
+   ]
+  },
+  "genres": [
+   {
+    "id": 1,
+    "name": "Soap",
+    "slug": "soap"
+   },
+   {
+    "id": 12,
+    "name": "Drama",
+    "slug": "drama"
+   },
+   {
+    "id": 18,
+    "name": "Adventure",
+    "slug": "adventure"
+   }
+  ],
+  "trailers": [],
+  "lists": [],
+  "remoteIds": [
+   {
+    "id": "tt0103391",
+    "type": 2,
+    "sourceName": "IMDB"
+   },
+   {
+    "id": "9721",
+    "type": 12,
+    "sourceName": "TheMovieDB.com"
+   }
+  ],
+  "characters": [
+   {
+    "id": 63495072,
+    "name": "Cedric Grey",
+    "peopleId": 273985,
+    "seriesId": 70753,
+    "series": null,
+    "movie": null,
+    "movieId": null,
+    "episodeId": null,
+    "type": 3,
+    "image": null,
+    "sort": 0,
+    "isFeatured": false,
+    "url": "https://thetvdb.com/people/273985-glenn-quinn",
+    "nameTranslations": null,
+    "overviewTranslations": null,
+    "aliases": null,
+    "peopleType": "Actor",
+    "personName": "Glenn Quinn",
+    "tagOptions": null,
+    "personImgURL": null
+   },
+   {
+    "id": 63495077,
+    "name": "Lady Elizabeth",
+    "peopleId": 273986,
+    "seriesId": 70753,
+    "series": null,
+    "movie": null,
+    "movieId": null,
+    "episodeId": null,
+    "type": 3,
+    "image": null,
+    "sort": 0,
+    "isFeatured": true,
+    "url": "https://thetvdb.com/people/273986-cherie-lunghi",
+    "nameTranslations": null,
+    "overviewTranslations": null,
+    "aliases": null,
+    "peopleType": "Actor",
+    "personName": "Cherie Lunghi",
+    "tagOptions": null,
+    "personImgURL": "https://artworks.thetvdb.com/banners/v4/actor/273986/photo/6220fd5be9eff.jpg"
+   },
+   {
+    "id": 63495081,
+    "name": "Eleanor Grey",
+    "peopleId": 273987,
+    "seriesId": 70753,
+    "series": null,
+    "movie": null,
+    "movieId": null,
+    "episodeId": null,
+    "type": 3,
+    "image": null,
+    "sort": 0,
+    "isFeatured": true,
+    "url": "https://thetvdb.com/people/273987-ione-skye",
+    "nameTranslations": null,
+    "overviewTranslations": null,
+    "aliases": null,
+    "peopleType": "Actor",
+    "personName": "Ione Skye",
+    "tagOptions": null,
+    "personImgURL": "https://artworks.thetvdb.com/banners/v4/actor/273987/photo/6945824fccbe1.jpg"
+   }
+  ],
+  "airsDays": {
+   "sunday": false,
+   "monday": false,
+   "tuesday": false,
+   "wednesday": false,
+   "thursday": false,
+   "friday": false,
+   "saturday": true
+  },
+  "airsTime": null,
+  "seasons": [
+   {
+    "id": 963,
+    "seriesId": 70753,
+    "type": {
+     "id": 1,
+     "name": "Aired Order",
+     "type": "official",
+     "alternateName": null
+    },
+    "number": 1,
+    "nameTranslations": [],
+    "overviewTranslations": [],
+    "image": "https://artworks.thetvdb.com/banners/seasons/70753-1.jpg",
+    "imageType": 7,
+    "companies": {
+     "studio": null,
+     "network": null,
+     "production": null,
+     "distributor": null,
+     "special_effects": null
+    },
+    "lastUpdated": "2026-07-13 01:23:55"
+   },
+   {
+    "id": 18221,
+    "seriesId": 70753,
+    "type": {
+     "id": 1,
+     "name": "Aired Order",
+     "type": "official",
+     "alternateName": null
+    },
+    "number": 0,
+    "nameTranslations": [],
+    "overviewTranslations": [],
+    "companies": {
+     "studio": null,
+     "network": null,
+     "production": null,
+     "distributor": null,
+     "special_effects": null
+    },
+    "lastUpdated": "2019-11-13 09:57:04"
+   },
+   {
+    "id": 1681060,
+    "seriesId": 70753,
+    "type": {
+     "id": 3,
+     "name": "Absolute Order",
+     "type": "absolute",
+     "alternateName": null
+    },
+    "number": 1,
+    "nameTranslations": [],
+    "overviewTranslations": [],
+    "companies": {
+     "studio": null,
+     "network": null,
+     "production": null,
+     "distributor": null,
+     "special_effects": null
+    },
+    "lastUpdated": "2019-11-13 09:57:04"
+   }
+  ],
+  "translations": {
+   "nameTranslations": [
+    {
+     "name": "Covington Cross",
+     "language": "ces"
+    },
+    {
+     "name": "Covington Cross",
+     "language": "eng",
+     "isPrimary": true
+    },
+    {
+     "name": "Covington Cross",
+     "language": "fra"
+    }
+   ],
+   "overviewTranslations": [
+    {
+     "overview": "Pseudohistorický příběh vypráví o …",
+     "language": "ces"
+    },
+    {
+     "overview": "This is a fanciful …",
+     "language": "eng",
+     "isPrimary": true
+    },
+    {
+     "overview": "Les aventures de Thomas …",
+     "language": "fra"
+    }
+   ],
+   "aliases": null
+  },
+  "tags": null,
+  "contentRatings": [],
+  "seasonTypes": [
+   {
+    "id": 1,
+    "name": "Aired Order",
+    "type": "official",
+    "alternateName": null
+   },
+   {
+    "id": 2,
+    "name": "DVD Order",
+    "type": "dvd",
+    "alternateName": null
+   },
+   {
+    "id": 3,
+    "name": "Absolute Order",
+    "type": "absolute",
+    "alternateName": null
+   }
+  ]
+ }
+}

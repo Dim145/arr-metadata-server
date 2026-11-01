@@ -35,7 +35,9 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   an escape hatch to turn authentication off entirely.
 - **Per-language answers.** Sonarr asks in its URL, the native API takes
   `?language=`. Translations are fetched the first time a language is asked for
-  and kept — from TMDB, then TheTVDB for the many languages TMDB does not carry.
+  and kept — from TMDB, then TheTVDB for the many languages TMDB does not carry;
+  a season's title and synopsis, and a person's biography, come in every
+  language TMDB has them in with the documents already asked for.
   A locked field stays locked in every language; a title, an overview or a
   tagline can also be locked for one language alone
   ([Editing](editing.md)).
@@ -52,7 +54,12 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   them through this server once `api4.thetvdb.com` and `graphql.anilist.co`
   resolve here: each request is handed on and its answer handed back with the
   fields locked in this catalogue written in. A TheTVDB client signs in with
-  a key issued here, and this server stands in with its own.
+  a key issued here, and this server stands in with its own. Set to answer
+  from the catalogue first (`tmdb.relayMode`, `tvdb.relayMode`, on *Opening &
+  APIs*), the TMDB and TheTVDB relays answer the works held here themselves,
+  in their service's shape and without its key — corrections and works
+  entered by hand included — and ask the service for the rest
+  ([The relays](relays.md)).
 - **Curated lists.** Selections composed by hand or by a filter, shown on
   the site and served to Sonarr and Radarr as the custom lists their import
   lists read.
@@ -201,6 +208,17 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   catalogue merges two records of one person, splits a homonym off another, gives
   a credit typed by name the person it is of, and enters somebody by hand with
   their ids ([The people](data.md#the-people), [The API](api.md#people)).
+- **The whole crew, the videos, the companies.** A work's page lists everybody
+  TMDB credits behind the camera, a department at a time — directing, writing,
+  production, then music, camera, editing and the rest — each job with its
+  people, each the way to their page, and a person known only for their crew
+  work has a tab of it on theirs. Every video the sources list follows the
+  pictures, the trailer chosen first, a YouTube one played in place and only
+  once asked for. The networks and the companies stand beside the record with
+  their logos and their countries, a role at a time, each the way to a page of
+  its own — the works it is credited on, whatever it did for them — as TMDB's
+  keywords lead to theirs; the catalogue is filtered by either from there
+  ([The API](api.md#genres-networks-years-and-notes)).
 - **A season chart, past and to come.** One page for each quarter of the
   calendar — winter from January, spring from April, summer from July, autumn
   from October — as anime season charts have it, for series and films alike:
@@ -210,7 +228,11 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   kind, trailer, genre and original language narrow it, all kept in the
   address. For whoever maintains the catalogue, the most popular of what TMDB
   lists for the same quarter that the catalogue lacks follows, each a button
-  away from being imported.
+  away from being imported. An anime series' line names the AniList and
+  MyAnimeList entry of its season that premieres in the quarter — the second
+  half of a split season among those carrying on — with its part, its
+  episodes, its status and its next episode counted from its own first, and
+  MyAnimeList's description of it a press away.
 - **Maintenance where the problem is.** The editor is a record in five tabs
   — the fields, the seasons and their episodes, the artwork, the people and
   titles, the work elsewhere — and the address carries which is open. Season

@@ -22,6 +22,8 @@ fn credit(kind: CreditType, name: &str, tmdb: Option<i64>) -> Credit {
         credit_tmdb_id: None,
         sort_order: 0,
         is_manual: false,
+        department: None,
+        job: None,
     }
 }
 
@@ -988,4 +990,66 @@ async fn the_index_counts_what_anybody_may_see_and_follows_a_work_switched_off()
     let page = index(&db, asked(None, None, false)).await.unwrap();
     assert_eq!(page.people[0].works, 1);
     assert_eq!(page.people[0].jobs, [Job::Acting]);
+}
+
+/// Somebody's name and biography in other languages, as TMDB's record of
+/// them gives them: kept beside the record, written again whole when TMDB
+/// gives some, left as they were when it gives none.
+#[tokio::test]
+async fn a_biography_is_kept_in_every_language_tmdb_gives() {
+    use crate::domain::person::PersonTranslation;
+
+    let db = testing::db().await;
+    let item = stored(&db, "Translated Biographies", |i| {
+        i.credits = vec![credit(CreditType::Actor, "Bryan Cranston", Some(17419))];
+    })
+    .await;
+    let id = filed(&db, &item.credits[0].id).await.expect("filed");
+    let translated = |language: &str, biography: &str| PersonTranslation {
+        language: language.into(),
+        name: None,
+        biography: Some(biography.into()),
+    };
+
+    write_details(
+        &db,
+        &id,
+        &Details {
+            translations: vec![
+                translated("fra", "Un acteur."),
+                translated("deu", "Ein Schauspieler."),
+            ],
+            ..Details::default()
+        },
+    )
+    .await
+    .unwrap();
+    let kept = translations(&db, &id).await.unwrap();
+    assert_eq!(
+        kept,
+        [
+            translated("deu", "Ein Schauspieler."),
+            translated("fra", "Un acteur.")
+        ]
+    );
+
+    // None given: those kept stand.
+    write_details(&db, &id, &Details::default()).await.unwrap();
+    assert_eq!(translations(&db, &id).await.unwrap().len(), 2);
+
+    // Given anew: in their place.
+    write_details(
+        &db,
+        &id,
+        &Details {
+            translations: vec![translated("ita", "Un attore.")],
+            ..Details::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        translations(&db, &id).await.unwrap(),
+        [translated("ita", "Un attore.")]
+    );
 }

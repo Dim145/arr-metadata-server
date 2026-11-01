@@ -37,7 +37,7 @@ import {
 import { airsWhenOn, releaseDay, releasedNotAired } from '../lib/platforms'
 import type { Episode, EpisodeOrder, MediaItem, PlacedEpisode } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
-import { orderName, orderNames, orderSeasons, placedEpisode } from './admin/editor/orders'
+import { TMDB_AIRED, orderName, orderNames, orderSeasons, placedEpisode } from './admin/editor/orders'
 
 export function Season() {
   const { id = '', season = '' } = useParams()
@@ -147,7 +147,9 @@ function SeasonSheet({
     : order.isFrozen
       ? t.season.orderNoteFrozen
       : order.source === 'tmdb'
-        ? t.season.orderNoteTmdb
+        ? order.key === TMDB_AIRED
+          ? t.season.orderNoteTmdbAired
+          : t.season.orderNoteTmdb
         : order.source === 'local'
           ? t.season.orderNoteLocal
           : t.season.orderNote

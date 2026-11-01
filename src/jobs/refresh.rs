@@ -919,6 +919,167 @@ fn days_ago(days: i64) -> Option<String> {
     chrono::Utc::now().checked_sub_signed(delta).map(to_rfc3339)
 }
 
+// ─── the answers kept ────────────────────────────────────────────────────────
+
+/// How old a TMDB answer may be and still be read: TMDB's terms keep what it
+/// gives six months at most.
+const REPLAYED_WITHIN_DAYS: i64 = 180;
+
+/// Works read a page at a time by [`replay_snapshots`].
+const REPLAY_PAGE: i64 = 200;
+
+/// What a pass over the answers kept did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Replayed {
+    /// The works filled in from their answers.
+    pub filled: usize,
+    /// Those whose TMDB answer was too old to read, or could not be.
+    pub passed: usize,
+}
+
+/// Fill into every work what this version keeps of the answers kept with it
+/// and older versions let go — its companies and networks (TMDB's and
+/// TheTVDB's, a role at a time as the merge takes them), TMDB's keywords and
+/// videos, the language written on each of TMDB's pictures and what TMDB
+/// says of them, the department and job of each of its crew — without
+/// asking either service: what the next refresh of each would write of
+/// them, sooner. A TMDB answer older than six months is not read.
+///
+/// The rest of TMDB's crew, beyond the kinds kept before, and the seasons'
+/// translations wait for that refresh: the first are people to be filed,
+/// the second are in the season documents, which are not kept.
+pub async fn replay_snapshots(state: &AppState) -> Result<Replayed> {
+    let oldest = chrono::Utc::now() - chrono::TimeDelta::days(REPLAYED_WITHIN_DAYS);
+    let priority = state.provider_priority();
+    let mut done = Replayed::default();
+    let mut after: Option<String> = None;
+    loop {
+        let page = repo::item::answered_by(
+            &state.db,
+            crate::providers::names::TMDB,
+            after.as_deref(),
+            REPLAY_PAGE,
+        )
+        .await?;
+        let Some((last, _)) = page.last() else {
+            break;
+        };
+        after = Some(last.clone());
+        for (id, fetched_at) in &page {
+            let fresh = crate::db::parse_rfc3339(fetched_at).is_some_and(|at| at >= oldest);
+            let filled = match fresh {
+                true => replay_one(state, id, &priority).await?,
+                false => false,
+            };
+            if filled {
+                done.filled += 1;
+            } else {
+                done.passed += 1;
+            }
+        }
+    }
+    Ok(done)
+}
+
+/// Fill one work in from its answers kept: whether it was.
+async fn replay_one(state: &AppState, id: &str, priority: &[String]) -> Result<bool> {
+    use crate::{
+        merge::{Contribution, combine},
+        providers::{names, tmdb},
+    };
+
+    let Some(work) = repo::item::get(&state.db, id).await? else {
+        return Ok(false);
+    };
+    let answers = repo::snapshot::texts(&state.db, id, &[names::TMDB, names::TVDB]).await?;
+    let text = |provider: &str| {
+        answers
+            .iter()
+            .find(|(p, _)| p == provider)
+            .and_then(|(_, payload)| serde_json::from_str::<serde_json::Value>(payload).ok())
+    };
+    let Some(raw) = text(names::TMDB) else {
+        return Ok(false);
+    };
+
+    let asked_in = crate::providers::lang::base_language(&state.language(None, None)).to_string();
+    let limits = tmdb::map::Limits::of(state);
+    let mapped = match work.kind {
+        MediaKind::Series => match serde_json::from_value::<tmdb::models::Tv>(raw) {
+            Ok(mut tv) => {
+                tv.asked_in = Some(asked_in);
+                tmdb::map::tv_to_item(&tv, &[], limits)
+            }
+            Err(_) => return Ok(false),
+        },
+        MediaKind::Movie => match serde_json::from_value::<tmdb::models::Movie>(raw) {
+            Ok(mut movie) => {
+                movie.asked_in = Some(asked_in);
+                tmdb::map::movie_to_item(&movie, limits)
+            }
+            Err(_) => return Ok(false),
+        },
+    };
+
+    // A role's companies as the merge takes them: from the first source in
+    // the priority that lists any, the other completing them.
+    let mut tvdb = MediaItem::empty(work.kind);
+    if let Some(raw) = text(names::TVDB) {
+        tvdb.companies = crate::providers::tvdb::companies_of(&raw);
+    }
+    let mut from_tmdb = MediaItem::empty(work.kind);
+    from_tmdb.companies = mapped.companies.clone();
+    let companies = combine(
+        vec![
+            Contribution {
+                provider: names::TMDB.to_string(),
+                item: from_tmdb,
+            },
+            Contribution {
+                provider: names::TVDB.to_string(),
+                item: tvdb,
+            },
+        ],
+        priority,
+    )
+    .map(|merged| merged.companies)
+    .unwrap_or_default();
+
+    let filled = repo::item::Filled {
+        companies,
+        keywords: mapped.keyword_entities.clone(),
+        videos: mapped.videos.clone(),
+        pictures: mapped
+            .images
+            .iter()
+            .map(|image| {
+                (
+                    image.url.clone(),
+                    image.language.clone(),
+                    mapped
+                        .image_details
+                        .get(&image.url)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+            })
+            .collect(),
+        jobs: mapped
+            .credits
+            .iter()
+            .filter_map(|credit| {
+                Some((
+                    credit.credit_tmdb_id.clone()?,
+                    credit.department.clone()?,
+                    credit.job.clone()?,
+                ))
+            })
+            .collect(),
+    };
+    repo::item::fill_in(&state.db, id, &filled).await?;
+    Ok(true)
+}
+
 /// Record a failed refresh, and when to try again: see
 /// [`crate::service::retry_after_failure`]. `item` is the work as it was read,
 /// when it could be.
@@ -1603,6 +1764,166 @@ mod tests {
             providers.asked().iter().any(|path| path == "/3/tv/1396"),
             "asked of TMDB"
         );
+    }
+
+    /// A pass over the answers kept fills a work in from them, asking
+    /// nobody: its companies, TheTVDB's studio among them, TMDB's keywords
+    /// and videos, what TMDB says of its pictures, its crew's jobs. A TMDB
+    /// answer more than six months old is not read.
+    #[tokio::test]
+    async fn the_answers_kept_fill_a_work_in_without_asking_anybody() {
+        use crate::domain::{CompanyRole, CoverType, Credit, CreditType, Image};
+
+        // Nobody answers there: anything asked would fail.
+        let state = server("http://127.0.0.1:9").await;
+        let stored = |title: &str, tmdb: i64| {
+            let mut item = MediaItem::empty(MediaKind::Series);
+            item.title = title.into();
+            item.slug = crate::domain::make_slug(title, None);
+            item.external_ids = ExternalIds {
+                tmdb: Some(tmdb),
+                ..Default::default()
+            };
+            item.images = vec![Image {
+                id: String::new(),
+                season_number: None,
+                cover_type: CoverType::Poster,
+                url: "https://image.tmdb.org/t/p/original/poster.jpg".into(),
+                language: None,
+                sort_order: 0,
+                source: Some("tmdb".into()),
+                is_manual: false,
+            }];
+            item.credits = vec![Credit {
+                id: String::new(),
+                credit_type: CreditType::Director,
+                person_name: "A Director".into(),
+                character_name: Some("Director".into()),
+                image: None,
+                tmdb_person_id: Some(66633),
+                credit_tmdb_id: Some(format!("director-{tmdb}")),
+                sort_order: 0,
+                is_manual: false,
+                department: None,
+                job: None,
+            }];
+            item
+        };
+        let fresh = stored("Replayed From Its Answers", 1396);
+        let old = stored("Answered Too Long Ago", 1397);
+        for item in [&fresh, &old] {
+            repo::item::upsert_traced(
+                &state.db,
+                repo::item::ItemWrite {
+                    item,
+                    replace_children: true,
+                },
+                &Provenance::default(),
+            )
+            .await
+            .expect("stored");
+        }
+        let tmdb = |tmdb: i64| {
+            serde_json::json!({
+                "id": tmdb,
+                "name": "Replayed",
+                "poster_path": "/poster.jpg",
+                "networks": [{ "id": 174, "name": "AMC", "logo_path": "/amc.png", "origin_country": "US" }],
+                "production_companies": [{ "id": 11073, "name": "Sony Pictures Television" }],
+                "keywords": { "results": [{ "id": 1508, "name": "new mexico" }] },
+                "videos": { "results": [{ "key": "abc", "site": "YouTube", "type": "Trailer", "official": true }] },
+                "images": { "posters": [{ "file_path": "/poster.jpg", "iso_639_1": "en",
+                                          "vote_average": 6.8, "vote_count": 21, "width": 2000, "height": 3000 }] },
+                "credits": { "cast": [], "crew": [
+                    { "id": 66633, "credit_id": format!("director-{tmdb}"), "name": "A Director",
+                      "job": "Director", "department": "Directing" }
+                ] }
+            })
+            .to_string()
+        };
+        let tvdb = serde_json::json!({ "status": "success", "data": {
+            "id": 81189, "name": "Replayed",
+            "companies": [
+                { "id": 389, "name": "AMC", "country": "usa", "companyType": { "companyTypeId": 1 } },
+                { "id": 77, "name": "A Studio", "country": "usa", "companyType": { "companyTypeId": 2 } }
+            ]
+        } })
+        .to_string();
+        for (item, tmdb_id) in [(&fresh, 1396), (&old, 1397)] {
+            repo::snapshot::put(&state.db, &item.id, "tmdb", &tmdb(tmdb_id), None)
+                .await
+                .expect("kept");
+            repo::snapshot::put(&state.db, &item.id, "tvdb", &tvdb, None)
+                .await
+                .expect("kept");
+        }
+        sqlx::query(state.db.sql(
+            "UPDATE media_provider_snapshot SET fetched_at = ? WHERE media_id = ? AND provider = 'tmdb'",
+        ))
+        .bind(to_rfc3339(Utc::now() - TimeDelta::days(200)))
+        .bind(&old.id)
+        .execute(state.db.pool())
+        .await
+        .expect("aged");
+
+        let done = replay_snapshots(&state).await.expect("replayed");
+        assert_eq!(
+            done,
+            Replayed {
+                filled: 1,
+                passed: 1
+            }
+        );
+
+        let mut read = repo::item::get(&state.db, &fresh.id)
+            .await
+            .unwrap()
+            .expect("the work");
+        repo::item::load_children(&state.db, &mut read)
+            .await
+            .unwrap();
+        let companies: Vec<(CompanyRole, &str, Option<i64>, Option<i64>)> = read
+            .companies
+            .iter()
+            .map(|c| {
+                (
+                    c.role,
+                    c.company.name.as_str(),
+                    c.company.tmdb_id,
+                    c.company.tvdb_id,
+                )
+            })
+            .collect();
+        assert_eq!(
+            companies,
+            [
+                (CompanyRole::Network, "AMC", Some(174), Some(389)),
+                (
+                    CompanyRole::Production,
+                    "Sony Pictures Television",
+                    Some(11073),
+                    None
+                ),
+                (CompanyRole::Studio, "A Studio", None, Some(77)),
+            ]
+        );
+        assert_eq!(read.keyword_entities.len(), 1);
+        assert_eq!(read.videos.len(), 1);
+        assert_eq!(read.images[0].language.as_deref(), Some("eng"));
+        let details = read.image_details[&read.images[0].url];
+        assert_eq!((details.width, details.vote_count), (Some(2000), Some(21)));
+        assert_eq!(read.credits[0].department.as_deref(), Some("Directing"));
+        assert_eq!(read.credits[0].job.as_deref(), Some("Director"));
+
+        let mut untouched = repo::item::get(&state.db, &old.id)
+            .await
+            .unwrap()
+            .expect("the other");
+        repo::item::load_children(&state.db, &mut untouched)
+            .await
+            .unwrap();
+        assert!(untouched.companies.is_empty() && untouched.videos.is_empty());
+        assert_eq!(untouched.credits[0].department, None);
     }
 }
 

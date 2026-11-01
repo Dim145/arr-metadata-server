@@ -12,6 +12,10 @@
 //! * **Credits** come from one provider — the highest-priority one that has any.
 //!   Unioning them would list the same actor two or three times, since nothing
 //!   reliably identifies a person across providers.
+//! * **Companies** come a role at a time from the first provider that lists
+//!   any in it — TMDB's networks, TheTVDB's studios — and the others complete
+//!   those that are the same company with their ids and logos. **Videos** are
+//!   unioned; TMDB's **keywords**, as entities, are taken whole.
 //! * **Episodes and seasons** take their *list* from one provider and their
 //!   *fields* from all of them. Merging two lists by season and episode number
 //!   sounds right and is not: providers disagree about where a season ends, so
@@ -24,8 +28,8 @@ pub mod provenance;
 pub mod rules;
 
 use crate::domain::{
-    AlternativeTitle, CountryRelease, Episode, ExternalIds, Image, MediaItem, Rating, Season,
-    Translation,
+    AlternativeTitle, CompanyCredit, CountryRelease, Episode, ExternalIds, Image, MediaItem,
+    Rating, Season, Translation, Video,
 };
 
 /// What one provider had to say.
@@ -186,6 +190,8 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
     merged
         .images
         .sort_by_key(|i| (i.cover_type.priority(), i.sort_order));
+    merged.companies.sort_by_key(|c| (c.role, c.sort_order));
+    merged.videos.sort_by_key(|v| v.sort_order);
 
     merged.title_qualifier = title_qualifier(&merged, &tvdb_names);
 
@@ -308,9 +314,17 @@ fn fold(into: &mut MediaItem, other: MediaItem) {
     merge_ids(&mut into.external_ids, other.external_ids);
 
     union_images(&mut into.images, other.images);
+    for (address, details) in other.image_details {
+        into.image_details.entry(address).or_insert(details);
+    }
     union_alternative_titles(&mut into.alternative_titles, other.alternative_titles);
     union_ratings(&mut into.ratings, other.ratings);
     union_translations(&mut into.translations, other.translations);
+    union_companies(&mut into.companies, other.companies);
+    union_videos(&mut into.videos, other.videos);
+    if into.keyword_entities.is_empty() {
+        into.keyword_entities = other.keyword_entities;
+    }
 
     // One provider's cast, not a blend of several, but for TheTVDB's people,
     // matched into it: see `rules::merge_cast`.
@@ -561,6 +575,48 @@ fn union_translations(into: &mut Vec<Translation>, other: Vec<Translation>) {
     }
 }
 
+/// A role's companies come whole from the first source that lists any in
+/// it, as a list of credits does: two sources' lists of one role cannot be
+/// blended in an order either would give. A later source's companies of a
+/// role already listed complete those that are the same company — TheTVDB's
+/// id of TMDB's AMC, TMDB's logo of TheTVDB's — and add nothing.
+fn union_companies(into: &mut Vec<CompanyCredit>, other: Vec<CompanyCredit>) {
+    let listed: Vec<crate::domain::CompanyRole> = into.iter().map(|c| c.role).collect();
+    for credit in other {
+        if !listed.contains(&credit.role) {
+            into.push(credit);
+            continue;
+        }
+        if let Some(same) = into
+            .iter_mut()
+            .find(|kept| kept.role == credit.role && kept.company.is_same(&credit.company))
+        {
+            same.company.complete(&credit.company);
+        }
+    }
+}
+
+/// Every source's videos, each once by its site and its key, the first
+/// source's ahead: a later one's numbered on after them, as pictures are.
+fn union_videos(into: &mut Vec<Video>, other: Vec<Video>) {
+    let offset = into
+        .iter()
+        .map(|v| v.sort_order)
+        .max()
+        .map(|m| m.saturating_add(1))
+        .unwrap_or(0);
+    for mut video in other {
+        if into
+            .iter()
+            .any(|kept| kept.site == video.site && kept.key == video.key)
+        {
+            continue;
+        }
+        video.sort_order = video.sort_order.saturating_add(offset);
+        into.push(video);
+    }
+}
+
 /// Fill seasons the spine already has. A season only another provider knows
 /// about is dropped, for the same reason as episodes.
 fn merge_seasons(into: &mut [Season], other: Vec<Season>) {
@@ -578,6 +634,7 @@ fn merge_seasons(into: &mut [Season], other: Vec<Season>) {
         existing.tmdb_id = existing.tmdb_id.or(season.tmdb_id);
         existing.tvdb_id = existing.tvdb_id.or(season.tvdb_id);
         union_images(&mut existing.images, season.images);
+        union_translations(&mut existing.translations, season.translations);
     }
 }
 
@@ -1136,6 +1193,7 @@ mod tests {
                 is_manual: false,
                 images: Vec::new(),
                 primary_images: Default::default(),
+                translations: Vec::new(),
             },
             Season {
                 id: "s".into(),
@@ -1148,6 +1206,7 @@ mod tests {
                 is_manual: false,
                 images: Vec::new(),
                 primary_images: Default::default(),
+                translations: Vec::new(),
             },
         ];
 
@@ -1163,6 +1222,7 @@ mod tests {
             is_manual: false,
             images: Vec::new(),
             primary_images: Default::default(),
+            translations: Vec::new(),
         }];
 
         let merged = combine(vec![a, b], &priority()).unwrap();
@@ -1758,5 +1818,205 @@ mod tests {
 
         let merged = combine(vec![tmdb, anilist], &priority()).unwrap();
         assert!(merged.is_adult);
+    }
+
+    fn company(
+        role: crate::domain::CompanyRole,
+        name: &str,
+        tmdb: Option<i64>,
+        tvdb: Option<i64>,
+        source: &str,
+        order: i32,
+    ) -> CompanyCredit {
+        CompanyCredit {
+            company: crate::domain::Company {
+                id: String::new(),
+                kind: role.kind(),
+                name: name.into(),
+                tmdb_id: tmdb,
+                tvdb_id: tvdb,
+                logo: tmdb.map(|id| format!("https://image.tmdb.org/t/p/original/{id}.png")),
+                country: None,
+            },
+            role,
+            sort_order: order,
+            source: Some(source.into()),
+        }
+    }
+
+    /// A role's companies come from the first source that lists any; the
+    /// others give the ids and the logos of the same companies, and a role
+    /// only they list.
+    #[test]
+    fn a_roles_companies_come_from_the_first_source_and_the_others_complete_them() {
+        use crate::domain::CompanyRole::{Network, Production, Studio};
+
+        let mut tmdb = base("tmdb", "Breaking Bad");
+        tmdb.item.companies = vec![
+            company(Network, "AMC", Some(174), None, "tmdb", 0),
+            company(
+                Production,
+                "Sony Pictures Television",
+                Some(11073),
+                None,
+                "tmdb",
+                0,
+            ),
+        ];
+        let mut tvdb = base("tvdb", "Breaking Bad");
+        tvdb.item.companies = vec![
+            company(Network, "amc ", None, Some(389), "tvdb", 0),
+            company(Network, "Netflix", None, Some(535), "tvdb", 1),
+            company(
+                Production,
+                "Sony Pictures Television",
+                None,
+                Some(39667),
+                "tvdb",
+                0,
+            ),
+            company(
+                Production,
+                "High Bridge Productions",
+                None,
+                Some(49088),
+                "tvdb",
+                1,
+            ),
+            company(Studio, "A Studio", None, Some(77), "tvdb", 0),
+        ];
+
+        let merged = combine(vec![tvdb, tmdb], &priority()).unwrap();
+        // Its role, its name, its ids, whether it has a logo, whose it is.
+        type Read<'a> = (
+            crate::domain::CompanyRole,
+            &'a str,
+            Option<i64>,
+            Option<i64>,
+            bool,
+            &'a str,
+        );
+        let read: Vec<Read<'_>> = merged
+            .companies
+            .iter()
+            .map(|c| {
+                (
+                    c.role,
+                    c.company.name.as_str(),
+                    c.company.tmdb_id,
+                    c.company.tvdb_id,
+                    c.company.logo.is_some(),
+                    c.source.as_deref().unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (Network, "AMC", Some(174), Some(389), true, "tmdb"),
+                (
+                    Production,
+                    "Sony Pictures Television",
+                    Some(11073),
+                    Some(39667),
+                    true,
+                    "tmdb"
+                ),
+                (Studio, "A Studio", None, Some(77), false, "tvdb"),
+            ],
+            "TMDB's lists, completed; TheTVDB's studios, which TMDB has none of"
+        );
+    }
+
+    /// Every source's videos once each; TMDB's keywords whole; what is said
+    /// of a picture, the first source's.
+    #[test]
+    fn videos_are_gathered_keywords_taken_whole_and_picture_details_kept_first() {
+        let video = |key: &str, order: i32, source: &str| crate::domain::Video {
+            id: String::new(),
+            site: "YouTube".into(),
+            key: key.into(),
+            name: None,
+            video_type: Some("Trailer".into()),
+            language: None,
+            country: None,
+            official: true,
+            published_at: None,
+            size: None,
+            tmdb_id: None,
+            source: Some(source.into()),
+            sort_order: order,
+        };
+        let keyword = |id: i64, name: &str| crate::domain::Keyword {
+            id: String::new(),
+            tmdb_id: Some(id),
+            name: name.into(),
+        };
+        let details = |votes: f64| crate::domain::ImageDetails {
+            vote_average: Some(votes),
+            ..Default::default()
+        };
+
+        let mut tmdb = base("tmdb", "T");
+        tmdb.item.videos = vec![video("a", 0, "tmdb"), video("b", 1, "tmdb")];
+        tmdb.item.keyword_entities = vec![keyword(1, "one")];
+        tmdb.item
+            .image_details
+            .insert("https://p".into(), details(5.0));
+        let mut other = base("radarr", "T");
+        other.item.videos = vec![video("b", 0, "radarr"), video("c", 0, "radarr")];
+        other.item.keyword_entities = vec![keyword(2, "two")];
+        other
+            .item
+            .image_details
+            .insert("https://p".into(), details(9.0));
+        other
+            .item
+            .image_details
+            .insert("https://q".into(), details(7.0));
+
+        let merged = combine(vec![other, tmdb], &priority()).unwrap();
+        let keys: Vec<(&str, i32)> = merged
+            .videos
+            .iter()
+            .map(|v| (v.key.as_str(), v.sort_order))
+            .collect();
+        assert_eq!(keys, [("a", 0), ("b", 1), ("c", 2)]);
+        assert_eq!(merged.keyword_entities, [keyword(1, "one")]);
+        assert_eq!(merged.image_details["https://p"].vote_average, Some(5.0));
+        assert_eq!(merged.image_details["https://q"].vote_average, Some(7.0));
+    }
+
+    /// A season's translations come from whoever has them, whoever numbers
+    /// the seasons: one a language — the numbering source's, as its own
+    /// fields are, then the others' in the languages it lacks.
+    #[test]
+    fn a_seasons_translations_are_gathered_one_a_language() {
+        let translated = |language: &str, title: &str| Translation {
+            language: language.into(),
+            title: Some(title.into()),
+            overview: None,
+            tagline: None,
+            is_manual: false,
+        };
+        let mut tvdb = base("tvdb", "T");
+        tvdb.item.episodes = vec![episode(1, 1)];
+        tvdb.item.seasons = vec![crate::db::repo::child::blank_season(1)];
+        tvdb.item.seasons[0].translations = vec![translated("deu", "Staffel eins")];
+        let mut tmdb = base("tmdb", "T");
+        tmdb.item.seasons = vec![crate::db::repo::child::blank_season(1)];
+        tmdb.item.seasons[0].translations = vec![
+            translated("fra", "Saison un"),
+            translated("deu", "Erste Staffel"),
+        ];
+
+        let merged = combine(vec![tvdb, tmdb], &priority()).unwrap();
+        let mut titles: Vec<(&str, &str)> = merged.seasons[0]
+            .translations
+            .iter()
+            .map(|t| (t.language.as_str(), t.title.as_deref().unwrap_or_default()))
+            .collect();
+        titles.sort_unstable();
+        assert_eq!(titles, [("deu", "Staffel eins"), ("fra", "Saison un")]);
     }
 }

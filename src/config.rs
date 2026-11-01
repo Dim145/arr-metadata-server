@@ -1046,7 +1046,7 @@ impl Config {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Api {
-    /// `/v1/tvdb/*`, in Skyhook's place.
+    /// `/v1/tvdb/*`, `/v2/tvdb/*` and `/v2/tmdb/*`, in Skyhook's place.
     Sonarr,
     /// `/v1/movie/*`, `/v1/search`, `/v1/list/*`, in api.radarr.video's place.
     Radarr,
@@ -1093,10 +1093,11 @@ impl Api {
     /// Which API a request to `surface` at `path` is a call to.
     pub fn of(surface: Surface, path: &str) -> Api {
         match surface {
-            // Skyhook's two editions, and services.sonarr.tv's list: Sonarr's.
+            // Skyhook's editions, and services.sonarr.tv's list: Sonarr's.
             Surface::Arr
                 if path.starts_with("/v1/tvdb")
                     || path.starts_with("/v2/tvdb")
+                    || path.starts_with("/v2/tmdb")
                     || path == "/v1/scenemapping" =>
             {
                 Api::Sonarr
@@ -1271,6 +1272,11 @@ mod tests {
             Api::Sonarr
         );
         assert_eq!(Api::of(Surface::Arr, "/v2/tvdb/search"), Api::Sonarr);
+        assert_eq!(
+            Api::of(Surface::Arr, "/v2/tmdb/shows/eng/1396/default"),
+            Api::Sonarr
+        );
+        assert_eq!(Api::of(Surface::Arr, "/v2/tmdb/search"), Api::Sonarr);
         assert_eq!(Api::of(Surface::Arr, "/v1/scenemapping"), Api::Sonarr);
         assert_eq!(Api::of(Surface::Arr, "/v1/movie/603"), Api::Radarr);
         // Plex's provider has a surface, and a switch, of its own.

@@ -26,8 +26,18 @@
 //! naming this server. And where an administrator chose this server for
 //! TMDB's pictures (`tmdb.images = server`), TMDB's configuration sends its
 //! clients to this server's gate for them ([`super::tmdb_images`]).
+//!
+//! Where an administrator chose so (`tmdb.relayMode = local-first`), a work
+//! this server holds is answered by this server itself, in TMDB's shape and
+//! from the catalogue, with no key of TMDB's and without asking TMDB: its
+//! document and what hangs off it, its seasons and episodes where the
+//! catalogue numbers them as TMDB does, `find`, and the catalogue's works
+//! first on a search's first page ([`here`]). A series' TheTVDB id is the
+//! number Sonarr keeps it under, there and wherever TMDB has none for a
+//! series held here, so that a client handing it to Sonarr hands one that
+//! Skyhook's dialect answers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use axum::{
     Json,
@@ -49,9 +59,12 @@ use crate::{
     db::repo,
     domain::{CoverType, CreditType, Episode, ExternalSource, MediaItem, MediaKind},
     error::{AppError, AppResult},
-    providers::lang::iso_3166_2_to_3,
-    service::{self, language},
+    service::{self, ids, language},
     state::AppState,
+    wire::{
+        self,
+        tmdb::{Withheld, crew_kind},
+    },
 };
 
 /// Query parameters this server controls and the client does not.
@@ -197,6 +210,34 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
         return Ok(v4_refused(state.config.server.public_url.as_deref()));
     }
 
+    // A read carries nothing in its body TMDB looks at: whatever a caller
+    // put there stays here, so what is kept is the answer to the path and
+    // the query alone.
+    let (parts, _) = request.into_parts();
+
+    // A work this server holds, answered by this server itself in TMDB's
+    // shape where an administrator chose so (`tmdb.relayMode =
+    // local-first`): neither TMDB nor a key of TMDB's is needed for it, so
+    // it is answered before any key is looked for. Anything else — a work
+    // held nowhere here, a path not answered here — goes on to TMDB.
+    if !v4
+        && matches!(parts.method, Method::GET | Method::HEAD)
+        && relay::local_first(&state, relay::Service::Tmdb)
+        && let Some(asked) = here::recognise(parts.uri.path())
+        && let Some(answer) = here::answer(&state, &parts, asked).await?
+    {
+        return Ok(answer);
+    }
+    relayed(state, parts).await
+}
+
+/// TMDB's answer to a request, with this server's credentials or the
+/// client's own as an administrator chose, kept, shared, standing in when
+/// TMDB fails, and patched with the locks: the relay itself, which
+/// [`proxy`] hands every request it does not answer itself.
+async fn relayed(state: AppState, parts: Parts) -> AppResult<Response> {
+    let v4 = parts.uri.path().starts_with("/4/");
+
     // Whose key TMDB is asked with: this server's, in place of whatever the
     // client sent — or, where an administrator chose so, the client's own,
     // as it came. A key issued here is then refused before TMDB is asked: it
@@ -215,7 +256,7 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
             Asking::Operator(api_key)
         }
         RelayCredential::Client => {
-            if relay::carries_key_issued_here(request.headers(), request.uri()) {
+            if relay::carries_key_issued_here(&parts.headers, &parts.uri) {
                 return Ok(relay::key_issued_here_refused(
                     "TMDB",
                     "tmdb.relayCredential",
@@ -224,11 +265,6 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
             Asking::Client
         }
     };
-
-    // A read carries nothing in its body TMDB looks at: whatever a caller
-    // put there stays here, so what is kept is the answer to the path and
-    // the query alone.
-    let (parts, _) = request.into_parts();
 
     // Reading only. The clients this relay exists for — Jellyseerr, Overseerr,
     // Plex — never write, and a relay that forwards writes is one that lets any
@@ -261,6 +297,8 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     let patchable = patch_target(parts.uri.path());
     // A feed of changes, which the works changed here are laid beside.
     let feed = changes::of(parts.uri.path());
+    // A series' ids, where TMDB may have no TheTVDB id for one held here.
+    let ids_of = tvdb_slot(parts.uri.path());
 
     // What TMDB answered last time, while it is still good: a read that is
     // the same for every caller — never one that mints or uses a TMDB
@@ -280,7 +318,8 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     // The caller's validators travel only with a request answered for it
     // alone and as TMDB wrote it: TMDB's "unchanged" is one caller's
     // answer, about bytes this server does not hand on as they came.
-    let validators = filed_as.is_none() && patchable.is_none() && feed.is_none();
+    let validators =
+        filed_as.is_none() && patchable.is_none() && feed.is_none() && ids_of.is_none();
     let ask = relay::Ask {
         service: relay::Service::Tmdb,
         key: filed_as.clone(),
@@ -316,7 +355,7 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     // errors pass through untouched. What stood in for TMDB is written as
     // what it answers is: the locks are this server's, and current.
     if status == StatusCode::OK
-        && (patchable.is_some() || feed.is_some())
+        && (patchable.is_some() || feed.is_some() || ids_of.is_some())
         && relay::is_json(&headers)
         && let Ok(mut document) = serde_json::from_slice::<Value>(&bytes)
     {
@@ -328,6 +367,9 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
         if let Some(kind) = feed {
             changed |= with_changes_here(&state, &mut document, kind, &parts.uri).await?;
         }
+        if let Some((tmdb_id, slot)) = ids_of {
+            changed |= with_tvdb_id(&state, &mut document, tmdb_id, slot).await?;
+        }
         if changed {
             // TMDB's validators described TMDB's bytes; the patched document
             // is tagged by this server's own layer, and kept as long as it
@@ -338,6 +380,68 @@ pub async fn proxy(State(state): State<AppState>, request: Request) -> AppResult
     }
 
     Ok((status, headers, Body::from(bytes)).into_response())
+}
+
+/// Where a series' TheTVDB id is in a document of TMDB's: the ids asked on
+/// their own (`/3/tv/{id}/external_ids`), or appended to the series'
+/// document (`/3/tv/{id}`, under `external_ids`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TvdbSlot {
+    Alone,
+    Appended,
+}
+
+/// The series and the place of its TheTVDB id, for a path of TMDB's that
+/// may carry one.
+fn tvdb_slot(path: &str) -> Option<(i64, TvdbSlot)> {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["3", "tv", id] => Some((id.parse().ok()?, TvdbSlot::Appended)),
+        ["3", "tv", id, "external_ids"] => Some((id.parse().ok()?, TvdbSlot::Alone)),
+        _ => None,
+    }
+}
+
+/// A series' TheTVDB id where TMDB has none for one held here: the number
+/// Sonarr keeps the series under ([`ids::for_client`]) — TheTVDB's id the
+/// catalogue knows, or one this server made — so that a client that hands
+/// the series on to Sonarr by it, as Seerr does, hands one Skyhook's
+/// dialect answers. A TheTVDB id TMDB gives stays. Whether it was written.
+async fn with_tvdb_id(
+    state: &AppState,
+    document: &mut Value,
+    tmdb_id: i64,
+    slot: TvdbSlot,
+) -> AppResult<bool> {
+    let ids = match slot {
+        TvdbSlot::Alone => Some(&mut *document),
+        TvdbSlot::Appended => document.get_mut("external_ids"),
+    };
+    let Some(Value::Object(ids)) = ids else {
+        return Ok(false);
+    };
+    if !ids.get("tvdb_id").is_some_and(Value::is_null) {
+        return Ok(false);
+    }
+    let source = ExternalSource::tmdb_for(MediaKind::Series);
+    let Some(found) =
+        repo::item::find_id_by_external(&state.db, source, &tmdb_id.to_string()).await?
+    else {
+        return Ok(false);
+    };
+    let Some(item) = service::load(state, &found).await? else {
+        return Ok(false);
+    };
+    let Some(handed) = ids::for_client(
+        MediaKind::Series,
+        &item.id,
+        item.is_manual,
+        &item.external_ids,
+    ) else {
+        return Ok(false);
+    };
+    ids.insert("tvdb_id".into(), json!(handed));
+    Ok(true)
 }
 
 /// A page of TMDB's changes of a kind of work, the works changed here laid
@@ -1263,76 +1367,6 @@ fn catalogue_episode(
     })
 }
 
-/// What the sources gave a work and a person hid here, as TMDB names each:
-/// a credit by the person's TMDB id and its kind, a picture by the path TMDB
-/// files it under, an alternative title by its text and the country TMDB
-/// files it for. A credit a source named by the person's name alone — one of
-/// Skyhook's, Fan-Kai's — is none TMDB's lists can be told by: TMDB names
-/// every person by an id, and a name could be somebody else's.
-struct Withheld {
-    credits: Vec<(CreditType, i64)>,
-    pictures: HashSet<String>,
-    titles: Vec<(String, Option<String>)>,
-}
-
-impl Withheld {
-    fn of(item: &MediaItem, unlocalize: &dyn Fn(&str) -> String) -> Self {
-        Self {
-            credits: item
-                .hidden
-                .credits
-                .iter()
-                .filter_map(|credit| Some((credit.credit_type, credit.tmdb_person_id?)))
-                .collect(),
-            pictures: item
-                .hidden
-                .images
-                .iter()
-                .filter_map(|image| tmdb_image_path(&unlocalize(&image.url)))
-                .collect(),
-            titles: item
-                .hidden
-                .alternative_titles
-                .iter()
-                .map(|title| {
-                    (
-                        folded(&title.title),
-                        title.language.clone().filter(|code| !code.is_empty()),
-                    )
-                })
-                .collect(),
-        }
-    }
-
-    fn hides(&self, kind: CreditType, person: i64) -> bool {
-        self.credits.contains(&(kind, person))
-    }
-
-    /// Whether TMDB's alternative title is one hidden here: its text, its
-    /// case and the blanks around it aside, and its country, as the
-    /// catalogue files it ([`iso_3166_2_to_3`]).
-    fn hides_title(&self, entry: &Value) -> bool {
-        let Some(title) = entry.get("title").and_then(Value::as_str) else {
-            return false;
-        };
-        let country = entry
-            .get("iso_3166_1")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|code| !code.is_empty())
-            .map(iso_3166_2_to_3);
-        let title = folded(title);
-        self.titles
-            .iter()
-            .any(|(text, filed)| *text == title && *filed == country)
-    }
-}
-
-/// A title as it is compared: its case and the blanks around it aside.
-fn folded(text: &str) -> String {
-    text.trim().to_lowercase()
-}
-
 /// What a person hid of a work, taken out of TMDB's document of it: of its
 /// people — a series' creators, its `credits` and `aggregate_credits` when
 /// they were asked with it — of its pictures and of its other titles. The
@@ -1385,19 +1419,6 @@ fn take_people(map: &mut Map<String, Value>, withheld: &Withheld) -> bool {
         taken |= take_crew(crew, withheld);
     }
     taken
-}
-
-/// The kind of credit a job of TMDB's crew is, as the catalogue reads it
-/// ([`crate::providers::tmdb::map`]): a director by the job, a producer by
-/// the job — the producers proper, not the executive ones — and a writer by
-/// the department, whatever the job.
-fn crew_kind(job: &str, department: Option<&str>) -> Option<CreditType> {
-    match job {
-        "Director" => Some(CreditType::Director),
-        "Producer" => Some(CreditType::Producer),
-        _ if department == Some("Writing") => Some(CreditType::Writer),
-        _ => None,
-    }
 }
 
 /// TMDB's crew, less the jobs hidden here: an entry a job, or in a series'
@@ -1511,9 +1532,7 @@ fn tmdb_genres(theirs: &[Value], locked: &[String]) -> Option<Vec<Value>> {
 /// The path TMDB files an image under, from its address: `/abc.jpg` from
 /// `https://image.tmdb.org/t/p/original/abc.jpg`, whatever the size asked.
 fn tmdb_image_path(address: &str) -> Option<String> {
-    let rest = address.strip_prefix("https://image.tmdb.org/t/p/")?;
-    let (_size, file) = rest.split_once('/')?;
-    (!file.is_empty() && !file.contains('/')).then(|| format!("/{file}"))
+    wire::tmdb::tmdb_path(address)
 }
 
 /// Canonical status back to TMDB's vocabulary; anything else is left as
@@ -1524,6 +1543,920 @@ fn tmdb_series_status(status: &str) -> Option<&'static str> {
         "upcoming" => Some("Planned"),
         "continuing" => Some("Returning Series"),
         _ => None,
+    }
+}
+
+/// What this server answers itself, in TMDB's shape, where an administrator
+/// chose so (`tmdb.relayMode = local-first`): a work it holds — found by
+/// its id in TMDB's dialect ([`ids::for_tmdb`]), switched on, and for
+/// adults only where this server shows them — its own document with what is
+/// appended to it, what hangs off it asked on its own, its seasons and
+/// episodes where the catalogue numbers them as TMDB does, `find` by an id
+/// of another site's; and the first page of a search, the works the
+/// catalogue finds by the term before TMDB's. The documents are written by
+/// [`crate::wire::tmdb`].
+///
+/// Neither TMDB nor a key of TMDB's is needed for any of it. What another
+/// resource of TMDB's holds — where to watch a work, its reviews, the works
+/// like it — is asked of TMDB through the relay where TMDB knows the work,
+/// and added; where TMDB cannot be asked, or does not know the work, it is
+/// the empty list TMDB writes. Anything else goes on to TMDB, as it would
+/// without the setting: a work held nowhere here, a season TMDB numbers
+/// otherwise than the catalogue, a path this server does not write.
+mod here {
+    use std::collections::{HashMap, HashSet};
+
+    use axum::{
+        http::{HeaderValue, StatusCode, Uri, header, request::Parts},
+        response::{IntoResponse, Response},
+    };
+    use serde_json::{Map, Value, json};
+
+    use super::{ANSWER_LIMIT, asked_language, relayed};
+    use crate::{
+        api::{relay, tmdb_images},
+        db::repo,
+        domain::{EpisodeOrder, ExternalSource, MediaItem, MediaKind},
+        error::AppResult,
+        media::Media,
+        providers::names,
+        service::{self, ids, language, orders},
+        state::AppState,
+        wire::tmdb::{self as shape, EpisodeText, Filters, Language, Numbering, Part, Work},
+    };
+
+    /// A path of TMDB's this server may answer itself.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub enum Asked {
+        /// `/3/movie/{id}`, `/3/tv/{id}`: a work's own document — or what
+        /// hangs off it, `part`: `credits`, `watch/providers`.
+        Title {
+            kind: MediaKind,
+            id: i64,
+            part: Option<String>,
+        },
+        /// `/3/tv/{id}/season/{n}`, or what hangs off it.
+        Season {
+            id: i64,
+            season: i32,
+            part: Option<String>,
+        },
+        /// `/3/tv/{id}/season/{n}/episode/{e}`, or what hangs off it.
+        Episode {
+            id: i64,
+            season: i32,
+            episode: i32,
+            part: Option<String>,
+        },
+        /// `/3/find/{id}`: a work by an id of another site's.
+        Find { external_id: String },
+        /// `/3/search/{movie,tv,multi}`.
+        Search { kind: Option<MediaKind> },
+    }
+
+    /// The paths this server may answer itself, exactly; any other is
+    /// TMDB's.
+    pub fn recognise(path: &str) -> Option<Asked> {
+        let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+        let id = |text: &str| text.parse::<i64>().ok().filter(|id| *id > 0);
+        let number = |text: &str| text.parse::<i32>().ok().filter(|n| *n >= 0);
+        let part = |rest: &[&str]| -> Option<Option<String>> {
+            if rest.is_empty() {
+                return Some(None);
+            }
+            rest.iter()
+                .all(|segment| !segment.is_empty())
+                .then(|| Some(rest.join("/")))
+        };
+        match segments.as_slice() {
+            ["3", "search", "movie"] => Some(Asked::Search {
+                kind: Some(MediaKind::Movie),
+            }),
+            ["3", "search", "tv"] => Some(Asked::Search {
+                kind: Some(MediaKind::Series),
+            }),
+            ["3", "search", "multi"] => Some(Asked::Search { kind: None }),
+            ["3", "find", external_id] => Some(Asked::Find {
+                external_id: urlencoding::decode(external_id).ok()?.trim().to_string(),
+            }),
+            [
+                "3",
+                "tv",
+                series,
+                "season",
+                season,
+                "episode",
+                episode,
+                rest @ ..,
+            ] => Some(Asked::Episode {
+                id: id(series)?,
+                season: number(season)?,
+                episode: number(episode)?,
+                part: part(rest)?,
+            }),
+            ["3", "tv", series, "season", season, rest @ ..] => Some(Asked::Season {
+                id: id(series)?,
+                season: number(season)?,
+                part: part(rest)?,
+            }),
+            ["3", "movie", movie, rest @ ..] => Some(Asked::Title {
+                kind: MediaKind::Movie,
+                id: id(movie)?,
+                part: part(rest)?,
+            }),
+            ["3", "tv", series, rest @ ..] => Some(Asked::Title {
+                kind: MediaKind::Series,
+                id: id(series)?,
+                part: part(rest)?,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The answer this server gives itself, or none for TMDB to answer.
+    pub async fn answer(
+        state: &AppState,
+        parts: &Parts,
+        asked: Asked,
+    ) -> AppResult<Option<Response>> {
+        let written = match asked {
+            Asked::Title { kind, id, part } => title(state, parts, kind, id, part).await?,
+            Asked::Season { id, season, part } => {
+                season_or_episode(state, parts, id, season, None, part).await?
+            }
+            Asked::Episode {
+                id,
+                season,
+                episode,
+                part,
+            } => season_or_episode(state, parts, id, season, Some(episode), part).await?,
+            Asked::Find { external_id } => find(state, parts, &external_id).await?,
+            Asked::Search { kind } => return search(state, parts, kind).await,
+        };
+        Ok(written.map(|(status, document)| respond(parts, status, &document)))
+    }
+
+    /// A document written here: TMDB's type of answer, with no age — it is
+    /// this server's own — and validators this server's layer puts on it.
+    /// Counted apart, and said in the log.
+    fn respond(parts: &Parts, status: StatusCode, document: &Value) -> Response {
+        crate::metrics::relay_local("tmdb");
+        tracing::debug!(path = %parts.uri.path(), %status, "answered here in TMDB's shape");
+        let body = serde_json::to_vec(document).unwrap_or_default();
+        let mut response = (status, body).into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json;charset=utf-8"),
+        );
+        response
+    }
+
+    // ─── what a document is written from ─────────────────────────────────
+
+    /// A work held here under its id in TMDB's dialect, as a document of
+    /// TMDB's shape may be written of it: switched on, for adults only where
+    /// this server shows them, and known to TMDB's clients by that very id.
+    async fn held(state: &AppState, kind: MediaKind, id: i64) -> AppResult<Option<MediaItem>> {
+        let found = if ids::is_own(id) {
+            service::own_holders(state, kind).await?.remove(&id)
+        } else if kind == MediaKind::Series
+            && let Some(fankai) = ids::from_fankai(id)
+        {
+            repo::item::find_id_by_external(&state.db, ExternalSource::Fankai, &fankai.to_string())
+                .await?
+        } else {
+            let source = ExternalSource::tmdb_for(kind);
+            repo::item::find_id_by_external(&state.db, source, &id.to_string()).await?
+        };
+        let Some(found) = found else {
+            return Ok(None);
+        };
+        Ok(service::load(state, &found)
+            .await?
+            .filter(|item| item.kind == kind && answered(state, item) == Some(id)))
+    }
+
+    /// The id a work held here is answered under in TMDB's dialect, where
+    /// it is answered at all: switched on, and for adults only where this
+    /// server shows them.
+    fn answered(state: &AppState, item: &MediaItem) -> Option<i64> {
+        if !item.is_enabled || (item.is_adult && !state.adult_visible()) {
+            return None;
+        }
+        ids::for_tmdb(item.kind, &item.id, item.is_manual, &item.external_ids)
+    }
+
+    /// What a document of a work is written from beside the work: TMDB's
+    /// own document of it, whose numbering its seasons are, the language
+    /// asked, and what is held in that language of its episodes.
+    struct Context {
+        snapshot: Option<Value>,
+        /// The series' orders, as kept, and which numbers its seasons as
+        /// TMDB does.
+        orders: Vec<EpisodeOrder>,
+        numbering: Choice,
+        language: Language,
+        filters: Filters,
+        texts: HashMap<(i32, i32), EpisodeText>,
+        gate: bool,
+    }
+
+    /// Whose numbering a series' seasons are written in.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum Choice {
+        /// The catalogue's own: TMDB's too, or the only one there is.
+        Own,
+        /// The order of that key, which keeps TMDB's numbering.
+        Order(String),
+        /// TMDB's, which nothing here keeps.
+        Theirs,
+    }
+
+    impl Context {
+        /// What a document of a work is written from — reading TMDB's
+        /// numbering of a series first where none is kept and its seasons
+        /// are asked for (`seasons`), as Skyhook's TMDB edition reads it.
+        async fn of(
+            state: &AppState,
+            parts: &Parts,
+            item: &MediaItem,
+            seasons: bool,
+        ) -> AppResult<Self> {
+            let snapshot = snapshot_of(state, item).await?;
+            let (orders, numbering) = numbering_of(state, item, snapshot.as_ref(), seasons).await?;
+            let mut context = Self::with(state, parts, item, snapshot, numbering, true).await?;
+            context.orders = orders;
+            Ok(context)
+        }
+
+        /// Whether a series' seasons are written here: in a numbering that
+        /// is TMDB's.
+        fn numbers_seasons(&self) -> bool {
+            self.numbering != Choice::Theirs
+        }
+
+        fn numbering(&self) -> Numbering<'_> {
+            match &self.numbering {
+                Choice::Own => Numbering::Own,
+                Choice::Order(key) => self
+                    .orders
+                    .iter()
+                    .find(|order| order.key == *key)
+                    .map_or(Numbering::Theirs, Numbering::Order),
+                Choice::Theirs => Numbering::Theirs,
+            }
+        }
+
+        /// What a work is listed from on a page of results, which carries
+        /// none of its seasons: TMDB's document of it, and the language.
+        async fn listed(state: &AppState, parts: &Parts, item: &MediaItem) -> AppResult<Self> {
+            let snapshot = snapshot_of(state, item).await?;
+            Self::with(state, parts, item, snapshot, Choice::Theirs, false).await
+        }
+
+        /// The rest, `episodes` saying whether the episodes' text is read.
+        async fn with(
+            state: &AppState,
+            parts: &Parts,
+            item: &MediaItem,
+            snapshot: Option<Value>,
+            numbering: Choice,
+            episodes: bool,
+        ) -> AppResult<Self> {
+            let language = Language::new(&asked_language(&parts.uri), &language::stored(state));
+            let named = asked(&parts.uri, "language").is_some();
+            let filters = Filters::from_query(parts.uri.query(), named.then_some(&language));
+            let texts = if episodes && item.kind == MediaKind::Series && !language.is_stored() {
+                repo::translation::for_episodes(&state.db, &item.id, &language.asked)
+                    .await?
+                    .into_iter()
+                    .map(|(at, text)| {
+                        let text = EpisodeText {
+                            title: text.title,
+                            overview: text.overview,
+                        };
+                        (at, text)
+                    })
+                    .collect()
+            } else {
+                HashMap::new()
+            };
+            Ok(Self {
+                snapshot,
+                orders: Vec::new(),
+                numbering,
+                language,
+                filters,
+                texts,
+                gate: tmdb_images::base(state).is_some(),
+            })
+        }
+
+        fn work<'a>(&'a self, item: &'a MediaItem, id: i64, pictures: &'a Kept<'a>) -> Work<'a> {
+            let tvdb_id = (item.kind == MediaKind::Series)
+                .then(|| {
+                    ids::for_client(
+                        MediaKind::Series,
+                        &item.id,
+                        item.is_manual,
+                        &item.external_ids,
+                    )
+                })
+                .flatten();
+            Work::new(item, id, &self.language, pictures)
+                .with_snapshot(self.snapshot.as_ref())
+                .with_tvdb_id(tvdb_id)
+                .numbered(self.numbering())
+                .with_episode_texts(self.texts.clone())
+        }
+    }
+
+    /// TMDB's own document of a work, as it was last fetched: in the
+    /// catalogue's language, with what this server asks TMDB for with it.
+    async fn snapshot_of(state: &AppState, item: &MediaItem) -> AppResult<Option<Value>> {
+        if item.external_ids.tmdb.is_none() {
+            return Ok(None);
+        }
+        let texts = repo::snapshot::texts(&state.db, &item.id, &[names::TMDB]).await?;
+        Ok(texts
+            .into_iter()
+            .next()
+            .and_then(|(_, text)| serde_json::from_str(&text).ok()))
+    }
+
+    /// Whose numbering a series' seasons are written in, and its orders: its
+    /// own where no other source numbers it — entered by hand, named by no
+    /// TMDB id; TMDB's own numbering where the catalogue keeps it
+    /// (`tmdb-aired`), read first from TMDB where none is kept and `read`
+    /// asks so ([`orders::for_clients`]); else, for a series no TheTVDB
+    /// numbers, the order frozen as its numbering, or its own where TMDB's
+    /// document numbers its seasons alike; TMDB's otherwise.
+    async fn numbering_of(
+        state: &AppState,
+        item: &MediaItem,
+        snapshot: Option<&Value>,
+        read: bool,
+    ) -> AppResult<(Vec<EpisodeOrder>, Choice)> {
+        if item.kind != MediaKind::Series || item.is_manual || item.external_ids.tmdb.is_none() {
+            return Ok((Vec::new(), Choice::Own));
+        }
+        let kept = if read {
+            orders::for_clients(state, item, Some(orders::TMDB_AIRED)).await?
+        } else {
+            repo::order::list(&state.db, &item.id).await?
+        };
+        let tmdbs = orders::in_use(item, &kept, orders::TMDB_AIRED).map(|order| order.key.clone());
+        if let Some(key) = tmdbs {
+            return Ok((kept, Choice::Order(key)));
+        }
+        let by_tvdb = orders::aired(&kept).is_none_or(|aired| aired.source == names::TVDB);
+        let frozen = orders::frozen(item, &kept).map(|order| order.key.clone());
+        let choice = match frozen {
+            _ if by_tvdb => Choice::Theirs,
+            Some(key) => Choice::Order(key),
+            None if shape::numbered_alike(item, snapshot) => Choice::Own,
+            None => Choice::Theirs,
+        };
+        Ok((kept, choice))
+    }
+
+    /// The catalogue's pictures as TMDB's clients are given them: TMDB's by
+    /// TMDB's path, and — where TMDB's clients are sent to this server for
+    /// pictures — a copy kept here of any other by the name the gate
+    /// serves it under.
+    struct Kept<'a> {
+        media: &'a Media,
+        gate: bool,
+    }
+
+    impl shape::Pictures for Kept<'_> {
+        fn origin(&self, address: &str) -> String {
+            self.media.unlocalize(address)
+        }
+
+        fn kept(&self, address: &str) -> Option<String> {
+            if !self.gate {
+                return None;
+            }
+            tmdb_images::kept_name(Media::key_in(address)?)
+        }
+
+        fn size(&self, address: &str) -> Option<(u32, u32)> {
+            let keyed = self.media.keyed(Media::key_in(address)?)?;
+            Some((keyed.look.width?, keyed.look.height?))
+        }
+    }
+
+    // ─── a work, its seasons, its episodes ───────────────────────────────
+
+    /// The names a request appends to the document asked, each once, as
+    /// TMDB reads them.
+    fn appends(uri: &Uri) -> Vec<String> {
+        let mut seen: HashSet<String> = HashSet::new();
+        asked(uri, "append_to_response")
+            .map(|list| {
+                list.split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .filter(|name| seen.insert(name.to_string()))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The last value of a parameter of the query, as TMDB reads one.
+    fn asked(uri: &Uri, name: &str) -> Option<String> {
+        url::form_urlencoded::parse(uri.query()?.as_bytes())
+            .filter(|(key, _)| key == name)
+            .last()
+            .map(|(_, value)| value.into_owned())
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    /// A work's own document, or what hangs off it.
+    async fn title(
+        state: &AppState,
+        parts: &Parts,
+        kind: MediaKind,
+        id: i64,
+        part: Option<String>,
+    ) -> AppResult<Option<(StatusCode, Value)>> {
+        let Some(item) = held(state, kind, id).await? else {
+            return Ok(None);
+        };
+        let appended = appends(&parts.uri);
+        let nested = appended.iter().any(|name| name.starts_with("season/"));
+        let context = Context::of(state, parts, &item, nested).await?;
+        let pictures = Kept {
+            media: &state.media,
+            gate: context.gate,
+        };
+        let work = context.work(&item, id, &pictures);
+        let tmdb_id = item.external_ids.tmdb;
+        let path =
+            |below: &str| format!("/3/{}/{}/{below}", kind_path(kind), tmdb_id.unwrap_or(id));
+
+        if let Some(name) = part {
+            return Ok(match shape::title_part(&work, &name, &context.filters) {
+                Part::Doc(document) => Some((StatusCode::OK, document)),
+                // Another resource's: TMDB's to answer where it knows the
+                // work, else empty here.
+                Part::Elsewhere { empty } if tmdb_id.is_none() => {
+                    empty.map(|empty| (StatusCode::OK, empty))
+                }
+                Part::Elsewhere { .. } | Part::Unknown => None,
+            });
+        }
+
+        // More than TMDB answers: TMDB's to refuse. A series' seasons in
+        // TMDB's numbering nothing here keeps, or listed with nothing to list
+        // them from: TMDB's to give.
+        if appended.len() > shape::MOST_APPENDED
+            || (kind == MediaKind::Series
+                && !context.numbers_seasons()
+                && (nested || context.snapshot.is_none()))
+        {
+            return Ok(None);
+        }
+
+        let mut document = match kind {
+            MediaKind::Movie => shape::movie(&work),
+            MediaKind::Series => shape::tv(&work),
+        };
+        let mut added = Map::new();
+        for name in appended {
+            if let Some(below) = name.strip_prefix("season/") {
+                if let Some(value) = nested_part(state, parts, &work, &context, below, &path).await
+                {
+                    added.insert(name.clone(), value);
+                }
+                continue;
+            }
+            let value = match shape::title_part(&work, &name, &context.filters) {
+                Part::Doc(document) => Some(document),
+                Part::Elsewhere { empty } => match tmdb_id {
+                    Some(_) => graft(state, parts, &path(&name)).await.or(empty),
+                    None => empty,
+                },
+                Part::Unknown => None,
+            };
+            if let Some(value) = value {
+                added.insert(name, shape::appended(value));
+            }
+        }
+        if let Value::Object(map) = &mut document {
+            map.extend(added);
+        }
+        Ok(Some((StatusCode::OK, document)))
+    }
+
+    /// What a series' document carries of one of its seasons, asked with it
+    /// (`season/1`, `season/1/images`, `season/1/episode/2`): as the same
+    /// path below the series is answered on its own, less its id. Nothing
+    /// for a season or an episode the catalogue does not hold.
+    async fn nested_part(
+        state: &AppState,
+        parts: &Parts,
+        work: &Work<'_>,
+        context: &Context,
+        below: &str,
+        path: &(dyn Fn(&str) -> String + Sync),
+    ) -> Option<Value> {
+        let segments: Vec<&str> = below.split('/').collect();
+        let number = |text: &str| text.parse::<i32>().ok().filter(|n| *n >= 0);
+        let filters = &context.filters;
+        let value = match segments.as_slice() {
+            [season] => shape::season(work, number(season)?)?,
+            [season, "episode", episode] => {
+                shape::episode(work, number(season)?, number(episode)?)?
+            }
+            [season, "episode", episode, rest @ ..] => {
+                let (season, episode) = (number(season)?, number(episode)?);
+                if !work.has_episode(season, episode) {
+                    return None;
+                }
+                match shape::episode_part(work, season, episode, &rest.join("/"), filters) {
+                    Part::Doc(document) => document,
+                    _ => return None,
+                }
+            }
+            [season, rest @ ..] => {
+                let season = number(season)?;
+                if !work.has_season(season) {
+                    return None;
+                }
+                match shape::season_part(work, season, &rest.join("/"), filters) {
+                    Part::Doc(document) => document,
+                    Part::Elsewhere { empty } => {
+                        let theirs = if work.tmdb_id().is_some() {
+                            graft(state, parts, &path(&format!("season/{below}"))).await
+                        } else {
+                            None
+                        };
+                        theirs.or(empty)?
+                    }
+                    Part::Unknown => return None,
+                }
+            }
+            _ => return None,
+        };
+        Some(shape::appended(value))
+    }
+
+    /// A season's document or an episode's, or what hangs off either, where
+    /// the catalogue numbers the series as TMDB does.
+    async fn season_or_episode(
+        state: &AppState,
+        parts: &Parts,
+        id: i64,
+        season: i32,
+        episode: Option<i32>,
+        part: Option<String>,
+    ) -> AppResult<Option<(StatusCode, Value)>> {
+        let Some(item) = held(state, MediaKind::Series, id).await? else {
+            return Ok(None);
+        };
+        let context = Context::of(state, parts, &item, true).await?;
+        if !context.numbers_seasons() {
+            return Ok(None);
+        }
+        let pictures = Kept {
+            media: &state.media,
+            gate: context.gate,
+        };
+        let work = context.work(&item, id, &pictures);
+        let held_here = match episode {
+            Some(episode) => work.has_episode(season, episode),
+            None => work.has_season(season),
+        };
+        // A season or an episode the catalogue does not hold: TMDB's to
+        // answer where it knows the series, else none there is.
+        if !held_here {
+            return Ok(item
+                .external_ids
+                .tmdb
+                .is_none()
+                .then(|| (StatusCode::NOT_FOUND, shape::not_found())));
+        }
+        let below = match episode {
+            Some(episode) => format!("season/{season}/episode/{episode}"),
+            None => format!("season/{season}"),
+        };
+        let path = |rest: &str| {
+            format!(
+                "/3/tv/{}/{below}/{rest}",
+                item.external_ids.tmdb.unwrap_or(id)
+            )
+        };
+        let part_of = |name: &str| match episode {
+            Some(episode) => shape::episode_part(&work, season, episode, name, &context.filters),
+            None => shape::season_part(&work, season, name, &context.filters),
+        };
+
+        if let Some(name) = part {
+            return Ok(match part_of(&name) {
+                Part::Doc(document) => Some((StatusCode::OK, document)),
+                Part::Elsewhere { empty } if item.external_ids.tmdb.is_none() => {
+                    empty.map(|empty| (StatusCode::OK, empty))
+                }
+                Part::Elsewhere { .. } | Part::Unknown => None,
+            });
+        }
+
+        let appended = appends(&parts.uri);
+        if appended.len() > shape::MOST_APPENDED {
+            return Ok(None);
+        }
+        let document = match episode {
+            Some(episode) => shape::episode(&work, season, episode),
+            None => shape::season(&work, season),
+        };
+        let Some(mut document) = document else {
+            return Ok(None);
+        };
+        let mut added = Map::new();
+        for name in appended {
+            let value = match part_of(&name) {
+                Part::Doc(document) => Some(document),
+                Part::Elsewhere { empty } => match item.external_ids.tmdb {
+                    Some(_) => graft(state, parts, &path(&name)).await.or(empty),
+                    None => empty,
+                },
+                Part::Unknown => None,
+            };
+            if let Some(value) = value {
+                added.insert(name, shape::appended(value));
+            }
+        }
+        if let Value::Object(map) = &mut document {
+            map.extend(added);
+        }
+        Ok(Some((StatusCode::OK, document)))
+    }
+
+    /// Another resource's document, asked of TMDB through the relay — its
+    /// key, what it kept, its locks — with the request's own query less
+    /// what it appended: none where TMDB did not answer it.
+    async fn graft(state: &AppState, parts: &Parts, path: &str) -> Option<Value> {
+        let query = relay::query_without(&parts.uri, &["append_to_response"]);
+        let mut asked = parts.clone();
+        asked.uri = match query {
+            Some(query) => format!("{path}?{query}"),
+            None => path.to_string(),
+        }
+        .parse()
+        .ok()?;
+        let answer = relayed(state.clone(), asked).await.ok()?;
+        if answer.status() != StatusCode::OK {
+            return None;
+        }
+        let bytes = axum::body::to_bytes(answer.into_body(), ANSWER_LIMIT as usize)
+            .await
+            .ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    fn kind_path(kind: MediaKind) -> &'static str {
+        match kind {
+            MediaKind::Movie => "movie",
+            MediaKind::Series => "tv",
+        }
+    }
+
+    // ─── find ────────────────────────────────────────────────────────────
+
+    /// `/3/find/{id}?external_source=…`: the work held here under an id of
+    /// IMDb's, of TheTVDB's — or the number Sonarr keeps a series under —
+    /// of Wikidata's or of TVRage's, where it has an id in TMDB's dialect.
+    /// None for TMDB to answer otherwise.
+    async fn find(
+        state: &AppState,
+        parts: &Parts,
+        external_id: &str,
+    ) -> AppResult<Option<(StatusCode, Value)>> {
+        let Some(source) = asked(&parts.uri, "external_source") else {
+            return Ok(None);
+        };
+        let found = match source.as_str() {
+            "imdb_id" => match crate::domain::ids::normalize_imdb_id(external_id) {
+                Some(imdb) => held_by(state, ExternalSource::Imdb, &imdb).await?,
+                None => None,
+            },
+            "tvdb_id" => match external_id.parse::<i64>() {
+                Ok(id) => series_by_client_id(state, id).await?,
+                Err(_) => None,
+            },
+            "wikidata_id" => held_by(state, ExternalSource::Wikidata, external_id).await?,
+            "tvrage_id" => held_by(state, ExternalSource::TvRage, external_id).await?,
+            _ => None,
+        };
+        let Some(item) = found else {
+            return Ok(None);
+        };
+        let Some(id) = answered(state, &item) else {
+            return Ok(None);
+        };
+        let context = Context::listed(state, parts, &item).await?;
+        let pictures = Kept {
+            media: &state.media,
+            gate: context.gate,
+        };
+        let result = shape::result(&context.work(&item, id, &pictures), true);
+        let document = match item.kind {
+            MediaKind::Movie => shape::found(vec![result], Vec::new()),
+            MediaKind::Series => shape::found(Vec::new(), vec![result]),
+        };
+        Ok(Some((StatusCode::OK, document)))
+    }
+
+    /// A work held here by an id of another site's.
+    async fn held_by(
+        state: &AppState,
+        source: ExternalSource,
+        value: &str,
+    ) -> AppResult<Option<MediaItem>> {
+        match repo::item::find_id_by_external(&state.db, source, value).await? {
+            Some(found) => Ok(service::load(state, &found).await?),
+            None => Ok(None),
+        }
+    }
+
+    /// A series held here by the number Sonarr keeps it under: TheTVDB's
+    /// id, or one this server made of TMDB's id, of Fankai's, or of its own
+    /// ([`ids::for_client`]). Only what is held: nothing is fetched.
+    async fn series_by_client_id(state: &AppState, id: i64) -> AppResult<Option<MediaItem>> {
+        let found = if ids::is_own(id) {
+            service::own_holders(state, MediaKind::Series)
+                .await?
+                .remove(&id)
+        } else if let Some(fankai) = ids::from_fankai(id) {
+            repo::item::find_id_by_external(&state.db, ExternalSource::Fankai, &fankai.to_string())
+                .await?
+        } else if let Some(tmdb) = ids::from_synthetic(id) {
+            repo::item::find_id_by_external(&state.db, ExternalSource::TmdbTv, &tmdb.to_string())
+                .await?
+        } else {
+            repo::item::find_id_by_external(&state.db, ExternalSource::TvdbSeries, &id.to_string())
+                .await?
+        };
+        match found {
+            Some(found) => Ok(service::load(state, &found)
+                .await?
+                .filter(|item| item.kind == MediaKind::Series)),
+            None => Ok(None),
+        }
+    }
+
+    // ─── search ──────────────────────────────────────────────────────────
+
+    /// The first page of a search, the works the catalogue finds by the term
+    /// first — entered by hand or corrected, in TMDB's shape — then TMDB's,
+    /// less those it lists already; its count is both together. TMDB failing
+    /// with nothing kept to stand in, the catalogue's alone. Any other page,
+    /// or a term the catalogue finds nothing by, is TMDB's.
+    async fn search(
+        state: &AppState,
+        parts: &Parts,
+        kind: Option<MediaKind>,
+    ) -> AppResult<Option<Response>> {
+        let Some(term) = asked(&parts.uri, "query") else {
+            return Ok(None);
+        };
+        if asked(&parts.uri, "page").is_some_and(|page| page.trim() != "1") {
+            return Ok(None);
+        }
+        let year = match kind {
+            Some(MediaKind::Movie) => {
+                asked(&parts.uri, "primary_release_year").or_else(|| asked(&parts.uri, "year"))
+            }
+            Some(MediaKind::Series) => {
+                asked(&parts.uri, "first_air_date_year").or_else(|| asked(&parts.uri, "year"))
+            }
+            None => None,
+        }
+        .and_then(|year| year.trim().parse::<i32>().ok());
+
+        let ours = catalogue(state, parts, kind, term.trim(), year).await?;
+        if ours.is_empty() {
+            return Ok(None);
+        }
+        let listed: HashSet<(String, i64)> = ours
+            .iter()
+            .map(|(kind, result)| {
+                (
+                    kind_path(*kind).to_string(),
+                    result["id"].as_i64().unwrap_or(0),
+                )
+            })
+            .collect();
+        let of_ours: Vec<Value> = ours.into_iter().map(|(_, result)| result).collect();
+
+        let theirs = match relayed(state.clone(), parts.clone()).await {
+            Ok(answer) if answer.status() == StatusCode::OK => {
+                axum::body::to_bytes(answer.into_body(), ANSWER_LIMIT as usize)
+                    .await
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            }
+            _ => None,
+        };
+        let page = merged(of_ours, theirs, kind, &listed);
+        Ok(Some(respond(parts, StatusCode::OK, &page)))
+    }
+
+    /// The works the catalogue finds by a term, of a kind or of either, best
+    /// first, each as TMDB's search lists one, with its kind: those with an
+    /// id in TMDB's dialect, switched on, for adults where this server shows
+    /// them.
+    async fn catalogue(
+        state: &AppState,
+        parts: &Parts,
+        kind: Option<MediaKind>,
+        term: &str,
+        year: Option<i32>,
+    ) -> AppResult<Vec<(MediaKind, Value)>> {
+        let query = repo::item::Query {
+            term: Some(term.to_string()),
+            kind,
+            year,
+            sort: repo::item::Sort::Relevance,
+            // By its letters alone, as the catalogue's half of Sonarr's
+            // search: TMDB's half, which follows, forgives a misspelling.
+            tolerance: Some(Vec::new()),
+            limit: state.search_limit() as i64,
+            include_adult: state.adult_visible(),
+            ..Default::default()
+        };
+        let mut results = Vec::new();
+        for found in repo::item::search(&state.db, &query).await? {
+            let Some(item) = service::load(state, &found.id).await? else {
+                continue;
+            };
+            let Some(id) = answered(state, &item) else {
+                continue;
+            };
+            let context = Context::listed(state, parts, &item).await?;
+            let pictures = Kept {
+                media: &state.media,
+                gate: context.gate,
+            };
+            let work = context.work(&item, id, &pictures);
+            results.push((item.kind, shape::result(&work, kind.is_none())));
+        }
+        Ok(results)
+    }
+
+    /// The catalogue's works laid before TMDB's page, less those of TMDB's
+    /// it lists already — by the kind and the id — counted with them; or
+    /// alone, as a page of their own, when TMDB gave none.
+    fn merged(
+        ours: Vec<Value>,
+        theirs: Option<Value>,
+        kind: Option<MediaKind>,
+        listed: &HashSet<(String, i64)>,
+    ) -> Value {
+        let count = ours.len();
+        let Some(mut page) = theirs.filter(|page| page.get("results").is_some_and(Value::is_array))
+        else {
+            return json!({
+                "page": 1,
+                "results": ours,
+                "total_pages": 1,
+                "total_results": count,
+            });
+        };
+        let their_results = match page.get_mut("results") {
+            Some(Value::Array(results)) => std::mem::take(results),
+            _ => Vec::new(),
+        };
+        let before = their_results.len();
+        let kept: Vec<Value> = their_results
+            .into_iter()
+            .filter(|result| {
+                let of = match kind {
+                    Some(kind) => Some(kind_path(kind)),
+                    None => result.get("media_type").and_then(Value::as_str),
+                };
+                let id = result.get("id").and_then(Value::as_i64);
+                match (of, id) {
+                    (Some(of), Some(id)) => !listed.contains(&(of.to_string(), id)),
+                    _ => true,
+                }
+            })
+            .collect();
+        let dropped = before - kept.len();
+        let total = page
+            .get("total_results")
+            .and_then(Value::as_u64)
+            .unwrap_or(before as u64);
+        page["results"] = Value::Array(ours.into_iter().chain(kept).collect());
+        page["total_results"] = json!((total + count as u64).saturating_sub(dropped as u64));
+        if page.get("total_pages").and_then(Value::as_u64).unwrap_or(0) == 0 {
+            page["total_pages"] = json!(1);
+        }
+        page["page"] = json!(1);
+        page
     }
 }
 
@@ -1688,6 +2621,8 @@ mod tests {
         // A dot inside a segment is just a character.
         assert!(!climbs("/3/configuration/countries.json"));
     }
+
+    use std::collections::HashSet;
 
     use axum::http::HeaderValue;
     use chrono::{DateTime, Utc};
@@ -2087,6 +3022,8 @@ mod tests {
             credit_tmdb_id: None,
             sort_order: 0,
             is_manual: false,
+            department: None,
+            job: None,
         };
         let poster = |path: &str| Image {
             id: crate::db::new_id(),
@@ -2244,6 +3181,27 @@ mod tests {
 
         // Taken out once: nothing more to take.
         assert!(!take_hidden(&mut document, &item, &as_is));
+    }
+
+    #[test]
+    fn a_crew_credit_hidden_takes_every_crew_job_of_the_person_and_no_other() {
+        let withheld = Withheld {
+            credits: vec![(CreditType::Crew, 7)],
+            pictures: HashSet::new(),
+            titles: Vec::new(),
+        };
+        let mut crew = vec![
+            json!({ "id": 7, "department": "Sound", "job": "Original Music Composer" }),
+            json!({ "id": 7, "department": "Camera", "job": "Director of Photography" }),
+            json!({ "id": 7, "department": "Directing", "job": "Director" }),
+            json!({ "id": 8, "department": "Editing", "job": "Editor" }),
+        ];
+        assert!(take_crew(&mut crew, &withheld));
+        let left: Vec<(i64, &str)> = crew
+            .iter()
+            .map(|c| (c["id"].as_i64().unwrap(), c["job"].as_str().unwrap()))
+            .collect();
+        assert_eq!(left, [(7, "Director"), (8, "Editor")]);
     }
 
     #[test]
@@ -2704,6 +3662,7 @@ mod tests {
                 poster: Some("season-poster".into()),
                 fanart: None,
             },
+            translations: Vec::new(),
         }];
         item.episodes = vec![
             episode(1, 1, Some(62085)),
@@ -3252,6 +4211,7 @@ mod relayed {
             is_manual: false,
             images: Vec::new(),
             primary_images: Default::default(),
+            translations: Vec::new(),
         }];
         item.episodes = vec![Episode {
             id: "e1".into(),
@@ -3579,6 +4539,7 @@ mod relayed {
             is_manual: false,
             images: vec![poster("kept-d9.jpg"), poster("hidden-d9.jpg")],
             primary_images: Default::default(),
+            translations: Vec::new(),
         }];
         item.episodes = vec![Episode {
             id: crate::db::new_id(),
@@ -4071,5 +5032,634 @@ mod relayed {
         assert_eq!(answer.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(answer.headers().get(header::AGE).is_none());
         assert!(body_of(answer).await.get("results").is_none());
+    }
+}
+
+#[cfg(test)]
+mod local {
+    use axum::{
+        body::Body,
+        extract::{Request, State},
+        http::{StatusCode, header},
+        response::Response,
+    };
+    use serde_json::{Value, json};
+
+    use super::proxy;
+    use crate::{
+        api::relay::testing::{self, Asked, StandIn},
+        db::repo,
+        domain::{Credit, CreditType, Episode, MediaItem, MediaKind, Season},
+        service::ids,
+        state::AppState,
+    };
+
+    /// TMDB as the stand-in answers it: a film it knows by 603, where to
+    /// watch the one held here, a page of search, and a series' ids
+    /// without TheTVDB's.
+    fn tmdb(asked: &Asked) -> (StatusCode, Value) {
+        match asked.path.as_str() {
+            "/3/movie/603" => (StatusCode::OK, json!({ "id": 603, "title": "The Matrix" })),
+            "/3/movie/990550" => (StatusCode::OK, json!({ "id": 990_550, "title": "TMDB's" })),
+            "/3/movie/990550/watch/providers" => (
+                StatusCode::OK,
+                json!({ "id": 990_550, "results": { "FR": { "link": "https://example.test/fr",
+                        "flatrate": [ { "provider_id": 8, "provider_name": "Netflix" } ] } } }),
+            ),
+            "/3/search/movie" => (
+                StatusCode::OK,
+                json!({ "page": 1, "total_pages": 1, "total_results": 2, "results": [
+                    { "id": 990_550, "title": "TMDB's copy of the one held here" },
+                    { "id": 990_999, "title": "One held nowhere here" }
+                ]}),
+            ),
+            "/3/search/tv" => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "success": false, "status_code": 11 }),
+            ),
+            "/3/tv/990396/external_ids" => (
+                StatusCode::OK,
+                json!({ "id": 990_396, "imdb_id": null, "tvdb_id": null, "tvrage_id": null }),
+            ),
+            "/3/tv/990396/season/1" => (
+                StatusCode::OK,
+                json!({ "id": 1, "season_number": 1, "name": "TMDB's season", "episodes": [] }),
+            ),
+            _ => (
+                StatusCode::NOT_FOUND,
+                json!({ "success": false, "status_code": 34 }),
+            ),
+        }
+    }
+
+    fn actor(name: &str, person: i64) -> Credit {
+        Credit {
+            id: crate::db::new_id(),
+            credit_type: CreditType::Actor,
+            person_name: name.into(),
+            character_name: Some("The narrator".into()),
+            image: None,
+            tmdb_person_id: Some(person),
+            credit_tmdb_id: Some(format!("credit-{person}")),
+            sort_order: 0,
+            is_manual: false,
+            department: None,
+            job: None,
+        }
+    }
+
+    fn episode(season: i32, number: i32) -> Episode {
+        Episode {
+            id: crate::db::new_id(),
+            season_number: season,
+            episode_number: number,
+            absolute_episode_number: None,
+            aired_after_season_number: None,
+            aired_before_season_number: None,
+            aired_before_episode_number: None,
+            title: format!("Écrit à la main, {number}"),
+            overview: None,
+            air_date: Some(format!("2024-0{number}-10")),
+            air_date_utc: None,
+            runtime: Some(24),
+            finale_type: None,
+            image: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            rating: None,
+            // As a source's: the catalogue writes the children typed by
+            // hand through the editor's own routes.
+            is_manual: false,
+        }
+    }
+
+    /// A film TMDB knows as 990550, held here with a title locked, as the
+    /// catalogue's own search lists it.
+    fn held_film() -> MediaItem {
+        let mut item = MediaItem::empty(MediaKind::Movie);
+        item.title = "Pellicule tenue ici E3".into();
+        item.slug = "pellicule-tenue-ici-e3".into();
+        item.overview = Some("Le synopsis du catalogue.".into());
+        item.external_ids.tmdb = Some(990_550);
+        item.external_ids.imdb = Some("tt9905500".into());
+        item.genres = vec!["Drame".into()];
+        item.credits = vec![actor("Edward Norton", 819)];
+        item
+    }
+
+    /// The whole server, its relay answering the works it holds itself,
+    /// with the film held, and a series entered by hand: its number.
+    async fn server(stand_in: &StandIn) -> (AppState, i64) {
+        let state = testing::server(stand_in).await;
+        testing::choose(&state, "tmdb.relayMode", "local-first").await;
+        let film = held_film();
+        testing::store(
+            &state,
+            &film,
+            &[("item", "title", "", json!("Pellicule verrouillée E3"))],
+        )
+        .await;
+        crate::service::listing::after_write(&state, &film.id).await;
+
+        let mut series = MediaItem::empty(MediaKind::Series);
+        series.title = "Feuilleton tapé à la main E3".into();
+        series.slug = "feuilleton-tape-a-la-main-e3".into();
+        series.is_manual = true;
+        series.seasons = vec![Season {
+            id: crate::db::new_id(),
+            season_number: 1,
+            title: None,
+            overview: None,
+            air_date: None,
+            tmdb_id: None,
+            tvdb_id: None,
+            is_manual: false,
+            images: Vec::new(),
+            primary_images: Default::default(),
+            translations: Vec::new(),
+        }];
+        series.episodes = vec![episode(1, 1), episode(1, 2)];
+        testing::store(&state, &series, &[]).await;
+        crate::service::listing::after_write(&state, &series.id).await;
+        (state, ids::own(&series.id))
+    }
+
+    async fn answered(state: &AppState, target: &str) -> Response {
+        let request = Request::builder().uri(target).body(Body::empty()).unwrap();
+        proxy(State(state.clone()), request)
+            .await
+            .expect("an answer")
+    }
+
+    async fn get(state: &AppState, target: &str) -> (StatusCode, Value) {
+        let answer = answered(state, target).await;
+        let status = answer.status();
+        let body = axum::body::to_bytes(answer.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    }
+
+    #[test]
+    fn the_paths_answered_here_are_recognised_exactly() {
+        use super::here::{Asked, recognise};
+
+        let part = |text: &str| Some(text.to_string());
+        assert_eq!(
+            recognise("/3/movie/550"),
+            Some(Asked::Title {
+                kind: MediaKind::Movie,
+                id: 550,
+                part: None
+            })
+        );
+        assert_eq!(
+            recognise("/3/tv/1396/watch/providers"),
+            Some(Asked::Title {
+                kind: MediaKind::Series,
+                id: 1396,
+                part: part("watch/providers")
+            })
+        );
+        assert_eq!(
+            recognise("/3/tv/1396/season/0/episode/2/images"),
+            Some(Asked::Episode {
+                id: 1396,
+                season: 0,
+                episode: 2,
+                part: part("images")
+            })
+        );
+        assert_eq!(
+            recognise("/3/tv/1396/season/1/"),
+            Some(Asked::Season {
+                id: 1396,
+                season: 1,
+                part: None
+            })
+        );
+        assert_eq!(
+            recognise("/3/find/tt0137523"),
+            Some(Asked::Find {
+                external_id: "tt0137523".into()
+            })
+        );
+        assert_eq!(
+            recognise("/3/search/multi"),
+            Some(Asked::Search { kind: None })
+        );
+        // TMDB's own lists, a person, a collection, an id that is none.
+        for path in [
+            "/3/movie/popular",
+            "/3/tv/changes",
+            "/3/movie/-5",
+            "/3/movie/0",
+            "/3/person/819",
+            "/3/collection/10",
+            "/3/tv/1396/season/one",
+            "/3/tv/1396//credits",
+            "/3/search/person",
+            "/3/configuration",
+        ] {
+            assert_eq!(recognise(path), None, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_film_held_here_is_answered_here_and_tmdb_is_asked_only_for_what_it_holds() {
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, _) = server(&stand_in).await;
+        // A key issued here, which the relay would refuse to pass on to TMDB
+        // under each client's own key: this server needs no key of TMDB's.
+        testing::choose(&state, "tmdb.relayCredential", "client").await;
+
+        let answer = answered(
+            &state,
+            "/3/movie/990550?language=fr-FR&append_to_response=credits,watch/providers,reviews&api_key=ams_issued",
+        )
+        .await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        assert_eq!(
+            answer.headers()[header::CONTENT_TYPE],
+            "application/json;charset=utf-8"
+        );
+        assert!(answer.headers().get(header::AGE).is_none());
+        let body = axum::body::to_bytes(answer.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let film: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(film["id"], json!(990_550));
+        assert_eq!(film["title"], json!("Pellicule verrouillée E3"));
+        assert_eq!(film["overview"], json!("Le synopsis du catalogue."));
+        assert_eq!(film["imdb_id"], json!("tt9905500"));
+        assert_eq!(film["genres"], json!([{ "id": 18, "name": "Drame" }]));
+        assert_eq!(film["credits"]["cast"][0]["id"], json!(819));
+        assert!(film["credits"].get("id").is_none());
+        // Where to watch is TMDB's: refused under the client's own key a
+        // key issued here is, and so empty, as TMDB writes none.
+        assert_eq!(film["watch/providers"], json!({ "results": {} }));
+        assert_eq!(film["reviews"]["results"], json!([]));
+        assert!(stand_in.asked_at("/3/movie/990550").is_empty());
+
+        // Under the operator's key, TMDB is asked for it, and it is added.
+        testing::choose(&state, "tmdb.relayCredential", "server").await;
+        let (_, film) = get(
+            &state,
+            "/3/movie/990550?language=fr-FR&append_to_response=watch/providers",
+        )
+        .await;
+        assert_eq!(
+            film["watch/providers"]["results"]["FR"]["flatrate"][0]["provider_name"],
+            json!("Netflix")
+        );
+        let asked = stand_in.asked_at("/3/movie/990550/watch/providers");
+        assert_eq!(asked.len(), 1);
+        assert!(!asked[0].query.contains("append_to_response"), "{asked:?}");
+        assert!(stand_in.asked_at("/3/movie/990550").is_empty());
+
+        // What hangs off it, asked on its own, carries its id.
+        let (status, credits) = get(&state, "/3/movie/990550/credits").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(credits["id"], json!(990_550));
+
+        // In relay mode, TMDB's own document, with the lock.
+        testing::choose(&state, "tmdb.relayMode", "relay").await;
+        let (_, film) = get(&state, "/3/movie/990550?language=fr-FR").await;
+        assert_eq!(film["title"], json!("Pellicule verrouillée E3"));
+        assert_eq!(stand_in.asked_at("/3/movie/990550").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn what_is_not_held_here_or_not_shown_goes_on_to_tmdb() {
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, _) = server(&stand_in).await;
+        let (status, film) = get(&state, "/3/movie/603").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(film["title"], json!("The Matrix"));
+        assert_eq!(stand_in.asked_at("/3/movie/603").len(), 1);
+
+        // Switched off, or for adults where this server hides them: TMDB's.
+        let id = repo::item::find_id_by_external(
+            &state.db,
+            crate::domain::ExternalSource::TmdbMovie,
+            "990550",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut film = crate::service::load(&state, &id).await.unwrap().unwrap();
+        film.is_adult = true;
+        testing::store(&state, &film, &[]).await;
+        state.caches.touched(&film.id).await;
+        let (_, answer) = get(&state, "/3/movie/990550").await;
+        assert_eq!(answer["title"], json!("TMDB's"));
+        assert_eq!(stand_in.asked_at("/3/movie/990550").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_series_entered_by_hand_is_answered_with_its_seasons_and_episodes() {
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, handed) = server(&stand_in).await;
+
+        let (status, show) = get(
+            &state,
+            &format!(
+                "/3/tv/{handed}?language=fr-FR&append_to_response=external_ids,season/1,season/1/episode/2,watch/providers"
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{show}");
+        assert_eq!(show["id"], json!(handed));
+        assert_eq!(show["name"], json!("Feuilleton tapé à la main E3"));
+        assert_eq!(show["external_ids"]["tvdb_id"], json!(handed));
+        assert_eq!(show["number_of_episodes"], json!(2));
+        assert_eq!(show["seasons"][0]["episode_count"], json!(2));
+        assert_eq!(
+            show["season/1"]["episodes"][1]["name"],
+            json!("Écrit à la main, 2")
+        );
+        assert!(show["season/1"].get("id").is_none());
+        assert_eq!(show["season/1/episode/2"]["episode_number"], json!(2));
+        // TMDB does not know it: nothing of TMDB's to add, and TMDB not asked.
+        assert_eq!(show["watch/providers"], json!({ "results": {} }));
+
+        let (status, season) = get(&state, &format!("/3/tv/{handed}/season/1")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(season["episodes"].as_array().map(Vec::len), Some(2));
+        let (status, episode) = get(
+            &state,
+            &format!(
+                "/3/tv/{handed}/season/1/episode/1?language=fr-FR&append_to_response=external_ids"
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(episode["name"], json!("Écrit à la main, 1"));
+        // English — TMDB's language when none is asked — which nothing is
+        // held in: as TMDB names an episode then.
+        let (_, episode) = get(&state, &format!("/3/tv/{handed}/season/1/episode/1")).await;
+        assert_eq!(episode["name"], json!("Episode 1"));
+        assert_eq!(episode["overview"], json!(""));
+        // A season it has not: TMDB's "not found", from here.
+        let (status, missing) = get(&state, &format!("/3/tv/{handed}/season/2")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(missing["status_code"], json!(34));
+        assert!(stand_in.asked_at(&format!("/3/tv/{handed}")).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_seasons_of_a_series_numbered_otherwise_than_tmdb_are_tmdbs() {
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, _) = server(&stand_in).await;
+        // Held, TheTVDB numbering it: TMDB's seasons are TMDB's to answer.
+        let mut series = MediaItem::empty(MediaKind::Series);
+        series.title = "Série numérotée par TheTVDB E3".into();
+        series.slug = "serie-numerotee-par-thetvdb-e3".into();
+        series.external_ids.tmdb = Some(990_396);
+        series.external_ids.tvdb = Some(990_123);
+        series.episodes = vec![episode(1, 1)];
+        testing::store(&state, &series, &[]).await;
+        let (_, season) = get(&state, "/3/tv/990396/season/1").await;
+        assert_eq!(season["name"], json!("TMDB's season"));
+        assert_eq!(stand_in.asked_at("/3/tv/990396/season/1").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn find_answers_with_a_work_held_here_by_another_sites_id() {
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, handed) = server(&stand_in).await;
+        let (status, found) = get(&state, "/3/find/tt9905500?external_source=imdb_id").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(found["movie_results"][0]["id"], json!(990_550));
+        assert_eq!(found["movie_results"][0]["media_type"], json!("movie"));
+        assert_eq!(found["tv_results"], json!([]));
+        assert!(stand_in.asked_at("/3/find/tt9905500").is_empty());
+        // By the number Sonarr keeps a series entered by hand under.
+        let (_, found) = get(&state, &format!("/3/find/{handed}?external_source=tvdb_id")).await;
+        assert_eq!(found["tv_results"][0]["id"], json!(handed));
+        // An id nothing here is held under: TMDB's.
+        let (status, _) = get(&state, "/3/find/tt0000001?external_source=imdb_id").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(stand_in.asked_at("/3/find/tt0000001").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_search_lists_the_works_held_here_first_and_tmdbs_after() {
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, handed) = server(&stand_in).await;
+        let (status, page) = get(&state, "/3/search/movie?query=pellicule&language=fr-FR").await;
+        assert_eq!(status, StatusCode::OK);
+        let ids: Vec<i64> = page["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_i64().unwrap())
+            .collect();
+        // Held here first, as the catalogue writes it; TMDB's copy of it
+        // not twice; TMDB's other one after.
+        assert_eq!(ids, [990_550, 990_999]);
+        assert_eq!(
+            page["results"][0]["title"],
+            json!("Pellicule verrouillée E3")
+        );
+        assert_eq!(page["total_results"], json!(2));
+        // Another page is TMDB's own.
+        let (_, next) = get(&state, "/3/search/movie?query=pellicule&page=2").await;
+        assert_eq!(next["results"].as_array().map(Vec::len), Some(2));
+
+        // TMDB failing, nothing kept: the catalogue's alone.
+        let (status, page) = get(&state, "/3/search/tv?query=feuilleton").await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["results"][0]["id"], json!(handed));
+        assert_eq!(page["total_results"], json!(1));
+        // A term the catalogue finds nothing by: TMDB's answer, its failure.
+        let (status, _) = get(&state, "/3/search/tv?query=introuvable").await;
+        assert_ne!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_picture_uploaded_here_is_named_only_where_the_gate_serves_it() {
+        use crate::{
+            db::repo::asset::Thumb,
+            domain::{CoverType, Image},
+        };
+
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, dir) = crate::api::tmdb_images::testing::server_keeping_media(
+            &stand_in,
+            Some("https://ams.example"),
+        )
+        .await;
+        testing::choose(&state, "tmdb.relayMode", "local-first").await;
+        let bytes = vec![0xff, 0xd8, 0xff, 0xe0, 17, 0x4a, 0x46, 0x49, 0x46];
+        let (key, _) = crate::media::file::key_for(&bytes, "jpg");
+        state
+            .media
+            .remember("upload:e3-poster", &key, Thumb::None, "image/jpeg");
+        let picture = |id: &str, url: String, manual: bool| Image {
+            id: id.into(),
+            season_number: None,
+            cover_type: CoverType::Poster,
+            url,
+            language: None,
+            sort_order: 0,
+            source: (!manual).then(|| "tmdb".to_string()),
+            is_manual: manual,
+        };
+        let mut film = held_film();
+        film.images = vec![picture(
+            "tmdb-poster",
+            "https://image.tmdb.org/t/p/original/tmdbsPosterE3.jpg".into(),
+            false,
+        )];
+        testing::store(&state, &film, &[]).await;
+        // An upload, added by hand: the catalogue files it by the name the
+        // store keeps it under, as the editor's route does, and the person
+        // chose it.
+        let upload = picture("uploaded", "upload:e3-poster".into(), true);
+        repo::child::add_image(&state.db, &film.id, &upload)
+            .await
+            .expect("the upload is added");
+        crate::db::repo::override_field::set_in(
+            &state.db,
+            &film.id,
+            "item",
+            "primaryPoster",
+            "",
+            Some(&json!(upload.url)),
+            None,
+        )
+        .await
+        .expect("the poster is chosen");
+        state.caches.touched(&film.id).await;
+
+        // TMDB's address for pictures: the upload has none, TMDB's poster is
+        // the work's.
+        let (_, document) = get(&state, "/3/movie/990550?language=fr-FR").await;
+        assert_eq!(document["poster_path"], json!("/tmdbsPosterE3.jpg"));
+        // This server's gate: the upload, by its key, which the gate serves.
+        testing::choose(&state, crate::api::tmdb_images::SETTING, "server").await;
+        let (_, document) = get(
+            &state,
+            "/3/movie/990550?language=fr-FR&append_to_response=images&include_image_language=fr,null",
+        )
+        .await;
+        assert_eq!(document["poster_path"], json!(format!("/{key}")));
+        let posters = &document["images"]["posters"];
+        assert_eq!(
+            posters[0]["file_path"],
+            json!(format!("/{key}")),
+            "{posters}"
+        );
+        assert_eq!(
+            posters[1]["file_path"],
+            json!("/tmdbsPosterE3.jpg"),
+            "{posters}"
+        );
+        // As TMDB lists them: in the language asked alone, where it asked
+        // for no other — and these carry no text.
+        let (_, document) = get(
+            &state,
+            "/3/movie/990550?language=fr-FR&append_to_response=images",
+        )
+        .await;
+        assert_eq!(document["images"]["posters"], json!([]));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_series_thetvdb_numbers_is_answered_in_tmdbs_numbering_kept_here() {
+        use crate::domain::orders::PlacedEpisode;
+
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, _) = server(&stand_in).await;
+        // TheTVDB's two seasons, which TMDB numbers as one.
+        let mut series = MediaItem::empty(MediaKind::Series);
+        series.title = "Série en deux saisons chez TheTVDB E2".into();
+        series.slug = "serie-en-deux-saisons-chez-thetvdb-e2".into();
+        series.external_ids.tmdb = Some(990_396);
+        series.external_ids.tvdb = Some(990_777);
+        series.episodes = [(1, 1, 1001), (1, 2, 1002), (2, 1, 1003)]
+            .into_iter()
+            .map(|(season, number, tvdb)| {
+                let mut held = episode(season, number);
+                held.tvdb_id = Some(tvdb);
+                held.tmdb_id = Some(tvdb + 4000);
+                held
+            })
+            .collect();
+        testing::store(&state, &series, &[]).await;
+        let places: Vec<PlacedEpisode> = [(1, 1001), (2, 1002), (3, 1003)]
+            .into_iter()
+            .map(|(number, tvdb)| {
+                let mut place = PlacedEpisode::of_tvdb(tvdb, 1, number);
+                place.tmdb_id = Some(tvdb + 4000);
+                place
+            })
+            .collect();
+        repo::order::write_tmdb_aired(&state.db, &series.id, &places)
+            .await
+            .expect("TMDB's numbering is kept");
+
+        let (status, season) = get(&state, "/3/tv/990396/season/1?language=fr-FR").await;
+        assert_eq!(status, StatusCode::OK, "{season}");
+        let numbered: Vec<(i64, i64, String)> = season["episodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                (
+                    e["episode_number"].as_i64().unwrap(),
+                    e["id"].as_i64().unwrap(),
+                    e["name"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            numbered,
+            [
+                (1, 5001, "Écrit à la main, 1".into()),
+                (2, 5002, "Écrit à la main, 2".into()),
+                (3, 5003, "Écrit à la main, 1".into()),
+            ]
+        );
+        let (status, third) = get(&state, "/3/tv/990396/season/1/episode/3?language=fr-FR").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            (third["season_number"].clone(), third["id"].clone()),
+            (json!(1), json!(5003))
+        );
+        let (_, show) = get(
+            &state,
+            "/3/tv/990396?language=fr-FR&append_to_response=season/1",
+        )
+        .await;
+        assert_eq!(show["number_of_episodes"], json!(3));
+        assert_eq!(show["number_of_seasons"], json!(1));
+        assert_eq!(
+            show["season/1"]["episodes"].as_array().map(Vec::len),
+            Some(3)
+        );
+        assert!(stand_in.asked_at("/3/tv/990396/season/1").is_empty());
+        assert!(stand_in.asked_at("/3/tv/990396").is_empty());
+        // A season TMDB's numbering has not is TMDB's to answer.
+        let _ = get(&state, "/3/tv/990396/season/2").await;
+        assert_eq!(stand_in.asked_at("/3/tv/990396/season/2").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_series_held_here_is_given_the_tvdb_id_tmdb_has_none_for() {
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, _) = server(&stand_in).await;
+        testing::choose(&state, "tmdb.relayMode", "relay").await;
+        let mut series = MediaItem::empty(MediaKind::Series);
+        series.title = "Série de TMDB seul E5".into();
+        series.slug = "serie-de-tmdb-seul-e5".into();
+        series.external_ids.tmdb = Some(990_396);
+        testing::store(&state, &series, &[]).await;
+        let (status, ids) = get(&state, "/3/tv/990396/external_ids").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ids["tvdb_id"], json!(ids::to_synthetic(990_396)));
     }
 }

@@ -76,6 +76,21 @@ export type Episode = Schema<'Episode'>
 
 export type Translation = Schema<'Translation'>
 
+/** A network or a company, kept once for every work it is credited on: its page is `/company/{id}`. */
+export type Company = Schema<'Company'>
+
+/** What a company did for a work: aired it, made it, animated or shot it, sold it. */
+export type CompanyRole = Schema<'CompanyRole'>
+
+/** A company credited on a work, in what it did there. */
+export type CompanyCredit = Schema<'CompanyCredit'>
+
+/** One of TMDB's keywords, kept once for every work it is given: its page is `/keyword/{id}`. */
+export type Keyword = Schema<'Keyword'>
+
+/** A video a source lists for a work: a trailer, a teaser, a clip. */
+export type Video = Schema<'Video'>
+
 /** How a work came out in a country, as TMDB tells its releases apart. */
 export type ReleaseKind = Schema<'ReleaseKind'>
 
@@ -409,7 +424,11 @@ export type Facets = Schema<'Facets'>
 /** The list's facets, and the countries and ratings its further filters choose among. */
 export type CatalogueFacets = Schema<'CatalogueFacets'>
 
-/** A genre's, a network's, a year's or a decade's page: its name, its count, its five best, its note. */
+/**
+ * A genre's, a network's, a year's or a decade's page, or a company's or a
+ * keyword's: its name, its count, its five best, its note — and the company
+ * or the keyword itself.
+ */
 export type FacetPage = Schema<'FacetPage'>
 
 /** The programmer's note on one thing, in one language. */
@@ -502,6 +521,12 @@ export type SeasonEntryKind = Schema<'EntryKind'>
 export type SeasonEntry = Schema<'SeasonEntry'>
 
 export type SeasonChart = Schema<'Chart'>
+
+/** An AniList and MyAnimeList entry of a season that premieres in the quarter, as the anime identifier list places it. */
+export type SeasonCour = Schema<'SeasonCour'>
+
+/** How MyAnimeList describes an entry, asked for on demand. */
+export type MalEntry = Schema<'MalEntry'>
 
 /** A work premiering in a season that the catalogue does not hold, by TMDB. */
 export type SeasonCandidate = Schema<'Candidate'>

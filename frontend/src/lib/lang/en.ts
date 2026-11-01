@@ -327,6 +327,9 @@ export const en = {
     collection: 'Collection',
     anyCollection: 'Any collection',
     withPerson: (name: string) => `With ${name}`,
+    // A company or a keyword chosen by its id, on its own page or by a link.
+    someCompany: 'A company',
+    someKeyword: 'A keyword',
     runtimeChip: (min?: number, max?: number) =>
       min !== undefined && max !== undefined ? `${min}–${max} min` : min !== undefined ? `${min} min or longer` : `${max} min or shorter`,
     madeIn: (country: string) => `Made in ${country}`,
@@ -508,6 +511,46 @@ export const en = {
     allIdentifiers: (n: number) => `All ${n} identifiers`,
     searchTitle: (title: string) => `Search the catalogue for “${title}”`,
     withPerson: (name: string) => `Everything here with ${name}`,
+    // The crew, a department at a time, under the cast.
+    crewLead: 'Everybody TMDB credits behind the camera, a department at a time, the most telling jobs first.',
+    wholeCrew: (n: number) => `The whole crew · ${n}`,
+    departments: {
+      Directing: 'Directing',
+      Writing: 'Writing',
+      Production: 'Production',
+      Sound: 'Sound',
+      Camera: 'Camera',
+      Editing: 'Editing',
+      Art: 'Art',
+      'Costume & Make-Up': 'Costume & make-up',
+      'Visual Effects': 'Visual effects',
+      Lighting: 'Lighting',
+      Crew: 'Crew',
+      Creator: 'Creation',
+    } as Record<string, string>,
+    // Every video the sources list, the trailer chosen first.
+    videos: 'Videos',
+    videosLead: 'As TMDB lists them, the trailer chosen for the work first. A YouTube video plays here, through YouTube’s cookie-free player, once you ask for it; the others open where they are kept.',
+    allVideos: (n: number) => `All ${n} videos`,
+    official: 'Official',
+    playVideo: 'Play: ',
+    videoTypes: {
+      Trailer: 'Trailer',
+      Teaser: 'Teaser',
+      Clip: 'Clip',
+      Featurette: 'Featurette',
+      'Behind the Scenes': 'Behind the scenes',
+      Bloopers: 'Bloopers',
+      'Opening Credits': 'Opening credits',
+    } as Record<string, string>,
+    // The networks and the companies, each a way to its own page.
+    companiesTitle: 'Networks and companies',
+    companyRoles: { network: 'Network', production: 'Production', studio: 'Studio', distributor: 'Distribution' } as Record<
+      string,
+      string
+    >,
+    companyPage: (name: string) => `Everything here from ${name}`,
+    keywordPage: (word: string) => `Everything here tagged “${word}”`,
   },
   elsewhere: {
     newTab: '(opens in a new tab)',
@@ -590,8 +633,11 @@ export const en = {
       regional: 'Regional',
       altdvd: 'Alternate DVD',
       alttwo: 'Alternate 2',
+      'tmdb-aired': 'TMDB (aired)',
     } as Record<string, string>,
     orderNote: 'As TheTVDB numbers them; clients are served the aired order unless they ask for this one.',
+    orderNoteTmdbAired:
+      'As TMDB numbers them, kept beside TheTVDB’s at every refresh; Plex is offered it, and every client is served the aired order unless it asks for this one. It is TMDB’s: it cannot be edited here, only frozen.',
     orderNoteTmdb: 'As TMDB groups them; clients are served the aired order unless they ask for this one.',
     orderNoteLocal: 'As they were put in order here; clients are served the aired order unless they ask for this one.',
     orderNoteFrozen: 'Frozen as the aired numbering: every client asking for the aired order is served this one.',
@@ -649,6 +695,7 @@ export const en = {
       directing: 'Directing',
       writing: 'Writing',
       producing: 'Producing',
+      crew: 'Crew',
     },
     jobWorks: (n: number) => plural(n, { one: '1 work', other: `${n} works` }),
     order: 'Order',
@@ -799,6 +846,42 @@ export const en = {
     aired: (aired: number, of: number) => `${aired} of ${of} aired`,
     nextEpisode: (n: number, when: string) => `Episode ${n} ${when}`,
     sequelOf: (title: string) => `Sequel of ${title}`,
+    // An AniList and MyAnimeList entry of a season, as the anime identifier list places it.
+    cour: {
+      label: 'This season’s entry',
+      part: (part: number, parts: number) => `Part ${part} of ${parts}`,
+      premieres: 'Premieres this season',
+      episodes: (first: number, last: number) => (first === last ? `Episode ${first}` : `Episodes ${first}–${last}`),
+      next: (episode: number, when: string) => `Episode ${episode} ${when}`,
+      status: { notYetReleased: 'Not yet aired', releasing: 'Airing', finished: 'Finished' } as Record<string, string>,
+      planned: (n: number) => plural(n, { one: '1 episode planned', other: `${n} episodes planned` }),
+      source: (source: string) => `Adapted from ${source}`,
+      studios: (list: string) => `Studios: ${list}`,
+      onAnilist: 'On AniList',
+      onMal: 'On MyAnimeList',
+      describe: 'MyAnimeList’s description',
+      describing: 'Asking MyAnimeList…',
+      describeFailed: 'MyAnimeList could not be asked just now.',
+      undescribed: 'MyAnimeList says nothing more of it.',
+      sources: {
+        original: 'an original story',
+        manga: 'a manga',
+        light_novel: 'a light novel',
+        novel: 'a novel',
+        web_manga: 'a web manga',
+        web_novel: 'a web novel',
+        visual_novel: 'a visual novel',
+        game: 'a game',
+        '4_koma_manga': 'a four-panel manga',
+        digital_manga: 'a digital manga',
+        card_game: 'a card game',
+        book: 'a book',
+        picture_book: 'a picture book',
+        music: 'a piece of music',
+        mixed_media: 'several media',
+        radio: 'a radio play',
+      } as Record<string, string>,
+    },
     finished: 'all aired',
     trailerOf: (title: string) => `Trailer: ${title}`,
     loadFailed: 'The season could not be loaded just now. Try again in a moment.',
@@ -1146,6 +1229,23 @@ export const en = {
           store: 'The media store is off (AMS_MEDIA_STORAGE): until it is on, the relay names TMDB’s image server.',
           publicUrl: 'AMS_PUBLIC_URL is not set: until it is, the relay names TMDB’s image server.',
           both: 'The media store is off (AMS_MEDIA_STORAGE) and AMS_PUBLIC_URL is not set: until both are there, the relay names TMDB’s image server.',
+        },
+      },
+      // What each relay answers itself, from the catalogue, before asking its service.
+      relayMode: {
+        title: 'What the relays answer themselves',
+        lead: 'Whether a relay asks its service for everything, or answers the works this server holds from the catalogue, in the service’s own shape.',
+        label: (relay: string) => `What the ${relay} answers itself`,
+        options: { relay: 'Ask the service', 'local-first': 'The catalogue first' },
+        consequence: {
+          relay: (service: string) =>
+            `Everything is asked of ${service}, and the locks are written into its answers. A work entered by hand here is unknown to ${service}’s clients.`,
+          'local-first': (service: string) =>
+            `A work this server holds — corrected, entered by hand, or one ${service} knows nothing of — is answered from the catalogue, in ${service}’s shape, without asking ${service} and without its key; a search lists the catalogue’s works first. Anything else is asked of ${service}, as before.`,
+        },
+        answers: {
+          tmdb: 'Films and series, their seasons and episodes, a find by one of their ids, the first page of a search. Where to watch, reviews and the like are still TMDB’s, asked through the relay where TMDB knows the work.',
+          tvdb: 'A series’ or a film’s record, short or extended, its translations, its episodes in any order it holds, its seasons and episodes, the first page of a search. People, lists and companies are still TheTVDB’s.',
         },
       },
       surface: 'API',
@@ -1893,6 +1993,10 @@ export const en = {
         episodeStills: 'Stills',
         airDateUtc: 'Broadcast instant (UTC)',
         absoluteNumbering: 'Absolute numbering',
+        seasonTranslations: 'Season titles and synopses in other languages',
+        keywordEntities: 'Keywords, with TMDB’s ids',
+        companies: 'Networks and companies, a role at a time from the first that lists any, the others completing them',
+        videos: 'Videos (every one)',
       } as Record<string, string>,
       only: { series: 'series', movie: 'films' },
       cell: {
@@ -3205,6 +3309,7 @@ export const en = {
         writer: 'Writer',
         producer: 'Producer',
         guest: 'Guest',
+        crew: 'Crew',
         as: (character: string) => `as ${character}`,
         titles: 'Alternative titles',
         titlesHint:
@@ -3428,6 +3533,7 @@ export const en = {
       names: {
         'refresh.sweep': 'Refresh what is due',
         'refresh.all': 'Refresh everything',
+        'refresh.replay': 'Fill in from the answers kept',
         'import.anime': 'Anime identifier list',
         'import.imdb': 'IMDb ratings',
         'imdb.akas': 'IMDb titles by region',
@@ -3451,6 +3557,7 @@ export const en = {
       about: {
         'refresh.sweep': 'Works whose details have aged — a series still airing every few hours, an ended one weekly — asked of their sources again, a batch at a time.',
         'refresh.all': 'Every work that has an identifier elsewhere, asked of its sources now, one after the other. It can be stopped; what is left is then refreshed by the schedule.',
+        'refresh.replay': 'What this version keeps of TMDB’s and TheTVDB’s answers and the ones before let go — the networks and the companies with their ids and logos, TMDB’s keywords and videos, each picture’s language, size and votes, each crew credit’s department and job — filled into every work from the answers kept with it, without asking either: what each work’s next refresh would bring, at once. TMDB’s answers over six months old are passed over. The rest of the crew and the seasons’ titles in other languages wait for that refresh.',
         'import.anime': 'The list that ties AniList and MyAnimeList to TheTVDB and TMDB, downloaded whole.',
         'import.imdb': 'IMDb’s ratings file, downloaded whole and kept for the works held here.',
         'imdb.akas': 'IMDb’s titles file — half a gigabyte — read through as it arrives, and the titles of the works held here kept: Radarr is given a film’s titles in the regions it is set to. Weekly, once switched on in the settings. It can be stopped: the works it reached keep their new titles, the others their old ones.',
@@ -3597,6 +3704,8 @@ export const en = {
         exported: (works: number, episodes: number, failed: number) =>
           `${works} works, ${episodes} episodes${failed ? `, ${failed} failed` : ''}`,
         nothingDue: 'Nothing was due',
+        replayed: (filled: number, passed: number) =>
+          `${plural(filled, { one: '1 work', other: `${filled} works` })} filled in, ${passed} passed over`,
         stored: (done: number, failed: number, of: number) => `${done} stored, ${failed} failed, of ${of}`,
         storedProgress: (at: number, of: number, done: number, failed: number) =>
           `${at} of ${of}: ${done} stored, ${failed} failed`,
@@ -3945,6 +4054,8 @@ export const en = {
       'tmdb.watchRegion': 'Country for where to watch',
       'tmdb.searchLimit': 'Results per search',
       'tmdb.castLimit': 'Cast kept per work',
+      'tmdb.crewLimit': 'Crew kept per work',
+      'tmdb.imageLimit': 'TMDB’s pictures kept of each kind',
       'tvdb.castLimit': 'TheTVDB’s characters kept per series',
       'tvdb.searchFallback': 'TheTVDB, when a search finds nothing',
       'skyhook.fallback': 'Skyhook, when TheTVDB has nothing',
@@ -3977,6 +4088,8 @@ export const en = {
       'mcp.enabled': 'MCP server, for agents',
       'relays.staleIfError': 'The relays’ last answer, when a service fails',
       'tmdb.images': 'Where TMDB’s clients fetch the pictures',
+      'tmdb.relayMode': 'What the TMDB relay answers itself',
+      'tvdb.relayMode': 'What the TheTVDB relay answers itself',
       'refresh.enabled': 'Refresh in the background',
       'refresh.intervalSeconds': 'Between sweeps',
       'refresh.batchSize': 'Works per sweep',
@@ -4005,6 +4118,10 @@ export const en = {
       'tmdb.searchLimit': 'How many works a search hands back.',
       'tmdb.castLimit':
         'How many of TMDB’s actors a work keeps, top of the bill first: 25 to begin with, 200 at the most. Each is a row, and a portrait to fetch and keep. A work already held takes the new figure at its next refresh.',
+      'tmdb.crewLimit':
+        'How many of TMDB’s crew a work keeps, every department — directing, writing, production, music, camera, editing and the rest — the most telling jobs first: 30 to begin with, 500 at the most, 0 for none. Only the directors, the writers and the producers have a portrait fetched. A work already held takes the new figure at its next refresh.',
+      'tmdb.imageLimit':
+        'How many of TMDB’s posters and backdrops a work keeps, the best of each useful language first — the catalogue’s, English, none, the work’s own; keyart and logos take three fifths of it, rounded up, so 5 keeps five posters, five backdrops, three keyart and three logos. From 1 to 50. A work already held takes the new figure at its next refresh.',
       'tvdb.castLimit':
         'How many of TheTVDB’s characters a series keeps, in TheTVDB’s order: each is matched by name to the cast another source gave, or added after it, and gives that person TheTVDB’s id. 25 when unset, 200 at the most. A work already held takes the new figure at its next refresh.',
       'tvdb.searchFallback': 'Searched only when the store and TMDB both come back empty. TheTVDB knows series TMDB has never heard of.',
@@ -4031,6 +4148,10 @@ export const en = {
         'When TMDB, TheTVDB or AniList cannot be reached, takes too long, or answers 429, 500, 502, 503 or 504, the relays answer with the last answer they kept for the same request — seven days old at most for TMDB and TheTVDB, a day for AniList — with an Age header that says how old it is; TMDB’s and TheTVDB’s reference lists from the copy the database keeps, 180 days old at most. Only what was asked with this server’s key is kept for it. Also on Opening & APIs.',
       'tmdb.images':
         'The image server the TMDB relay’s /3/configuration names. TMDB’s own, or this server’s, /tmdb-images/…, which Jellyfin, Kodi, Kometa and Emby then fetch the pictures from — only with the media store on and AMS_PUBLIC_URL set; without either, TMDB’s. Seerr and Yamtrack load theirs in the reader’s browser, from TMDB, either way. Also on Opening & APIs.',
+      'tmdb.relayMode':
+        'relay asks TMDB for everything and writes the locks into its answers. local-first answers a film or a series this server holds — its seasons and episodes, a find by one of its ids — from the catalogue, in TMDB’s shape, corrections and works entered by hand included, without asking TMDB and without its key; puts the catalogue’s works first in a search; and asks TMDB for the rest. Also on Opening & APIs.',
+      'tvdb.relayMode':
+        'relay asks TheTVDB for everything and writes the locks into its answers. local-first answers a series or a film this server holds — its record, its episodes in any order, its seasons and episodes — from the catalogue, in TheTVDB’s shape, without asking TheTVDB and without its key; puts the catalogue’s works first in a search; and asks TheTVDB for the rest. Also on Opening & APIs.',
       'refresh.enabled': 'Stored works are fetched again on a schedule as what is known about them ages.',
       'refresh.intervalSeconds': 'In seconds. A minute at the least, a week at the most.',
       'refresh.batchSize': 'How many works are re-fetched each time the scheduler wakes.',
@@ -4071,6 +4192,10 @@ export const en = {
       'backup.schedule.monthly': 'Monthly',
       'tmdb.images.tmdb': 'From TMDB',
       'tmdb.images.server': 'From this server',
+      'tmdb.relayMode.relay': 'Ask TMDB',
+      'tmdb.relayMode.local-first': 'The catalogue first',
+      'tvdb.relayMode.relay': 'Ask TheTVDB',
+      'tvdb.relayMode.local-first': 'The catalogue first',
     },
     inherited: 'Inherited',
     inheritedHint: 'Following the server’s answer.',
@@ -4312,7 +4437,24 @@ export const en = {
     count: (n: number, max: number) => `${n} / ${max}`,
   },
   facet: {
-    kinds: { genre: 'Genre', network: 'Network or studio', year: 'Year', decade: 'Decade' },
+    kinds: {
+      genre: 'Genre',
+      network: 'Network or studio',
+      year: 'Year',
+      decade: 'Decade',
+      company: 'Company',
+      keyword: 'Keyword',
+    },
+    // A network or a company as itself: what it is, where from, what it did.
+    companyKinds: { network: 'Network', company: 'Company' },
+    roles: { network: 'Network', production: 'Production', studio: 'Studio', distributor: 'Distribution' } as Record<
+      string,
+      string
+    >,
+    roleCount: (role: string, n: number) => `${role} · ${n}`,
+    onTmdb: 'On TMDB',
+    keywordNote: 'One of TMDB’s keywords.',
+    notFoundEntityHint: 'Nothing has that id, or no work this catalogue shows you is filed under it.',
     decadeName: (year: number) => `The ${year}s`,
     works: (n: number) => plural(n, { one: '1 work in the catalogue', other: `${n} works in the catalogue` }),
     none: 'Nothing in the catalogue yet',
@@ -4349,7 +4491,7 @@ export const en = {
     shared: 'The people they share',
     sharedNone: 'Nobody is credited on both.',
     on: (title: string) => `On ${title}:`,
-    jobs: { actor: 'Acting', director: 'Directing', writer: 'Writing', producer: 'Producing', guest: 'Guest' },
+    jobs: { actor: 'Acting', director: 'Directing', writer: 'Writing', producer: 'Producing', guest: 'Guest', crew: 'Crew' },
   },
   notFound: {
     title: 'Nothing lives at this address',
