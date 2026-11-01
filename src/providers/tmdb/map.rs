@@ -10,10 +10,11 @@ use std::collections::BTreeMap;
 use crate::{
     db::{new_id, now},
     domain::{
-        AlternativeTitle, CountryRelease, CoverType, Credit, CreditType, Episode, EpisodeOrder,
-        ExternalIds, Image, MediaItem, MediaKind, OrderKind, OrderRecord, PlacedEpisode, Rating,
-        RatingValue, ReleaseKind, Season, Translation, make_slug,
-        person::{EpisodeCredit, PersonRef},
+        AlternativeTitle, Company, CompanyCredit, CompanyRole, CountryRelease, CoverType, Credit,
+        CreditType, Episode, EpisodeOrder, ExternalIds, Image, ImageDetails, Keyword, MediaItem,
+        MediaKind, OrderKind, OrderRecord, PlacedEpisode, Rating, RatingValue, ReleaseKind, Season,
+        Translation, Video, make_slug,
+        person::{EpisodeCredit, PersonRef, PersonTranslation},
     },
     providers::{
         lang::{iso_639_1_to_3, iso_3166_2_to_3},
@@ -31,15 +32,65 @@ pub const MAX_CAST: usize = 200;
 
 /// Writers, and producers, kept of each: a film's crew names a dozen of
 /// either, and a page shows a few.
-const MAX_CREW: usize = 6;
+const MAX_EACH: usize = 6;
+
+/// Directors kept: a film has one or two, an anthology a few.
+const MAX_DIRECTORS: usize = 3;
+
+/// How much of TMDB's answer a work keeps: of its cast, of its crew, and of
+/// its pictures of each kind — `tmdb.castLimit`, `tmdb.crewLimit` and
+/// `tmdb.imageLimit`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    pub cast: usize,
+    /// Every department's together: none at 0.
+    pub crew: usize,
+    /// Posters, and backdrops; key art and logos three fifths of it,
+    /// rounded up.
+    pub images: usize,
+}
+
+impl Limits {
+    /// As the settings say.
+    pub fn of(state: &crate::state::AppState) -> Self {
+        Self {
+            cast: state.cast_limit(),
+            crew: state.crew_limit(),
+            images: state.image_limit(),
+        }
+    }
+
+    /// How many key art and logos a work keeps: three fifths of its posters,
+    /// rounded up — three at the five a work keeps by default.
+    fn lesser_images(self) -> usize {
+        (self.images * 3).div_ceil(5)
+    }
+}
+
+impl From<usize> for Limits {
+    /// A cast's limit alone: the crew and the pictures as the settings keep
+    /// them by default.
+    fn from(cast: usize) -> Self {
+        Self {
+            cast,
+            crew: crate::state::DEFAULT_CREW,
+            images: crate::state::DEFAULT_IMAGES,
+        }
+    }
+}
 
 /// Region preferred when a provider offers per-country data.
 const PREFERRED_REGION: &str = "US";
 
 // ─── series ──────────────────────────────────────────────────────────────────
 
-/// A series, keeping `cast` of its actors.
-pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season], cast: usize) -> MediaItem {
+/// A series, keeping as much of TMDB's answer as `limits` say.
+pub fn tv_to_item(
+    tv: &models::Tv,
+    seasons: &[models::Season],
+    limits: impl Into<Limits>,
+) -> MediaItem {
+    let limits = limits.into();
     let mut item = MediaItem::empty(MediaKind::Series);
 
     item.title = tv.name.clone();
@@ -92,7 +143,10 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season], cast: usize) -> M
         .as_ref()
         .map(|k| k.results.iter().map(|n| n.name.clone()).collect())
         .unwrap_or_default();
+    item.keyword_entities = keyword_entities(tv.keywords.as_ref().map(|k| &k.results[..]));
     item.trailer_youtube_id = tv.videos.as_ref().and_then(|v| youtube_trailer(&v.results));
+    item.videos = videos(tv.videos.as_ref().map(|v| &v.results[..]));
+    item.companies = companies(&tv.networks, &tv.production_companies);
     item.slug = make_slug(&item.title, item.year);
 
     item.external_ids = ExternalIds {
@@ -109,14 +163,16 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season], cast: usize) -> M
     };
 
     item.ratings = vote_rating(tv.vote_average, tv.vote_count);
-    item.images = artwork(
+    (item.images, item.image_details) = artwork(
         tv.poster_path.as_deref(),
         tv.backdrop_path.as_deref(),
         tv.images.as_ref(),
+        limits,
+        &useful_languages(tv.asked_in.as_deref(), tv.original_language.as_deref()),
     );
-    let (cast_and_crew, mut known) = credits(tv.credits.as_ref(), &tv.created_by, cast);
+    let (cast_and_crew, mut known) = credits(tv.credits.as_ref(), &tv.created_by, limits);
     item.credits = cast_and_crew;
-    item.people.episodes = episode_credits(seasons, cast, &mut known);
+    item.people.episodes = episode_credits(seasons, limits, &mut known);
     item.people.by_credit = known;
     item.alternative_titles = tv
         .alternative_titles
@@ -149,6 +205,12 @@ pub fn tv_to_item(tv: &models::Tv, seasons: &[models::Season], cast: usize) -> M
                 })
                 .unwrap_or_default(),
             primary_images: Default::default(),
+            translations: seasons
+                .iter()
+                .find(|season| season.season_number == s.season_number)
+                .and_then(|season| season.translations.as_ref())
+                .map(|t| season_translations(&t.translations))
+                .unwrap_or_default(),
         })
         .collect();
 
@@ -186,10 +248,12 @@ pub fn tv_summary_to_item(summary: &models::TvSummary) -> MediaItem {
         ..Default::default()
     };
     item.ratings = vote_rating(summary.vote_average, summary.vote_count);
-    item.images = artwork(
+    (item.images, _) = artwork(
         summary.poster_path.as_deref(),
         summary.backdrop_path.as_deref(),
         None,
+        Limits::from(DEFAULT_CAST),
+        &[],
     );
 
     item
@@ -328,8 +392,9 @@ pub fn episode_group_places(group: &models::EpisodeGroup) -> Vec<PlacedEpisode> 
 
 // ─── movie ───────────────────────────────────────────────────────────────────
 
-/// A film, keeping `cast` of its actors.
-pub fn movie_to_item(movie: &models::Movie, cast: usize) -> MediaItem {
+/// A film, keeping as much of TMDB's answer as `limits` say.
+pub fn movie_to_item(movie: &models::Movie, limits: impl Into<Limits>) -> MediaItem {
+    let limits = limits.into();
     let mut item = MediaItem::empty(MediaKind::Movie);
 
     item.title = movie.title.clone();
@@ -361,10 +426,13 @@ pub fn movie_to_item(movie: &models::Movie, cast: usize) -> MediaItem {
         .as_ref()
         .map(|k| k.keywords.iter().map(|n| n.name.clone()).collect())
         .unwrap_or_default();
+    item.keyword_entities = keyword_entities(movie.keywords.as_ref().map(|k| &k.keywords[..]));
     item.trailer_youtube_id = movie
         .videos
         .as_ref()
         .and_then(|v| youtube_trailer(&v.results));
+    item.videos = videos(movie.videos.as_ref().map(|v| &v.results[..]));
+    item.companies = companies(&[], &movie.production_companies);
     item.collection_tmdb_id = movie.belongs_to_collection.as_ref().map(|c| c.id);
     item.slug = make_slug(&item.title, item.year);
 
@@ -407,12 +475,17 @@ pub fn movie_to_item(movie: &models::Movie, cast: usize) -> MediaItem {
     };
 
     item.ratings = vote_rating(movie.vote_average, movie.vote_count);
-    item.images = artwork(
+    (item.images, item.image_details) = artwork(
         movie.poster_path.as_deref(),
         movie.backdrop_path.as_deref(),
         movie.images.as_ref(),
+        limits,
+        &useful_languages(
+            movie.asked_in.as_deref(),
+            movie.original_language.as_deref(),
+        ),
     );
-    let (cast_and_crew, known) = credits(movie.credits.as_ref(), &[], cast);
+    let (cast_and_crew, known) = credits(movie.credits.as_ref(), &[], limits);
     item.credits = cast_and_crew;
     item.people.by_credit = known;
     item.alternative_titles = movie
@@ -455,10 +528,12 @@ pub fn movie_summary_to_item(summary: &models::MovieSummary) -> MediaItem {
         ..Default::default()
     };
     item.ratings = vote_rating(summary.vote_average, summary.vote_count);
-    item.images = artwork(
+    (item.images, _) = artwork(
         summary.poster_path.as_deref(),
         summary.backdrop_path.as_deref(),
         None,
+        Limits::from(DEFAULT_CAST),
+        &[],
     );
 
     item
@@ -785,89 +860,171 @@ fn image(cover_type: CoverType, url: &str, season_number: Option<i32>, sort_orde
     }
 }
 
-/// Primary poster and backdrop, then any extra artwork from `images`.
+/// The languages a work's pictures are kept in first, each kind's best of
+/// each: the one the answer was asked in, English, none — a picture with no
+/// text on it — and the work's own. ISO 639-1, as TMDB files its pictures;
+/// none of the two a caller does not know.
+fn useful_languages(asked: Option<&str>, original: Option<&str>) -> Vec<Option<String>> {
+    let mut useful: Vec<Option<String>> = Vec::new();
+    let code = |language: &str| {
+        let code = language.trim().to_ascii_lowercase();
+        (!code.is_empty()).then_some(code)
+    };
+    let languages = [
+        asked.and_then(code).map(Some),
+        Some(Some("en".to_string())),
+        Some(None),
+        original.and_then(code).map(Some),
+    ];
+    for language in languages.into_iter().flatten() {
+        if !useful.contains(&language) {
+            useful.push(language);
+        }
+    }
+    useful
+}
+
+/// The language a picture of TMDB's carries text in, ISO 639-1; none for
+/// one with none — and for TMDB's `xx`, which says the same.
+fn picture_language(picture: &models::ImageRef) -> Option<String> {
+    picture
+        .iso_639_1
+        .as_deref()
+        .map(|l| l.trim().to_ascii_lowercase())
+        .filter(|l| !l.is_empty() && l != "xx")
+}
+
+/// The pictures of one kind a work keeps, `limit` of them: the best of each
+/// language in `useful`, in its order, then the rest as TMDB ranks them.
+fn ranked<'a>(
+    pictures: impl IntoIterator<Item = &'a models::ImageRef>,
+    limit: usize,
+    useful: &[Option<String>],
+) -> Vec<&'a models::ImageRef> {
+    let all: Vec<&models::ImageRef> = pictures.into_iter().collect();
+    let mut kept: Vec<usize> = Vec::new();
+    for language in useful {
+        if kept.len() >= limit {
+            break;
+        }
+        if let Some(at) = all
+            .iter()
+            .position(|picture| picture_language(picture) == *language)
+            .filter(|at| !kept.contains(at))
+        {
+            kept.push(at);
+        }
+    }
+    for at in 0..all.len() {
+        if kept.len() >= limit {
+            break;
+        }
+        if !kept.contains(&at) {
+            kept.push(at);
+        }
+    }
+    kept.into_iter().map(|at| all[at]).collect()
+}
+
+/// Primary poster and backdrop, then the pictures `images` lists: as many
+/// posters and backdrops as `limits` say, three fifths as many key art and
+/// logos, each kind's best of every language in `useful` first. A picture
+/// keeps the language written on it, as the rest of the model writes one —
+/// none for a picture with no text — and what TMDB says of it beyond its
+/// address is kept beside, by its address.
 ///
 /// The primary paths come first so `MediaItem::image` picks TMDB's own choice
-/// rather than whichever alternate happens to sort first.
+/// rather than whichever alternate happens to sort first. A background is
+/// best without text: textless ones lead those.
 fn artwork(
     poster: Option<&str>,
     backdrop: Option<&str>,
     extra: Option<&models::Images>,
-) -> Vec<Image> {
+    limits: Limits,
+    useful: &[Option<String>],
+) -> (Vec<Image>, BTreeMap<String, ImageDetails>) {
     let mut out = Vec::new();
+    let mut details: BTreeMap<String, ImageDetails> = BTreeMap::new();
     // One picture may be two kinds: a textless poster is key art as well.
     let mut seen: Vec<(CoverType, String)> = Vec::new();
+    let listed = |path: &str| {
+        extra.and_then(|images| {
+            images
+                .posters
+                .iter()
+                .chain(&images.backdrops)
+                .chain(&images.logos)
+                .find(|picture| picture.file_path == path)
+        })
+    };
 
-    let push = |out: &mut Vec<Image>,
-                seen: &mut Vec<(CoverType, String)>,
-                kind: CoverType,
-                path: &str,
-                order: i32| {
+    let mut push = |kind: CoverType, path: &str, order: i32| {
         let url = image_url(path);
         if seen.iter().any(|(k, u)| *k == kind && *u == url) {
             return;
         }
         seen.push((kind, url.clone()));
-        out.push(image(kind, &url, None, order));
+        let mut kept = image(kind, &url, None, order);
+        if let Some(picture) = listed(path) {
+            kept.language = picture_language(picture).as_deref().map(iso_639_1_to_3);
+            let said = ImageDetails {
+                width: picture.width,
+                height: picture.height,
+                vote_average: picture.vote_average,
+                vote_count: picture.vote_count,
+            };
+            if !said.is_empty() {
+                details.insert(url, said);
+            }
+        }
+        out.push(kept);
     };
 
     if let Some(path) = poster {
-        push(&mut out, &mut seen, CoverType::Poster, path, 0);
+        push(CoverType::Poster, path, 0);
     }
     if let Some(path) = backdrop {
-        push(&mut out, &mut seen, CoverType::Fanart, path, 0);
+        push(CoverType::Fanart, path, 0);
     }
 
     if let Some(images) = extra {
-        for (order, p) in images.posters.iter().take(5).enumerate() {
-            push(
-                &mut out,
-                &mut seen,
-                CoverType::Poster,
-                &p.file_path,
-                order as i32 + 1,
-            );
+        let lesser = limits.lesser_images();
+        for (order, p) in ranked(&images.posters, limits.images, useful)
+            .into_iter()
+            .enumerate()
+        {
+            push(CoverType::Poster, &p.file_path, order as i32 + 1);
         }
         // A poster TMDB files under no language has no title written on it:
         // key art, the picture alone, which a client shows where the title
-        // is said beside it. The posters are asked for in the configured
-        // language and in none.
+        // is said beside it.
         for (order, p) in images
             .posters
             .iter()
-            .filter(|p| p.iso_639_1.is_none())
-            .take(3)
+            .filter(|p| picture_language(p).is_none())
+            .take(lesser)
             .enumerate()
         {
-            push(
-                &mut out,
-                &mut seen,
-                CoverType::Keyart,
-                &p.file_path,
-                order as i32,
-            );
+            push(CoverType::Keyart, &p.file_path, order as i32);
         }
-        for (order, b) in images.backdrops.iter().take(5).enumerate() {
-            push(
-                &mut out,
-                &mut seen,
-                CoverType::Fanart,
-                &b.file_path,
-                order as i32 + 1,
-            );
+        let textless_first: Vec<Option<String>> = std::iter::once(None)
+            .chain(useful.iter().filter(|l| l.is_some()).cloned())
+            .collect();
+        for (order, b) in ranked(&images.backdrops, limits.images, &textless_first)
+            .into_iter()
+            .enumerate()
+        {
+            push(CoverType::Fanart, &b.file_path, order as i32 + 1);
         }
-        for (order, l) in images.logos.iter().take(3).enumerate() {
-            push(
-                &mut out,
-                &mut seen,
-                CoverType::Clearlogo,
-                &l.file_path,
-                order as i32,
-            );
+        for (order, l) in ranked(&images.logos, lesser, useful)
+            .into_iter()
+            .enumerate()
+        {
+            push(CoverType::Clearlogo, &l.file_path, order as i32);
         }
     }
 
-    out
+    (out, details)
 }
 
 /// What TMDB says of a credited person beyond the name, by the credit's id:
@@ -895,12 +1052,12 @@ fn person_ref(
     (known != PersonRef::default()).then_some(known)
 }
 
-/// The cast, the first `limit` of it, then the crew, with what TMDB says of
-/// each person beyond the name.
+/// The cast and the crew, as many of each as `limits` say, with what TMDB
+/// says of each person beyond the name.
 fn credits(
     credits: Option<&models::Credits>,
     creators: &[models::Creator],
-    limit: usize,
+    limits: Limits,
 ) -> (Vec<Credit>, Known) {
     let mut known = Known::new();
     let mut out: Vec<Credit> = credits
@@ -908,7 +1065,7 @@ fn credits(
             credits
                 .cast
                 .iter()
-                .take(limit.clamp(1, MAX_CAST))
+                .take(limits.cast.clamp(1, MAX_CAST))
                 .enumerate()
                 .map(|(i, member)| {
                     let credit = cast_credit(CreditType::Actor, member, i);
@@ -930,6 +1087,8 @@ fn credits(
         credits.map_or(&[][..], |c| &c.crew),
         creators,
         &mut known,
+        limits.crew,
+        true,
     ));
     (out, known)
 }
@@ -946,20 +1105,32 @@ fn cast_credit(kind: CreditType, member: &models::CastMember, at: usize) -> Cred
         credit_tmdb_id: member.credit_id.clone(),
         sort_order: member.order.unwrap_or(at as i32),
         is_manual: false,
+        department: None,
+        job: None,
     }
 }
 
-/// Who made the work behind the camera: its directors, whoever created a
-/// series, its writers, then its producers — numbered on from one another,
-/// so a page that lists the crew in its order lists them so.
+/// Who made the work behind the camera, `limit` of them at most: its
+/// directors, whoever created a series, its writers, then its producers —
+/// the kinds a credit has always had — then the rest of its crew, the most
+/// telling jobs first: the music, the photography, the editing, then every
+/// other job in the order TMDB lists them. Numbered on from one another, so
+/// a page that lists the crew in its order lists them so.
 ///
-/// Each person once a kind, with the job TMDB gives them first, `Screenplay`
-/// or `Novel`, where Radarr and the NFO read the kind alone. Radarr shows a
-/// director and a writer; Sonarr ignores the crew entirely.
+/// Each person once a kind, and once a job besides in the rest of the crew,
+/// with TMDB's department and job — and the job in `character_name` too,
+/// `Screenplay` or `Novel`, where Radarr and the NFO have always read it.
+/// Radarr shows a director and a writer; Sonarr ignores the crew entirely.
+///
+/// The rest of the crew comes without the portrait TMDB gives: the media
+/// store keeps every credit's (`media.people`), and the crew's defaults keep
+/// no more of them than before it was kept whole.
 fn crew(
     members: &[models::CrewMember],
     creators: &[models::Creator],
     known: &mut Known,
+    limit: usize,
+    with_rest: bool,
 ) -> Vec<Credit> {
     struct Member<'a> {
         id: Option<i64>,
@@ -972,16 +1143,17 @@ fn crew(
     }
 
     let mut out: Vec<Credit> = Vec::new();
-    let mut add = |kind: CreditType, job: &str, member: Member<'_>| -> bool {
+    let mut add = |kind: CreditType, department: &str, job: &str, member: Member<'_>| -> bool {
         let name = member.name.trim();
         let same = |c: &Credit| {
             c.credit_type == kind
+                && (kind != CreditType::Crew || c.job.as_deref() == Some(job))
                 && match (c.tmdb_person_id, member.id) {
                     (Some(a), Some(b)) => a == b,
                     _ => c.person_name == name,
                 }
         };
-        if name.is_empty() || out.iter().any(same) {
+        if out.len() >= limit || name.is_empty() || out.iter().any(same) {
             return false;
         }
         let credit = Credit {
@@ -989,11 +1161,16 @@ fn crew(
             credit_type: kind,
             person_name: name.to_string(),
             character_name: Some(job.to_string()),
-            image: member.profile.map(image_url),
+            image: (kind != CreditType::Crew)
+                .then_some(member.profile)
+                .flatten()
+                .map(image_url),
             tmdb_person_id: member.id,
             credit_tmdb_id: member.credit_id.cloned(),
             sort_order: i32::try_from(out.len()).unwrap_or(i32::MAX),
             is_manual: false,
+            department: Some(department.to_string()),
+            job: Some(job.to_string()),
         };
         if let Some(person) =
             person_ref(name, member.original_name, member.gender, member.popularity)
@@ -1014,17 +1191,27 @@ fn crew(
             popularity: m.popularity,
         }
     }
+    let job_of = |m: &models::CrewMember| non_empty(m.job.as_deref());
+    let department_of = |m: &models::CrewMember, otherwise: &str| {
+        non_empty(m.department.as_deref()).unwrap_or_else(|| otherwise.to_string())
+    };
 
     for member in members
         .iter()
         .filter(|c| c.job.as_deref() == Some("Director"))
-        .take(3)
+        .take(MAX_DIRECTORS)
     {
-        add(CreditType::Director, "Director", of(member));
+        add(
+            CreditType::Director,
+            &department_of(member, "Directing"),
+            "Director",
+            of(member),
+        );
     }
-    for creator in creators.iter().take(MAX_CREW) {
+    for creator in creators.iter().take(MAX_EACH) {
         add(
             CreditType::Writer,
+            "Writing",
             "Creator",
             Member {
                 id: creator.id,
@@ -1041,20 +1228,12 @@ fn crew(
     // its producers proper, not the executive ones a series lists by the
     // dozen.
     let mut writers = 0;
-    for member in members
-        .iter()
-        .filter(|c| c.department.as_deref() == Some("Writing"))
-    {
-        if writers == MAX_CREW {
+    for member in members.iter().filter(|c| is_writing(c)) {
+        if writers == MAX_EACH {
             break;
         }
-        let job = member
-            .job
-            .as_deref()
-            .map(str::trim)
-            .filter(|j| !j.is_empty())
-            .unwrap_or("Writer");
-        if add(CreditType::Writer, job, of(member)) {
+        let job = job_of(member).unwrap_or_else(|| "Writer".to_string());
+        if add(CreditType::Writer, "Writing", &job, of(member)) {
             writers += 1;
         }
     }
@@ -1063,28 +1242,70 @@ fn crew(
         .iter()
         .filter(|c| c.job.as_deref() == Some("Producer"))
     {
-        if producers == MAX_CREW {
+        if producers == MAX_EACH {
             break;
         }
-        if add(CreditType::Producer, "Producer", of(member)) {
+        if add(
+            CreditType::Producer,
+            &department_of(member, "Production"),
+            "Producer",
+            of(member),
+        ) {
             producers += 1;
         }
+    }
+
+    // The rest, by how telling the job is; TMDB's order among equals. A
+    // job of the kinds above is theirs, kept or not, and none of the rest.
+    let mut rest: Vec<(u8, &models::CrewMember)> = members
+        .iter()
+        .filter(|_| with_rest)
+        .filter(|m| !matches!(m.job.as_deref(), Some("Director" | "Producer")) && !is_writing(m))
+        .filter_map(|m| Some((crew_rank(m.department.as_deref(), job_of(m)?.as_str()), m)))
+        .collect();
+    rest.sort_by_key(|(rank, _)| *rank);
+    for (_, member) in rest {
+        let Some(job) = job_of(member) else { continue };
+        let department = department_of(member, "Crew");
+        add(CreditType::Crew, &department, &job, of(member));
     }
 
     out
 }
 
+/// Whether a member of TMDB's crew is of its writing department: a writer,
+/// whatever their job.
+fn is_writing(member: &models::CrewMember) -> bool {
+    member.department.as_deref() == Some("Writing")
+}
+
+/// How telling a job of the rest of the crew is, the most first: whoever
+/// scored the work, shot it, cut it; then the rest of their departments;
+/// then every other.
+fn crew_rank(department: Option<&str>, job: &str) -> u8 {
+    match (department, job) {
+        (_, "Original Music Composer" | "Music" | "Composer" | "Main Title Theme Composer") => 0,
+        (_, "Director of Photography") => 1,
+        (_, "Editor") => 2,
+        (Some("Sound"), _) => 3,
+        (Some("Camera"), _) => 4,
+        (Some("Editing"), _) => 5,
+        _ => 6,
+    }
+}
+
 /// Each episode's own credits, as the season documents carry them: its
-/// guests, the first `limit` of them in TMDB's order, then its director and
-/// its writers. Each on the episode as TMDB numbers it, with TMDB's id of
-/// the episode — which is how it finds its place in the work's numbering
-/// when TheTVDB's is the work's — and what TMDB says of each person.
+/// guests, as many as the cast's limit in TMDB's order, then its director
+/// and its writers, as many as the crew's. Each on the episode as TMDB
+/// numbers it, with TMDB's id of the episode — which is how it finds its
+/// place in the work's numbering when TheTVDB's is the work's — and what
+/// TMDB says of each person.
 ///
 /// Never a producer: a series' producers are credited on every episode, and
-/// on the series already.
+/// on the series already; nor the rest of an episode's crew.
 fn episode_credits(
     seasons: &[models::Season],
-    limit: usize,
+    limits: Limits,
     known: &mut Known,
 ) -> Vec<EpisodeCredit> {
     let mut out = Vec::new();
@@ -1104,7 +1325,7 @@ fn episode_credits(
             guests.sort_by_key(|g| g.order.unwrap_or(i32::MAX));
             for (at, member) in guests
                 .into_iter()
-                .take(limit.clamp(1, MAX_CAST))
+                .take(limits.cast.clamp(1, MAX_CAST))
                 .enumerate()
             {
                 let credit = cast_credit(CreditType::Guest, member, at);
@@ -1118,7 +1339,7 @@ fn episode_credits(
                 }
                 out.push(place(credit));
             }
-            for credit in crew(&episode.crew, &[], known) {
+            for credit in crew(&episode.crew, &[], known, limits.crew, false) {
                 if matches!(
                     credit.credit_type,
                     CreditType::Director | CreditType::Writer
@@ -1131,6 +1352,122 @@ fn episode_credits(
         }
     }
     out
+}
+
+/// A series' networks and a work's production companies, as entities: each
+/// by TMDB's id — which numbers networks and companies apart — with its
+/// logo and its country, in the order TMDB lists them. One listed twice is
+/// kept once.
+fn companies(
+    networks: &[models::CompanyRef],
+    producers: &[models::CompanyRef],
+) -> Vec<CompanyCredit> {
+    let mut out: Vec<CompanyCredit> = Vec::new();
+    for (role, listed) in [
+        (CompanyRole::Network, networks),
+        (CompanyRole::Production, producers),
+    ] {
+        let mut order = 0;
+        for given in listed {
+            let name = given.name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let company = Company {
+                id: String::new(),
+                kind: role.kind(),
+                name: name.to_string(),
+                tmdb_id: given.id,
+                tvdb_id: None,
+                logo: non_empty(given.logo_path.as_deref()).map(|path| image_url(&path)),
+                country: given.origin_country.as_deref().and_then(country_code),
+            };
+            if out
+                .iter()
+                .any(|kept| kept.role == role && kept.company.is_same(&company))
+            {
+                continue;
+            }
+            out.push(CompanyCredit {
+                company,
+                role,
+                sort_order: order,
+                source: Some(crate::providers::names::TMDB.to_string()),
+            });
+            order += 1;
+        }
+    }
+    out
+}
+
+/// TMDB's keywords, each by its id, in its order; one given twice once.
+fn keyword_entities(keywords: Option<&[models::KeywordRef]>) -> Vec<Keyword> {
+    let mut out: Vec<Keyword> = Vec::new();
+    for given in keywords.unwrap_or_default() {
+        let name = given.name.trim();
+        if name.is_empty()
+            || out.iter().any(|kept| match (kept.tmdb_id, given.id) {
+                (Some(a), Some(b)) => a == b,
+                _ => kept.name.eq_ignore_ascii_case(name),
+            })
+        {
+            continue;
+        }
+        out.push(Keyword {
+            id: String::new(),
+            tmdb_id: given.id,
+            name: name.to_string(),
+        });
+    }
+    out
+}
+
+/// Every video TMDB lists, in its order: a site and a key each, one given
+/// twice once. Its language as the rest of the model writes one.
+fn videos(videos: Option<&[models::Video]>) -> Vec<Video> {
+    let mut out: Vec<Video> = Vec::new();
+    for given in videos.unwrap_or_default() {
+        let (Some(site), Some(key)) = (
+            non_empty(given.site.as_deref()),
+            non_empty(given.key.as_deref()),
+        ) else {
+            continue;
+        };
+        if out.iter().any(|kept| kept.site == site && kept.key == key) {
+            continue;
+        }
+        out.push(Video {
+            id: String::new(),
+            site,
+            key,
+            name: non_empty(given.name.as_deref()),
+            video_type: non_empty(given.video_type.as_deref()),
+            language: non_empty(given.iso_639_1.as_deref())
+                .filter(|l| l != "xx")
+                .map(|l| iso_639_1_to_3(&l)),
+            country: given.iso_3166_1.as_deref().and_then(country_code),
+            official: given.official.unwrap_or(false),
+            published_at: non_empty(given.published_at.as_deref()),
+            size: given.size.filter(|s| *s > 0),
+            tmdb_id: non_empty(given.id.as_deref()),
+            source: Some(crate::providers::names::TMDB.to_string()),
+            sort_order: i32::try_from(out.len()).unwrap_or(i32::MAX),
+        });
+    }
+    out
+}
+
+/// A season's title and synopsis in each language TMDB has them in, one
+/// region's a language as a work's are ([`translations`]); never a tagline,
+/// which a season has none of.
+fn season_translations(entries: &[models::Translation]) -> Vec<Translation> {
+    translations(entries)
+        .into_iter()
+        .filter_map(|mut translation| {
+            translation.tagline = None;
+            (translation.title.is_some() || translation.overview.is_some()).then_some(translation)
+        })
+        .collect()
 }
 
 fn alt_titles(titles: &[models::AltTitle]) -> Vec<AlternativeTitle> {
@@ -1208,6 +1545,52 @@ fn translations(entries: &[models::Translation]) -> Vec<Translation> {
         }
     }
 
+    chosen
+        .into_iter()
+        .map(|(translation, _)| translation)
+        .collect()
+}
+
+/// Somebody's name and biography in each language TMDB's record of them
+/// has them in — its `translations`, appended to the record — one region's
+/// a language, from its home region where TMDB has one, as a work's are
+/// ([`translations`]). A language with neither is left out.
+pub fn person_translations(raw: &serde_json::Value) -> Vec<PersonTranslation> {
+    let Some(entries) = raw
+        .pointer("/translations/translations")
+        .and_then(|t| serde_json::from_value::<Vec<models::Translation>>(t.clone()).ok())
+    else {
+        return Vec::new();
+    };
+
+    let mut chosen: Vec<(PersonTranslation, bool)> = Vec::new();
+    for t in &entries {
+        let (Some(code), Some(data)) = (t.iso_639_1.as_deref(), t.data.as_ref()) else {
+            continue;
+        };
+        let name = non_empty(data.name.as_deref());
+        let biography = non_empty(data.biography.as_deref());
+        if name.is_none() && biography.is_none() {
+            continue;
+        }
+        let at_home = t
+            .iso_3166_1
+            .as_deref()
+            .is_some_and(|region| region.eq_ignore_ascii_case(home_region(code)));
+        let candidate = PersonTranslation {
+            language: iso_639_1_to_3(code),
+            name,
+            biography,
+        };
+        match chosen
+            .iter_mut()
+            .find(|(kept, _)| kept.language == candidate.language)
+        {
+            Some(slot) if at_home && !slot.1 => *slot = (candidate, true),
+            Some(_) => {}
+            None => chosen.push((candidate, at_home)),
+        }
+    }
     chosen
         .into_iter()
         .map(|(translation, _)| translation)
@@ -1438,13 +1821,21 @@ mod tests {
                 file_path: "/p.jpg".into(),
                 iso_639_1: None,
                 vote_average: None,
+                vote_count: None,
                 width: None,
+                height: None,
             }],
             backdrops: vec![],
             logos: vec![],
         };
 
-        let images = artwork(Some("/p.jpg"), Some("/b.jpg"), Some(&extra));
+        let (images, _) = artwork(
+            Some("/p.jpg"),
+            Some("/b.jpg"),
+            Some(&extra),
+            Limits::from(DEFAULT_CAST),
+            &useful_languages(Some("en"), None),
+        );
 
         // The textless poster is key art too, once.
         let kinds: Vec<CoverType> = images.iter().map(|i| i.cover_type).collect();
@@ -1462,7 +1853,9 @@ mod tests {
             file_path: path.into(),
             iso_639_1: language.map(str::to_string),
             vote_average: None,
+            vote_count: None,
             width: None,
+            height: None,
         };
         let extra = models::Images {
             posters: vec![
@@ -1476,7 +1869,13 @@ mod tests {
             logos: vec![],
         };
 
-        let images = artwork(Some("/fr.jpg"), None, Some(&extra));
+        let (images, _) = artwork(
+            Some("/fr.jpg"),
+            None,
+            Some(&extra),
+            Limits::from(DEFAULT_CAST),
+            &useful_languages(Some("fr"), None),
+        );
         let keyart: Vec<(&str, i32)> = images
             .iter()
             .filter(|i| i.cover_type == CoverType::Keyart)
@@ -1497,6 +1896,11 @@ mod tests {
                 video_type: Some("Trailer".into()),
                 official: Some(false),
                 size: None,
+                id: None,
+                name: None,
+                iso_639_1: None,
+                iso_3166_1: None,
+                published_at: None,
             },
             models::Video {
                 key: Some("official".into()),
@@ -1504,6 +1908,11 @@ mod tests {
                 video_type: Some("Trailer".into()),
                 official: Some(true),
                 size: None,
+                id: None,
+                name: None,
+                iso_639_1: None,
+                iso_3166_1: None,
+                published_at: None,
             },
         ];
 
@@ -1518,6 +1927,11 @@ mod tests {
             video_type: Some("Trailer".into()),
             official: Some(true),
             size: None,
+            id: None,
+            name: None,
+            iso_639_1: None,
+            iso_3166_1: None,
+            published_at: None,
         }];
 
         assert_eq!(youtube_trailer(&videos), None);
@@ -1545,6 +1959,7 @@ mod tests {
         models::Season {
             season_number: 1,
             episodes,
+            translations: None,
         }
     }
 
@@ -1569,6 +1984,7 @@ mod tests {
             models::Season {
                 season_number: 0,
                 episodes: vec![ep(0, 1, Some(3)), ep(0, 2, Some(3)), ep(0, 3, Some(3))],
+                translations: None,
             },
             season_of(vec![ep(1, 1, Some(52)), ep(1, 2, Some(52))]),
         ];
@@ -1970,6 +2386,7 @@ mod fixtures {
                 episode(2, "Épisode 2"),
                 episode(3, "Épisode 3"),
             ],
+            translations: None,
         }];
         let item = tv_to_item(&tv(), &seasons, DEFAULT_CAST);
 
@@ -2207,7 +2624,7 @@ mod fixtures {
     /// Shaped as TMDB answers `credits`: the director, the writing
     /// department, a producer — and the rest of the crew, which is not kept.
     #[test]
-    fn the_crew_is_directors_creators_writers_then_producers() {
+    fn the_crew_is_directors_creators_writers_producers_then_the_rest() {
         let document: models::Credits = serde_json::from_value(serde_json::json!({
             "cast": [],
             "crew": [
@@ -2222,22 +2639,124 @@ mod fixtures {
         }))
         .unwrap();
 
-        let kept: Vec<(CreditType, String, Option<String>, i32)> =
-            credits(Some(&document), &[], DEFAULT_CAST)
+        let kept_of = |limits: Limits| -> Vec<(CreditType, String, Option<String>, i32)> {
+            credits(Some(&document), &[], limits)
                 .0
                 .into_iter()
                 .map(|c| (c.credit_type, c.person_name, c.character_name, c.sort_order))
-                .collect();
+                .collect()
+        };
         let crew = |kind, name: &str, job: &str, order| {
             (kind, name.to_string(), Some(job.to_string()), order)
         };
         assert_eq!(
-            kept,
+            kept_of(Limits::from(DEFAULT_CAST)),
             [
                 crew(CreditType::Director, "Denis Villeneuve", "Director", 0),
                 crew(CreditType::Writer, "Eric Heisserer", "Screenplay", 1),
                 crew(CreditType::Writer, "Ted Chiang", "Novel", 2),
                 crew(CreditType::Producer, "Shawn Levy", "Producer", 3),
+                // The rest: the music before an executive producer, who
+                // is no producer proper.
+                crew(
+                    CreditType::Crew,
+                    "Jóhann Jóhannsson",
+                    "Original Music Composer",
+                    4
+                ),
+                crew(CreditType::Crew, "Eric Heisserer", "Executive Producer", 5),
+            ]
+        );
+
+        // The most telling first, whatever their kind, up to the limit.
+        let two = Limits {
+            crew: 2,
+            ..Limits::from(DEFAULT_CAST)
+        };
+        assert_eq!(
+            kept_of(two),
+            [
+                crew(CreditType::Director, "Denis Villeneuve", "Director", 0),
+                crew(CreditType::Writer, "Eric Heisserer", "Screenplay", 1),
+            ]
+        );
+        let none = Limits {
+            crew: 0,
+            ..Limits::from(DEFAULT_CAST)
+        };
+        assert!(kept_of(none).is_empty(), "no crew at all at 0");
+    }
+
+    /// Each credit behind the camera says its department and its job, the
+    /// job in `character_name` too; the rest of the crew without a portrait.
+    #[test]
+    fn a_crew_credit_carries_tmdbs_department_and_job() {
+        let document: models::Credits = serde_json::from_value(serde_json::json!({
+            "cast": [],
+            "crew": [
+                { "id": 1, "credit_id": "a", "name": "A Director", "job": "Director",
+                  "department": "Directing", "profile_path": "/d.jpg" },
+                { "id": 2, "credit_id": "b", "name": "A Photographer", "job": "Director of Photography",
+                  "department": "Camera", "profile_path": "/p.jpg" },
+                { "id": 3, "credit_id": "c", "name": "A Costumer", "job": "Costume Design",
+                  "department": "Costume & Make-Up" },
+                { "id": 4, "credit_id": "d", "name": "An Editor", "job": "Editor", "department": "Editing" }
+            ]
+        }))
+        .unwrap();
+
+        let (kept, _) = credits(Some(&document), &[], Limits::from(DEFAULT_CAST));
+        // Its kind, its department, its job, its character, a portrait.
+        type Said<'a> = (
+            &'a str,
+            Option<&'a str>,
+            Option<&'a str>,
+            Option<&'a str>,
+            bool,
+        );
+        let said: Vec<Said<'_>> = kept
+            .iter()
+            .map(|c| {
+                (
+                    c.credit_type.as_str(),
+                    c.department.as_deref(),
+                    c.job.as_deref(),
+                    c.character_name.as_deref(),
+                    c.image.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            said,
+            [
+                (
+                    "director",
+                    Some("Directing"),
+                    Some("Director"),
+                    Some("Director"),
+                    true
+                ),
+                (
+                    "crew",
+                    Some("Camera"),
+                    Some("Director of Photography"),
+                    Some("Director of Photography"),
+                    false
+                ),
+                (
+                    "crew",
+                    Some("Editing"),
+                    Some("Editor"),
+                    Some("Editor"),
+                    false
+                ),
+                (
+                    "crew",
+                    Some("Costume & Make-Up"),
+                    Some("Costume Design"),
+                    Some("Costume Design"),
+                    false
+                ),
             ]
         );
     }
@@ -2436,5 +2955,358 @@ mod fixtures {
             Some("PG-13"),
             "a country TMDB rated keeps its rating"
         );
+    }
+
+    /// A series' networks and companies, TMDB's keywords and its videos,
+    /// each kept with what identifies it: the ids, the logos, the countries.
+    #[test]
+    fn a_series_keeps_its_networks_companies_keywords_and_videos_as_entities() {
+        let tv: models::Tv = serde_json::from_value(serde_json::json!({
+            "id": 1396,
+            "name": "Breaking Bad",
+            "networks": [
+                { "id": 174, "logo_path": "/amc.png", "name": "AMC", "origin_country": "US" }
+            ],
+            "production_companies": [
+                { "id": 11073, "logo_path": "/sony.png", "name": "Sony Pictures Television", "origin_country": "US" },
+                { "id": 2605, "logo_path": null, "name": "Gran Via Productions", "origin_country": "" },
+                { "id": 2605, "logo_path": null, "name": "Gran Via Productions", "origin_country": "" }
+            ],
+            "keywords": { "results": [
+                { "id": 1508, "name": "new mexico" },
+                { "id": 2231, "name": "drug dealer" },
+                { "id": 1508, "name": "new mexico" }
+            ] },
+            "videos": { "results": [
+                { "iso_639_1": "en", "iso_3166_1": "US", "name": "Full Series Trailer",
+                  "key": "VFkjBy2b50Q", "site": "YouTube", "size": 1080, "type": "Trailer",
+                  "official": false, "id": "6abec1d63b14b1600ae7400f",
+                  "published_at": "2024-09-17T16:44:25.000Z" },
+                { "iso_639_1": "en", "iso_3166_1": "US", "name": "Official Trailer",
+                  "key": "HhesaQXLuRY", "site": "YouTube", "size": 1080, "type": "Trailer",
+                  "official": true, "id": "5b" },
+                { "key": "", "site": "YouTube", "type": "Clip" }
+            ] }
+        }))
+        .unwrap();
+        let item = tv_to_item(&tv, &[], DEFAULT_CAST);
+
+        // Its role, its name, TMDB's id, its logo, its country, its place.
+        type Read<'a> = (
+            CompanyRole,
+            &'a str,
+            Option<i64>,
+            Option<&'a str>,
+            Option<&'a str>,
+            i32,
+        );
+        let companies: Vec<Read<'_>> = item
+            .companies
+            .iter()
+            .map(|c| {
+                (
+                    c.role,
+                    c.company.name.as_str(),
+                    c.company.tmdb_id,
+                    c.company.logo.as_deref(),
+                    c.company.country.as_deref(),
+                    c.sort_order,
+                )
+            })
+            .collect();
+        assert_eq!(
+            companies,
+            [
+                (
+                    CompanyRole::Network,
+                    "AMC",
+                    Some(174),
+                    Some("https://image.tmdb.org/t/p/original/amc.png"),
+                    Some("US"),
+                    0
+                ),
+                (
+                    CompanyRole::Production,
+                    "Sony Pictures Television",
+                    Some(11073),
+                    Some("https://image.tmdb.org/t/p/original/sony.png"),
+                    Some("US"),
+                    0
+                ),
+                (
+                    CompanyRole::Production,
+                    "Gran Via Productions",
+                    Some(2605),
+                    None,
+                    None,
+                    1
+                ),
+            ],
+            "one listed twice once"
+        );
+        assert_eq!(
+            item.companies[0].company.kind,
+            crate::domain::CompanyKind::Network
+        );
+        assert_eq!(
+            item.companies[1].company.kind,
+            crate::domain::CompanyKind::Company
+        );
+        assert!(
+            item.companies
+                .iter()
+                .all(|c| c.source.as_deref() == Some("tmdb"))
+        );
+        // The texts stay as they were.
+        assert_eq!(item.network.as_deref(), Some("AMC"));
+        assert_eq!(
+            item.production_companies,
+            ["Sony Pictures Television", "Gran Via Productions"]
+        );
+
+        let keywords: Vec<(Option<i64>, &str)> = item
+            .keyword_entities
+            .iter()
+            .map(|k| (k.tmdb_id, k.name.as_str()))
+            .collect();
+        assert_eq!(
+            keywords,
+            [(Some(1508), "new mexico"), (Some(2231), "drug dealer")]
+        );
+
+        assert_eq!(item.videos.len(), 2, "one without a key is no video");
+        let first = &item.videos[0];
+        assert_eq!(
+            (
+                first.site.as_str(),
+                first.key.as_str(),
+                first.video_type.as_deref(),
+                first.language.as_deref(),
+                first.country.as_deref(),
+                first.official,
+                first.size,
+                first.tmdb_id.as_deref(),
+                first.published_at.as_deref(),
+                first.sort_order,
+            ),
+            (
+                "YouTube",
+                "VFkjBy2b50Q",
+                Some("Trailer"),
+                Some("eng"),
+                Some("US"),
+                false,
+                Some(1080),
+                Some("6abec1d63b14b1600ae7400f"),
+                Some("2024-09-17T16:44:25.000Z"),
+                0
+            )
+        );
+        assert_eq!(
+            item.trailer_youtube_id.as_deref(),
+            Some("HhesaQXLuRY"),
+            "the trailer chosen is still the official one"
+        );
+    }
+
+    /// The pictures kept carry the language written on them, and what TMDB
+    /// says of each by its address; the best of each useful language leads
+    /// the rest, the catalogue's first, and the setting says how many.
+    #[test]
+    fn pictures_keep_their_language_votes_and_size_the_useful_languages_first() {
+        let picture = |path: &str, language: Option<&str>, votes: f64| {
+            serde_json::json!({
+                "file_path": path, "iso_639_1": language, "vote_average": votes,
+                "vote_count": 10, "width": 2000, "height": 3000
+            })
+        };
+        let mut tv: models::Tv = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "name": "Frieren",
+            "original_language": "ja",
+            "poster_path": "/primary.jpg",
+            "images": {
+                "posters": [
+                    picture("/en-1.jpg", Some("en"), 6.0),
+                    picture("/de-1.jpg", Some("de"), 5.9),
+                    picture("/ja-1.jpg", Some("ja"), 5.8),
+                    picture("/bare-1.jpg", None, 5.7),
+                    picture("/fr-1.jpg", Some("fr"), 5.6),
+                    picture("/en-2.jpg", Some("en"), 5.5),
+                    picture("/primary.jpg", Some("fr"), 5.4),
+                ],
+                "backdrops": [
+                    picture("/b-en.jpg", Some("en"), 6.0),
+                    picture("/b-bare.jpg", None, 5.0),
+                ],
+                "logos": [
+                    picture("/l-en.png", Some("en"), 6.0),
+                    picture("/l-fr.png", Some("fr"), 5.0),
+                ]
+            }
+        }))
+        .unwrap();
+        tv.asked_in = Some("fr".into());
+
+        let item = tv_to_item(&tv, &[], DEFAULT_CAST);
+        let of = |kind: CoverType| -> Vec<(String, Option<String>)> {
+            item.images
+                .iter()
+                .filter(|i| i.cover_type == kind)
+                .map(|i| {
+                    (
+                        i.url.rsplit('/').next().unwrap_or_default().to_string(),
+                        i.language.clone(),
+                    )
+                })
+                .collect()
+        };
+        let lang = |l: &str| Some(l.to_string());
+        assert_eq!(
+            of(CoverType::Poster),
+            [
+                // TMDB's own choice first, as ever, its language found.
+                ("primary.jpg".into(), lang("fra")),
+                // Then the best of the catalogue's, English, none, the
+                // work's own: five at the default.
+                ("fr-1.jpg".into(), lang("fra")),
+                ("en-1.jpg".into(), lang("eng")),
+                ("bare-1.jpg".into(), None),
+                ("ja-1.jpg".into(), lang("jpn")),
+                ("de-1.jpg".into(), lang("deu")),
+            ]
+        );
+        assert_eq!(
+            of(CoverType::Fanart),
+            [
+                ("b-bare.jpg".into(), None),
+                ("b-en.jpg".into(), lang("eng"))
+            ],
+            "a background without text leads"
+        );
+        assert_eq!(
+            of(CoverType::Clearlogo),
+            [
+                ("l-fr.png".into(), lang("fra")),
+                ("l-en.png".into(), lang("eng"))
+            ]
+        );
+        assert_eq!(of(CoverType::Keyart), [("bare-1.jpg".into(), None)]);
+
+        let details = &item.image_details["https://image.tmdb.org/t/p/original/ja-1.jpg"];
+        assert_eq!(
+            *details,
+            ImageDetails {
+                width: Some(2000),
+                height: Some(3000),
+                vote_average: Some(5.8),
+                vote_count: Some(10),
+            }
+        );
+        assert!(
+            item.image_details
+                .contains_key("https://image.tmdb.org/t/p/original/primary.jpg"),
+            "the primary poster's too, found among the posters"
+        );
+
+        // One poster of each kind besides TMDB's own, at a limit of one;
+        // key art and logos at three fifths of it, rounded up.
+        let one = Limits {
+            images: 1,
+            ..Limits::from(DEFAULT_CAST)
+        };
+        let item = tv_to_item(&tv, &[], one);
+        let count = |kind: CoverType| item.images.iter().filter(|i| i.cover_type == kind).count();
+        assert_eq!(count(CoverType::Poster), 2, "the primary and the best");
+        assert_eq!(count(CoverType::Clearlogo), 1);
+        assert_eq!(count(CoverType::Keyart), 1);
+        assert_eq!(
+            Limits {
+                images: 5,
+                ..Limits::from(DEFAULT_CAST)
+            }
+            .lesser_images(),
+            3,
+            "the default keeps today's three"
+        );
+    }
+
+    /// A season's document brings its title and synopsis in each language,
+    /// one region's a language, without the empty ones.
+    #[test]
+    fn a_seasons_translations_ride_along_with_its_document() {
+        let tv: models::Tv = serde_json::from_value(serde_json::json!({
+            "id": 1, "name": "A", "seasons": [{ "id": 10, "season_number": 1, "name": "Season 1" }]
+        }))
+        .unwrap();
+        let season: models::Season = serde_json::from_value(serde_json::json!({
+            "season_number": 1,
+            "episodes": [],
+            "translations": { "translations": [
+                { "iso_639_1": "fr", "iso_3166_1": "CA", "data": { "name": "Saison un (QC)", "overview": "" } },
+                { "iso_639_1": "fr", "iso_3166_1": "FR", "data": { "name": "Saison un", "overview": "Le début." } },
+                { "iso_639_1": "de", "iso_3166_1": "DE", "data": { "name": "", "overview": "" } },
+                { "iso_639_1": "ja", "iso_3166_1": "JP", "data": { "name": "", "overview": "始まり。" } }
+            ] }
+        }))
+        .unwrap();
+
+        let item = tv_to_item(&tv, &[season], DEFAULT_CAST);
+        let said: Vec<(&str, Option<&str>, Option<&str>)> = item.seasons[0]
+            .translations
+            .iter()
+            .map(|t| {
+                (
+                    t.language.as_str(),
+                    t.title.as_deref(),
+                    t.overview.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("fra", Some("Saison un"), Some("Le début.")),
+                ("jpn", None, Some("始まり。")),
+            ]
+        );
+        assert!(
+            item.seasons[0]
+                .translations
+                .iter()
+                .all(|t| t.tagline.is_none())
+        );
+    }
+
+    /// A person's record brings their name and biography in each language.
+    #[test]
+    fn a_persons_biography_is_kept_in_every_language_tmdb_has() {
+        let raw = serde_json::json!({
+            "id": 17419,
+            "name": "Bryan Cranston",
+            "translations": { "translations": [
+                { "iso_639_1": "fr", "iso_3166_1": "CA", "data": { "biography": "Un acteur (QC).", "name": "" } },
+                { "iso_639_1": "fr", "iso_3166_1": "FR", "data": { "biography": "Un acteur.", "name": "Bryan Cranston" } },
+                { "iso_639_1": "ru", "iso_3166_1": "RU", "data": { "biography": "", "name": "Брайан Крэнстон" } },
+                { "iso_639_1": "de", "iso_3166_1": "DE", "data": { "biography": " ", "name": "" } }
+            ] }
+        });
+        let kept = person_translations(&raw);
+        assert_eq!(
+            kept,
+            [
+                PersonTranslation {
+                    language: "fra".into(),
+                    name: Some("Bryan Cranston".into()),
+                    biography: Some("Un acteur.".into()),
+                },
+                PersonTranslation {
+                    language: "rus".into(),
+                    name: Some("Брайан Крэнстон".into()),
+                    biography: None,
+                },
+            ]
+        );
+        assert!(person_translations(&serde_json::json!({ "id": 1 })).is_empty());
     }
 }

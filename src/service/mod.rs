@@ -13,6 +13,7 @@
 //! can edit it.
 
 pub mod anime;
+pub mod cour;
 pub mod gather;
 pub mod ids;
 pub mod imdb;

@@ -6,10 +6,14 @@
 //! field mapping is stated once. Plex's is written only: it is a client, never
 //! a source.
 
+#[cfg(test)]
+pub mod contract;
 pub mod plex;
 pub mod radarr;
 pub mod sonarr;
 pub mod sonarr_v2;
+pub mod tmdb;
+pub mod tvdb;
 
 use serde::Deserialize;
 use serde_json::Value;

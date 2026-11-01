@@ -44,7 +44,8 @@ import { useCollections, useTitle } from '../lib/hooks'
 import { useI18n } from '../lib/i18n'
 import { GenreFilter } from '../components/GenreFilter'
 import { genreLabel, languageGroups, languageName, listedGenres, statusLabel } from '../lib/labels'
-import type { CatalogueFacets, Facet, ItemPage, Person as PersonData } from '../lib/types'
+import { facetApiPath } from '../lib/facets'
+import type { CatalogueFacets, Facet, FacetPage, ItemPage, Person as PersonData } from '../lib/types'
 
 const PAGE = 36
 
@@ -150,6 +151,10 @@ function read(params: URLSearchParams) {
     status: params.get('status') ?? '',
     language: params.get('language') ?? '',
     network: params.get('network') ?? '',
+    // A network or a company, and a keyword, by this server's ids for them:
+    // what their pages and the links from a work's page narrow the list by.
+    company: (params.get('company') ?? '').trim(),
+    keywordId: (params.get('keywordId') ?? '').trim(),
     // A TMDB id, or a name as the credits give it.
     person: (params.get('person') ?? '').trim(),
     runtimeMin: digits(params.get('runtimeMin')),
@@ -172,7 +177,7 @@ type Filters = ReturnType<typeof read>
  * What a page pins the list to, in the address's words: a genre's slug, a
  * network's name, a range of years. Asked for with whatever else is chosen.
  */
-export type Pinned = Partial<Record<'genre' | 'network' | 'yearFrom' | 'yearTo', string>>
+export type Pinned = Partial<Record<'genre' | 'network' | 'yearFrom' | 'yearTo' | 'company' | 'keywordId', string>>
 
 /** The filters the "More filters" sheet holds, by their names in the address. */
 const MORE = ['person', 'keyword', 'runtimeMin', 'runtimeMax', 'country', 'certification', 'collection'] as const
@@ -215,6 +220,8 @@ export function Browse({ pinned, lead }: { pinned?: Pinned; lead?: ReactNode } =
     status: f.status,
     originalLanguage: f.language,
     network: pinned?.network ?? f.network,
+    company: pinned?.company ?? f.company,
+    keywordId: pinned?.keywordId ?? f.keywordId,
     person: f.person,
     runtimeMin: f.runtimeMin,
     runtimeMax: f.runtimeMax,
@@ -256,6 +263,22 @@ export function Browse({ pinned, lead }: { pinned?: Pinned; lead?: ReactNode } =
     retry: false,
   })
   const collections = useCollections()
+  // What a company or a keyword chosen by its id is called, for its chip:
+  // the read its own page makes, so a reader who came from it pays nothing.
+  const company = useQuery({
+    queryKey: ['facet', 'company', f.company, lang],
+    queryFn: () => api.get<FacetPage>(`${facetApiPath('company', f.company)}${query({ language: lang })}`),
+    enabled: Boolean(f.company),
+    staleTime: 60_000,
+    retry: false,
+  })
+  const keyword = useQuery({
+    queryKey: ['facet', 'keyword', f.keywordId, lang],
+    queryFn: () => api.get<FacetPage>(`${facetApiPath('keyword', f.keywordId)}${query({ language: lang })}`),
+    enabled: Boolean(f.keywordId),
+    staleTime: 60_000,
+    retry: false,
+  })
 
   /** Change some filters, keep the rest, and start the page count over. */
   function change(changes: Record<string, string>) {
@@ -317,6 +340,8 @@ export function Browse({ pinned, lead }: { pinned?: Pinned; lead?: ReactNode } =
   const names = {
     person: person.data?.name,
     collection: collections.data?.collections.find((c) => String(c.tmdbId) === f.collection)?.name ?? undefined,
+    company: company.data?.name,
+    keyword: keyword.data?.name,
   }
   const applied = activeFilters(f, t, lang, locale, names)
   const items = results.data?.items ?? []
@@ -854,7 +879,7 @@ function activeFilters(
   t: ReturnType<typeof useI18n>['t'],
   lang: ReturnType<typeof useI18n>['lang'],
   locale: string,
-  names: { person?: string; collection?: string },
+  names: { person?: string; collection?: string; company?: string; keyword?: string },
 ): Applied[] {
   const out: Applied[] = []
 
@@ -872,6 +897,7 @@ function activeFilters(
   }
   if (f.person) out.push(one('person', t.browse.withPerson(names.person ?? f.person), 'person'))
   if (f.keyword) out.push(one('keyword', `# ${f.keyword}`, 'keyword'))
+  if (f.keywordId) out.push(one('keywordId', `# ${names.keyword ?? t.browse.someKeyword}`, 'keywordId'))
   if (f.yearFrom && f.yearFrom === f.yearTo) {
     out.push({ key: 'year', label: f.yearFrom, clear: { yearFrom: '', yearTo: '', year: '' } })
   } else {
@@ -891,6 +917,7 @@ function activeFilters(
   if (f.status) out.push(one('status', statusLabel(f.status, t) ?? f.status, 'status'))
   if (f.language) out.push(one('language', languageName(f.language, locale) ?? f.language, 'language'))
   if (f.network) out.push(one('network', f.network, 'network'))
+  if (f.company) out.push(one('company', names.company ?? t.browse.someCompany, 'company'))
   if (f.country) out.push(one('country', t.browse.madeIn(countryName(f.country, locale)), 'country'))
   if (f.certification) out.push(one('certification', t.browse.rated(f.certification), 'certification'))
   if (f.collection) {

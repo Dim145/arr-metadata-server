@@ -559,6 +559,8 @@ mod tests {
             credit_tmdb_id: None,
             sort_order: 0,
             is_manual: false,
+            department: None,
+            job: None,
         }];
 
         assert_eq!(
@@ -623,6 +625,7 @@ mod tests {
                 .map(|url| image(CoverType::Poster, Some(number), url))
                 .collect(),
             primary_images: Default::default(),
+            translations: Vec::new(),
         }
     }
 

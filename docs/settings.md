@@ -44,6 +44,8 @@ much they carry.
 | [`tmdb.watchRegion`](#tmdbwatchregion) | text | `US` | server, client, peer |
 | [`tmdb.searchLimit`](#tmdbsearchlimit) | a whole number, `1` to `50` | `10` | server |
 | [`tmdb.castLimit`](#tmdbcastlimit) | a whole number, `1` to `200` | `25` | server |
+| [`tmdb.crewLimit`](#tmdbcrewlimit) | a whole number, `0` to `500` | `30` | server |
+| [`tmdb.imageLimit`](#tmdbimagelimit) | a whole number, `1` to `50` | `5` | server |
 
 ### `tmdb.language`
 
@@ -74,6 +76,19 @@ How many works a search hands back.
 
 How many of TMDB's actors a work keeps, top of the bill first. Each is a row, and a portrait
 to fetch and keep; a work already held takes a new figure at its next refresh.
+
+### `tmdb.crewLimit`
+
+How many of TMDB's crew a work keeps, every department — directing, writing, production,
+music, camera, editing and the rest — the most telling jobs first. `0` keeps none; a work
+already held takes a new figure at its next refresh.
+
+### `tmdb.imageLimit`
+
+How many of TMDB's posters and backdrops a work keeps, the best of each language first;
+keyart and logos take three fifths of it, rounded up — so `5` keeps five posters, five
+backdrops, three keyart and three logos. A work already held takes a new figure at its next
+refresh.
 
 ## Other metadata services
 
@@ -425,6 +440,8 @@ See [Accounts and access](access.md).
 | [`tvdb.relayCredential`](#tvdbrelaycredential) | `server` or `client` | `server` | server |
 | [`relays.staleIfError`](#relaysstaleiferror) | `true` or `false` | `true` | server |
 | [`tmdb.images`](#tmdbimages) | `tmdb` or `server` | `tmdb` | server |
+| [`tmdb.relayMode`](#tmdbrelaymode) | `relay` or `local-first` | `relay` | server |
+| [`tvdb.relayMode`](#tvdbrelaymode) | `relay` or `local-first` | `relay` | server |
 
 ### `site.access`
 
@@ -454,8 +471,8 @@ server's own keys, are not counted.
 
 ### `api.sonarr`
 
-Sonarr's API: Skyhook's two editions, `/v1/tvdb/…` and `/v2/tvdb/…`, and the alternate-title
-list of `services.sonarr.tv`, `/v1/scenemapping`.
+Sonarr's API: Skyhook's editions, `/v1/tvdb/…`, `/v2/tvdb/…` and `/v2/tmdb/…`, and the
+alternate-title list of `services.sonarr.tv`, `/v1/scenemapping`.
 
 ### `api.radarr`
 
@@ -529,6 +546,22 @@ Where the TMDB relay sends its clients for pictures, through `/3/configuration`:
 TMDB's own image server; `server`, this server, from the media it keeps — which takes a
 media store (`AMS_MEDIA_STORAGE`) and `AMS_PUBLIC_URL`. Without either, `server` does what
 `tmdb` does.
+
+### `tmdb.relayMode`
+
+How the TMDB relay answers: `relay` asks TMDB for everything and writes the locks into its
+answers; `local-first` answers a work this server holds — a film, a series, its seasons and
+episodes, a `find` by one of its ids — itself, in TMDB's shape, from the catalogue,
+corrections and works entered by hand included, puts the catalogue's works first in
+searches, and asks TMDB for the rest. See [The relays](relays.md).
+
+### `tvdb.relayMode`
+
+How the TheTVDB relay answers: `relay` asks TheTVDB for everything and writes the locks into
+its answers; `local-first` answers a series or a film this server holds — its record, its
+episodes in any order, its seasons and episodes — itself, in TheTVDB's shape, from the
+catalogue, puts the catalogue's works first in searches, and asks TheTVDB for the rest. See
+[The relays](relays.md).
 
 ## Signing in through an identity provider
 

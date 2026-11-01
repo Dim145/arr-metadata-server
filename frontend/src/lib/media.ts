@@ -10,7 +10,7 @@
 import { useSyncExternalStore } from 'react'
 
 import * as fmt from './format'
-import type { Credit, Episode, Image, MediaItem, Rating } from './types'
+import type { Credit, Episode, Image, MediaItem, Rating, Video } from './types'
 
 /**
  * What the server says of a picture it keeps, beside its address: its own
@@ -404,6 +404,91 @@ export function crew(credits: Credit[] | undefined, limit = 12): Credit[] {
     .filter((c) => c.creditType !== 'actor')
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .slice(0, limit)
+}
+
+/**
+ * The department a credit behind the camera is filed under: TMDB's, else the
+ * one its kind belongs to — a director entered by hand directs.
+ */
+export function departmentOf(credit: Pick<Credit, 'department' | 'creditType'>): string {
+  const given = credit.department?.trim()
+  if (given) return given
+  switch (credit.creditType) {
+    case 'director':
+      return 'Directing'
+    case 'writer':
+      return 'Writing'
+    case 'producer':
+      return 'Production'
+    default:
+      return 'Crew'
+  }
+}
+
+/** A credit's job: TMDB's, else the one kept as its part — where every reader before found it — else its kind. */
+export function jobOf(credit: Pick<Credit, 'job' | 'characterName' | 'creditType'>): string {
+  return credit.job?.trim() || credit.characterName?.trim() || credit.creditType
+}
+
+/** One department of a crew: its jobs, each with everybody who did it. */
+export interface Department {
+  department: string
+  jobs: { job: string; people: Credit[] }[]
+}
+
+/**
+ * Everybody behind the camera a department at a time, in the order the
+ * credits come — the most telling jobs first, as TMDB's are kept: directing,
+ * writing, production, then music, camera, editing and the rest — each job
+ * once with everybody who did it, each person once in a job.
+ */
+export function crewByDepartment(credits: Credit[] | undefined): Department[] {
+  const departments: Department[] = []
+  const behind = (credits ?? [])
+    .filter((c) => c.creditType !== 'actor' && c.creditType !== 'guest')
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+  for (const credit of behind) {
+    const name = departmentOf(credit)
+    let department = departments.find((d) => d.department === name)
+    if (!department) {
+      department = { department: name, jobs: [] }
+      departments.push(department)
+    }
+    const job = jobOf(credit)
+    let line = department.jobs.find((j) => j.job === job)
+    if (!line) {
+      line = { job, people: [] }
+      department.jobs.push(line)
+    }
+    if (!line.people.some((p) => p.personName === credit.personName)) line.people.push(credit)
+  }
+  return departments
+}
+
+/**
+ * A work's videos in the order they are offered: the trailer chosen for the
+ * work first — locked, or the one its sources lead with — then the sources'
+ * own order.
+ */
+export function videosOf(item: Pick<MediaItem, 'videos' | 'trailerYoutubeId'>): Video[] {
+  const chosen = item.trailerYoutubeId
+  const isChosen = (video: Video) => Boolean(chosen) && video.site.toLowerCase() === 'youtube' && video.key === chosen
+  return [...(item.videos ?? [])].sort(
+    (a, b) => Number(isChosen(b)) - Number(isChosen(a)) || a.sortOrder - b.sortOrder,
+  )
+}
+
+/** Where a video is kept, on its own site: YouTube's and Vimeo's pages; nothing for a site this does not know. */
+export function videoPage(video: Pick<Video, 'site' | 'key'>): string | undefined {
+  const key = encodeURIComponent(video.key)
+  switch (video.site.toLowerCase()) {
+    case 'youtube':
+      return `https://www.youtube.com/watch?v=${key}`
+    case 'vimeo':
+      return `https://vimeo.com/${key}`
+    default:
+      return undefined
+  }
 }
 
 /** Season numbers a work actually has episodes for, specials last. */

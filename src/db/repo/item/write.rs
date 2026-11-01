@@ -6,8 +6,8 @@ use sqlx::{Any, Arguments, Transaction, any::AnyArguments};
 
 use super::listed::{Listed, mark_changed};
 use crate::{
-    db::{Db, Double, from_bool, new_id, now, text_list},
-    domain::{Credit, ExternalSource, MediaItem},
+    db::{Db, Double, RowExt, from_bool, new_id, now, text_list},
+    domain::{Credit, ExternalSource, ImageDetails, MediaItem},
 };
 
 /// Everything written for one work in a single transaction.
@@ -433,6 +433,10 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
     // Whom the credits are filed under, read before they go: a credit given
     // again keeps its person (see `repo::person`).
     let kept = crate::db::repo::person::kept(db, tx, &item.id).await?;
+    // What was said of the pictures, read before they go: a picture given
+    // again without it — put back from the stored work when nobody answered
+    // with pictures — keeps it.
+    let said = image_details(db, tx, &item.id).await?;
 
     // The work's own credits are given again whole; its episodes' only when
     // a source gave some. None means nobody said — TMDB not asked, or not
@@ -583,11 +587,17 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         if image.is_manual {
             continue;
         }
+        let details = item
+            .image_details
+            .get(&image.url)
+            .or_else(|| said.get(&image.url))
+            .copied()
+            .unwrap_or_default();
         sqlx::query(db.sql(
             "INSERT INTO media_image
                  (id, media_id, season_number, cover_type, url, language, sort_order,
-                  source, is_manual, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                  source, is_manual, created_at, width, height, vote_average, vote_count)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
              ON CONFLICT (media_id, cover_type, url) DO NOTHING",
         ))
         .bind(if image.id.is_empty() {
@@ -603,6 +613,10 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         .bind(image.sort_order)
         .bind(&image.source)
         .bind(&created)
+        .bind(details.width)
+        .bind(details.height)
+        .bind(Double(details.vote_average))
+        .bind(details.vote_count)
         .execute(&mut **tx)
         .await
         .context("failed to write image")?;
@@ -709,10 +723,125 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
     // Wholly the providers', like the ratings: replaced, never merged.
     crate::db::repo::release::replace(db, tx, &item.id, &item.releases).await?;
 
+    // The seasons' texts in other languages, the companies, TMDB's keywords
+    // and the videos: written again when the refresh gives some. None means
+    // nobody said — TMDB not asked, or not answering — and what is held of
+    // them stands, as an empty list stands for the rest in
+    // `service::keep_what_nobody_answered`.
+    crate::db::repo::translation::replace_seasons(db, tx, &item.id, &item.seasons).await?;
+    if !item.companies.is_empty() {
+        crate::db::repo::company::replace(db, tx, &item.id, &item.companies).await?;
+    }
+    if !item.keyword_entities.is_empty() {
+        crate::db::repo::keyword::replace(db, tx, &item.id, &item.keyword_entities).await?;
+    }
+    if !item.videos.is_empty() {
+        crate::db::repo::video::replace(db, tx, &item.id, &item.videos).await?;
+    }
+
     Ok(())
 }
 
-/// How many credits one insert writes, at fourteen values each.
+/// What a work's kept answers say that this version keeps and its rows may
+/// not hold yet: written by a pass over those answers
+/// (`jobs::refresh::replay_snapshots`) rather than at the next refresh.
+#[derive(Debug, Default)]
+pub struct Filled {
+    pub companies: Vec<crate::domain::CompanyCredit>,
+    pub keywords: Vec<crate::domain::Keyword>,
+    pub videos: Vec<crate::domain::Video>,
+    /// Each of TMDB's pictures, by its address: the language written on it,
+    /// and what TMDB says of it.
+    pub pictures: Vec<(String, Option<String>, ImageDetails)>,
+    /// The department and the job of each credit of the crew, by TMDB's id
+    /// for the credit.
+    pub jobs: Vec<(String, String, String)>,
+}
+
+/// Write into a work's rows what `filled` holds, in one transaction: its
+/// companies, keywords and videos in place of those it has, when there are
+/// any; the language and what is said of each of TMDB's pictures it holds,
+/// a language it holds standing; the department and job of each credit of
+/// its crew TMDB's id names. Nothing else of the work is touched.
+pub async fn fill_in(db: &Db, media_id: &str, filled: &Filled) -> Result<()> {
+    let mut tx = db.begin_write().await?;
+    if !filled.companies.is_empty() {
+        crate::db::repo::company::replace(db, &mut tx, media_id, &filled.companies).await?;
+    }
+    if !filled.keywords.is_empty() {
+        crate::db::repo::keyword::replace(db, &mut tx, media_id, &filled.keywords).await?;
+    }
+    if !filled.videos.is_empty() {
+        crate::db::repo::video::replace(db, &mut tx, media_id, &filled.videos).await?;
+    }
+    for (url, language, details) in &filled.pictures {
+        sqlx::query(db.sql(
+            "UPDATE media_image SET language = COALESCE(language, ?), width = ?, height = ?,
+                    vote_average = ?, vote_count = ?
+              WHERE media_id = ? AND url = ? AND is_manual = 0 AND source = 'tmdb'",
+        ))
+        .bind(language)
+        .bind(details.width)
+        .bind(details.height)
+        .bind(Double(details.vote_average))
+        .bind(details.vote_count)
+        .bind(media_id)
+        .bind(url)
+        .execute(&mut *tx)
+        .await
+        .context("failed to fill in what is said of a picture")?;
+    }
+    for (credit, department, job) in &filled.jobs {
+        sqlx::query(db.sql(
+            "UPDATE media_credit SET department = ?, job = ?
+              WHERE media_id = ? AND credit_tmdb_id = ? AND is_manual = 0",
+        ))
+        .bind(department)
+        .bind(job)
+        .bind(media_id)
+        .bind(credit)
+        .execute(&mut *tx)
+        .await
+        .context("failed to fill in a credit's job")?;
+    }
+    tx.commit()
+        .await
+        .context("failed to commit what was filled in")?;
+    Ok(())
+}
+
+/// What a work's rows say of its sources' pictures, by address: what a
+/// write keeps of a picture given again without it.
+async fn image_details(
+    db: &Db,
+    tx: &mut Transaction<'_, Any>,
+    media_id: &str,
+) -> Result<std::collections::HashMap<String, ImageDetails>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT url, width, height, vote_average, vote_count FROM media_image
+          WHERE media_id = ? AND is_manual = 0
+            AND (width IS NOT NULL OR height IS NOT NULL
+                 OR vote_average IS NOT NULL OR vote_count IS NOT NULL)",
+    ))
+    .bind(media_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut out = std::collections::HashMap::with_capacity(rows.len());
+    for row in &rows {
+        out.insert(
+            row.text("url")?,
+            ImageDetails {
+                width: row.opt_int("width")?,
+                height: row.opt_int("height")?,
+                vote_average: row.opt_real("vote_average")?,
+                vote_count: row.opt_big("vote_count")?,
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// How many credits one insert writes, at sixteen values each.
 const CREDITS_PER_INSERT: usize = 50;
 
 /// Write the credits the sources gave — the work's own, then its episodes',
@@ -753,9 +882,9 @@ async fn write_credits(
             "INSERT INTO media_credit
                  (id, media_id, credit_type, person_name, character_name, image,
                   tmdb_person_id, credit_tmdb_id, sort_order, is_manual, created_at,
-                  person_id, season_number, episode_number)
+                  person_id, season_number, episode_number, department, job)
              VALUES {}",
-            vec!["(?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)"; chunk.len()].join(", ")
+            vec!["(?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)"; chunk.len()].join(", ")
         );
         let mut args = AnyArguments::default();
         for ((credit, place), person) in chunk {
@@ -777,6 +906,8 @@ async fn write_credits(
             add(&mut args, person.clone())?;
             add(&mut args, place.map(|(season, _)| season))?;
             add(&mut args, place.map(|(_, episode)| episode))?;
+            add(&mut args, credit.department.clone())?;
+            add(&mut args, credit.job.clone())?;
         }
         sqlx::query_with(db.sql(&sql), args)
             .execute(&mut **tx)
@@ -1238,5 +1369,435 @@ mod tests {
         assert_eq!(insert_manual(&db, &claiming).await.expect("asked"), Ok(()));
         let read = get(&db, &claiming.id).await.unwrap().expect("written");
         assert_eq!(read.external_ids.mal, [77]);
+    }
+
+    fn company_credit(
+        role: crate::domain::CompanyRole,
+        name: &str,
+        tmdb: Option<i64>,
+        tvdb: Option<i64>,
+        order: i32,
+    ) -> crate::domain::CompanyCredit {
+        crate::domain::CompanyCredit {
+            company: crate::domain::Company {
+                id: String::new(),
+                kind: role.kind(),
+                name: name.into(),
+                tmdb_id: tmdb,
+                tvdb_id: tvdb,
+                logo: tmdb.map(|id| format!("https://image.tmdb.org/t/p/original/{id}.png")),
+                country: Some("US".into()),
+            },
+            role,
+            sort_order: order,
+            source: Some(if tmdb.is_some() { "tmdb" } else { "tvdb" }.into()),
+        }
+    }
+
+    fn video(key: &str, order: i32) -> crate::domain::Video {
+        crate::domain::Video {
+            id: String::new(),
+            site: "YouTube".into(),
+            key: key.into(),
+            name: Some(format!("Trailer {key}")),
+            video_type: Some("Trailer".into()),
+            language: Some("eng".into()),
+            country: Some("US".into()),
+            official: order == 0,
+            published_at: Some("2024-09-17T16:44:25.000Z".into()),
+            size: Some(1080),
+            tmdb_id: Some(format!("v{key}")),
+            source: Some("tmdb".into()),
+            sort_order: order,
+        }
+    }
+
+    /// The companies, TMDB's keywords, the videos, the seasons' texts in
+    /// other languages, the crew's departments and jobs and what is said of
+    /// each picture: written with the work and read back as they were.
+    #[tokio::test]
+    async fn the_models_new_lists_are_written_and_read_back() {
+        use crate::domain::{CompanyRole, ImageDetails, Keyword, Translation};
+
+        let db = db().await;
+        let mut item = sample();
+        item.id = crate::db::new_id();
+        item.title = "Lists Round Trip".into();
+        item.slug = "lists-round-trip".into();
+        item.external_ids = ExternalIds::default();
+        item.episodes.clear();
+        let mut composer = item.credits[0].clone();
+        composer.credit_type = crate::domain::CreditType::Crew;
+        composer.person_name = "A Composer".into();
+        composer.character_name = Some("Original Music Composer".into());
+        composer.tmdb_person_id = Some(8);
+        composer.credit_tmdb_id = Some("crew-8".into());
+        composer.department = Some("Sound".into());
+        composer.job = Some("Original Music Composer".into());
+        item.credits.push(composer);
+        item.companies = vec![
+            company_credit(CompanyRole::Network, "AMC", Some(174), Some(389), 0),
+            company_credit(CompanyRole::Production, "Sony", Some(11073), None, 0),
+            company_credit(CompanyRole::Studio, "A Studio", None, Some(77), 0),
+        ];
+        item.keyword_entities = vec![
+            Keyword {
+                id: String::new(),
+                tmdb_id: Some(1508),
+                name: "new mexico".into(),
+            },
+            Keyword {
+                id: String::new(),
+                tmdb_id: Some(2231),
+                name: "drug dealer".into(),
+            },
+        ];
+        item.videos = vec![video("a", 0), video("b", 1)];
+        item.image_details.insert(
+            "https://example.invalid/p.jpg".into(),
+            ImageDetails {
+                width: Some(2000),
+                height: Some(3000),
+                vote_average: Some(5.5),
+                vote_count: Some(12),
+            },
+        );
+        item.images[0].language = Some("eng".into());
+        let mut season = crate::db::repo::child::blank_season(1);
+        season.is_manual = false;
+        season.translations = vec![Translation {
+            language: "fra".into(),
+            title: Some("Saison un".into()),
+            overview: Some("Le début.".into()),
+            tagline: None,
+            is_manual: false,
+        }];
+        item.seasons = vec![season];
+
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("written");
+
+        let mut read = get(&db, &item.id).await.unwrap().expect("a work");
+        load_children(&db, &mut read).await.unwrap();
+
+        // Its role, its name, TMDB's and TheTVDB's ids, whether it has an id here.
+        type Read<'a> = (CompanyRole, &'a str, Option<i64>, Option<i64>, bool);
+        let companies: Vec<Read<'_>> = read
+            .companies
+            .iter()
+            .map(|c| {
+                (
+                    c.role,
+                    c.company.name.as_str(),
+                    c.company.tmdb_id,
+                    c.company.tvdb_id,
+                    c.company.id.is_empty(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            companies,
+            [
+                (CompanyRole::Network, "AMC", Some(174), Some(389), false),
+                (CompanyRole::Production, "Sony", Some(11073), None, false),
+                (CompanyRole::Studio, "A Studio", None, Some(77), false),
+            ]
+        );
+        assert_eq!(read.companies[0].company.country.as_deref(), Some("US"));
+        assert_eq!(read.companies[0].source.as_deref(), Some("tmdb"));
+        let keywords: Vec<(Option<i64>, &str)> = read
+            .keyword_entities
+            .iter()
+            .map(|k| (k.tmdb_id, k.name.as_str()))
+            .collect();
+        assert_eq!(
+            keywords,
+            [(Some(1508), "new mexico"), (Some(2231), "drug dealer")]
+        );
+        let mut videos = read.videos.clone();
+        for v in &mut videos {
+            v.id.clear();
+        }
+        assert_eq!(videos, [video("a", 0), video("b", 1)]);
+        assert_eq!(read.seasons[0].translations.len(), 1);
+        assert_eq!(
+            read.seasons[0].translations[0].title.as_deref(),
+            Some("Saison un")
+        );
+        assert_eq!(
+            read.image_details["https://example.invalid/p.jpg"],
+            item.image_details["https://example.invalid/p.jpg"]
+        );
+        assert_eq!(read.images[0].language.as_deref(), Some("eng"));
+        let crew = read
+            .credits
+            .iter()
+            .find(|c| c.credit_type == crate::domain::CreditType::Crew)
+            .expect("the composer");
+        assert_eq!(crew.department.as_deref(), Some("Sound"));
+        assert_eq!(crew.job.as_deref(), Some("Original Music Composer"));
+
+        // Another work naming AMC by TheTVDB's id alone, and the studio by
+        // its name alone, finds the same companies.
+        let mut other = sample();
+        other.id = crate::db::new_id();
+        other.title = "Lists Round Trip Two".into();
+        other.slug = "lists-round-trip-two".into();
+        other.external_ids = ExternalIds::default();
+        other.credits.clear();
+        other.episodes.clear();
+        other.companies = vec![
+            company_credit(CompanyRole::Network, "AMC", None, Some(389), 0),
+            company_credit(CompanyRole::Studio, "a studio ", None, None, 0),
+        ];
+        upsert(
+            &db,
+            ItemWrite {
+                item: &other,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("written");
+        let theirs = crate::db::repo::company::of_work(&db, &other.id)
+            .await
+            .unwrap();
+        assert_eq!(theirs[0].company.id, read.companies[0].company.id);
+        assert_eq!(theirs[0].company.tmdb_id, Some(174), "the row's ids");
+        assert_eq!(theirs[1].company.id, read.companies[2].company.id);
+
+        // A refresh that gives none of them keeps them; the pictures given
+        // again without what was said of them keep it.
+        let mut again = item.clone();
+        again.companies.clear();
+        again.keyword_entities.clear();
+        again.videos.clear();
+        again.image_details.clear();
+        for season in &mut again.seasons {
+            season.translations.clear();
+        }
+        upsert(
+            &db,
+            ItemWrite {
+                item: &again,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("written again");
+        let mut kept = get(&db, &item.id).await.unwrap().expect("a work");
+        load_children(&db, &mut kept).await.unwrap();
+        assert_eq!(kept.companies.len(), 3);
+        assert_eq!(kept.keyword_entities.len(), 2);
+        assert_eq!(kept.videos.len(), 2);
+        assert_eq!(kept.seasons[0].translations.len(), 1);
+        assert_eq!(
+            kept.image_details["https://example.invalid/p.jpg"].vote_count,
+            Some(12)
+        );
+
+        // One that gives them anew replaces them whole.
+        let mut fewer = item.clone();
+        fewer.companies.truncate(1);
+        fewer.videos.truncate(1);
+        fewer.keyword_entities.truncate(1);
+        upsert(
+            &db,
+            ItemWrite {
+                item: &fewer,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("written anew");
+        let mut now = get(&db, &item.id).await.unwrap().expect("a work");
+        load_children(&db, &mut now).await.unwrap();
+        assert_eq!(now.companies.len(), 1);
+        assert_eq!(now.videos.len(), 1);
+        assert_eq!(now.keyword_entities.len(), 1);
+
+        // Deleting the work takes its links, never the companies.
+        assert!(delete(&db, &item.id).await.unwrap());
+        assert!(
+            crate::db::repo::company::of_work(&db, &item.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            crate::db::repo::company::by_tmdb(&db, crate::domain::CompanyKind::Network, 174)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// An id another company holds is not taken from it: two rows stay, as
+    /// the sources said, and the name's match does not merge them.
+    #[tokio::test]
+    async fn a_company_never_takes_an_id_another_holds() {
+        use crate::domain::{CompanyKind, CompanyRole};
+
+        let db = db().await;
+        let write = |title: &str, companies| {
+            let mut item = sample();
+            item.id = crate::db::new_id();
+            item.title = title.into();
+            item.slug = crate::domain::make_slug(title, None);
+            item.external_ids = ExternalIds::default();
+            item.credits.clear();
+            item.episodes.clear();
+            item.companies = companies;
+            item
+        };
+        let first = write(
+            "Ids Kept One",
+            vec![company_credit(
+                CompanyRole::Network,
+                "HBO",
+                Some(49),
+                None,
+                0,
+            )],
+        );
+        let second = write(
+            "Ids Kept Two",
+            vec![company_credit(
+                CompanyRole::Network,
+                "HBO Max",
+                None,
+                Some(1),
+                0,
+            )],
+        );
+        // TMDB's HBO now says it is TheTVDB's 1, which HBO Max holds.
+        let third = write(
+            "Ids Kept Three",
+            vec![company_credit(
+                CompanyRole::Network,
+                "HBO",
+                Some(49),
+                Some(1),
+                0,
+            )],
+        );
+        for item in [&first, &second, &third] {
+            upsert(
+                &db,
+                ItemWrite {
+                    item,
+                    replace_children: true,
+                },
+            )
+            .await
+            .expect("written");
+        }
+        let hbo = crate::db::repo::company::by_tmdb(&db, CompanyKind::Network, 49)
+            .await
+            .unwrap()
+            .expect("HBO");
+        assert_eq!(hbo.tvdb_id, None, "HBO Max keeps it");
+        let max = crate::db::repo::company::by_tvdb(&db, CompanyKind::Network, 1)
+            .await
+            .unwrap()
+            .expect("HBO Max");
+        assert_ne!(max.id, hbo.id);
+        assert_eq!(
+            crate::db::repo::company::works_of(&db, &hbo.id, true)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    /// What a pass over the kept answers fills in lands in the rows it names
+    /// and nowhere else: a language held stands, a picture or a credit of
+    /// another source is left alone.
+    #[tokio::test]
+    async fn what_is_filled_in_lands_where_it_belongs() {
+        use crate::domain::{CompanyRole, ImageDetails};
+
+        let db = db().await;
+        let mut item = sample();
+        item.id = crate::db::new_id();
+        item.title = "Filled In".into();
+        item.slug = "filled-in".into();
+        item.external_ids = ExternalIds::default();
+        item.episodes.clear();
+        item.images[0].url = "https://image.tmdb.org/t/p/original/filled.jpg".into();
+        let mut held = item.images[0].clone();
+        held.url = "https://image.tmdb.org/t/p/original/held.jpg".into();
+        held.language = Some("fra".into());
+        item.images.push(held);
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("written");
+
+        let said = ImageDetails {
+            width: Some(2000),
+            height: None,
+            vote_average: Some(6.5),
+            vote_count: None,
+        };
+        fill_in(
+            &db,
+            &item.id,
+            &Filled {
+                companies: vec![company_credit(
+                    CompanyRole::Network,
+                    "Filled Network",
+                    Some(900_001),
+                    None,
+                    0,
+                )],
+                keywords: Vec::new(),
+                videos: vec![video("filled", 0)],
+                pictures: vec![
+                    (item.images[0].url.clone(), Some("eng".into()), said),
+                    (item.images[1].url.clone(), Some("eng".into()), said),
+                    ("https://elsewhere/none.jpg".into(), None, said),
+                ],
+                jobs: vec![(
+                    "52fe4726c3a36847f812048b".into(),
+                    "Acting".into(),
+                    "Actor".into(),
+                )],
+            },
+        )
+        .await
+        .expect("filled in");
+
+        let mut read = get(&db, &item.id).await.unwrap().expect("the work");
+        load_children(&db, &mut read).await.unwrap();
+        let language = |url: &str| {
+            read.images
+                .iter()
+                .find(|i| i.url == url)
+                .and_then(|i| i.language.clone())
+        };
+        assert_eq!(language(&item.images[0].url).as_deref(), Some("eng"));
+        assert_eq!(
+            language(&item.images[1].url).as_deref(),
+            Some("fra"),
+            "a language held stands"
+        );
+        assert_eq!(read.image_details[&item.images[1].url], said);
+        assert_eq!(read.companies.len(), 1);
+        assert_eq!(read.videos.len(), 1);
+        assert_eq!(read.credits[0].job.as_deref(), Some("Actor"));
     }
 }

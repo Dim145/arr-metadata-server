@@ -34,6 +34,11 @@ pub struct Query {
     pub original_language: Option<String>,
     /// A network or a studio, by name.
     pub network: Option<String>,
+    /// A network or a company by this server's id for it, whatever it did
+    /// for the works: the list its page leads to.
+    pub company: Option<String>,
+    /// A keyword by this server's id for it: TMDB's, as its page lists them.
+    pub keyword_id: Option<String>,
     pub collection: Option<i64>,
     /// Works crediting somebody: by their TMDB id, given as digits, or else
     /// by their name, whatever its case and accents.
@@ -1457,6 +1462,30 @@ fn narrowed(
         }
     }
 
+    // The entities that double those texts, by this server's ids for them:
+    // a network or a company whatever it did for the work, and a keyword.
+    // Each read through the index on the entity's side of its links.
+    if let Some(company) = q
+        .company
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
+        sql.push_str(" AND id IN (SELECT media_id FROM media_company WHERE company_id = ?)");
+        args.add(company.to_string())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+    if let Some(keyword) = q
+        .keyword_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+    {
+        sql.push_str(" AND id IN (SELECT media_id FROM media_keyword WHERE keyword_id = ?)");
+        args.add(keyword.to_string())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+
     if let Some(collection) = q.collection {
         sql.push_str(" AND collection_tmdb_id = ?");
         args.add(collection).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -1977,6 +2006,96 @@ mod tests {
             .await,
             ["By Wit"]
         );
+    }
+
+    #[tokio::test]
+    async fn a_company_and_a_keyword_are_found_by_this_servers_id_for_them() {
+        use crate::domain::{Company, CompanyCredit, CompanyKind, CompanyRole, Keyword};
+
+        let db = db().await;
+        let credit = |kind: CompanyKind, role: CompanyRole| CompanyCredit {
+            company: Company {
+                id: String::new(),
+                kind,
+                name: "Lantern Filters".into(),
+                tmdb_id: Some(9101),
+                tvdb_id: None,
+                logo: None,
+                country: None,
+            },
+            role,
+            sort_order: 0,
+            source: Some("tmdb".into()),
+        };
+        let aired = stored(&db, |i| {
+            i.title = "Aired on Lantern".into();
+            i.companies = vec![credit(CompanyKind::Network, CompanyRole::Network)];
+            i.keyword_entities = vec![Keyword {
+                id: String::new(),
+                tmdb_id: Some(9201),
+                name: "lighthouse keeper".into(),
+            }];
+        })
+        .await;
+        // TMDB numbers networks and companies apart: the same number of the
+        // other kind is another company.
+        let made = stored(&db, |i| {
+            i.title = "Made by Lantern".into();
+            i.companies = vec![credit(CompanyKind::Company, CompanyRole::Production)];
+        })
+        .await;
+        stored(&db, |i| i.title = "By nobody here".into()).await;
+
+        let company_of = |id: String| {
+            let db = db.clone();
+            async move {
+                crate::db::repo::company::of_work(&db, &id)
+                    .await
+                    .expect("read")[0]
+                    .company
+                    .id
+                    .clone()
+            }
+        };
+        let network = company_of(aired.id.clone()).await;
+        let maker = company_of(made.id.clone()).await;
+        assert_ne!(network, maker);
+        let keyword = crate::db::repo::keyword::of_work(&db, &aired.id)
+            .await
+            .expect("read")[0]
+            .id
+            .clone();
+
+        let by_company = |id: &str| Query {
+            company: Some(id.to_string()),
+            ..Default::default()
+        };
+        let by_keyword = |id: &str| Query {
+            keyword_id: Some(id.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            titles(&db, by_company(&network)).await,
+            ["Aired on Lantern"]
+        );
+        assert_eq!(titles(&db, by_company(&maker)).await, ["Made by Lantern"]);
+        assert_eq!(
+            titles(&db, by_keyword(&keyword)).await,
+            ["Aired on Lantern"]
+        );
+        assert!(titles(&db, by_company("nobody")).await.is_empty());
+        assert!(titles(&db, by_keyword(&network)).await.is_empty());
+        // Counted as they are listed.
+        let counted = facets(&db, &by_company(&maker)).await.expect("counted");
+        assert_eq!(counted.total, 1);
+
+        // Each read through the index on the entity's side of its links:
+        // SQLite's plan, whatever engine the rest ran on.
+        let db = sqlite().await;
+        let read = plan(&db, &by_company("any")).await;
+        assert!(read.contains("ix_media_company_company"), "{read}");
+        let read = plan(&db, &by_keyword("any")).await;
+        assert!(read.contains("ix_media_keyword_keyword"), "{read}");
     }
 
     #[tokio::test]

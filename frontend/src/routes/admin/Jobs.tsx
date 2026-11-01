@@ -71,6 +71,7 @@ import type {
 const TASKS: TaskId[] = [
   'refresh.sweep',
   'refresh.all',
+  'refresh.replay',
   'import.anime',
   'import.imdb',
   'imdb.akas',
@@ -105,6 +106,8 @@ export function describeDetail(detail: string | null | undefined, t: Dict, local
   const n = (text: string | undefined) => Number(text ?? 0)
   let m: RegExpMatchArray | null
   if (detail === 'nothing was due') return s.nothingDue
+  // What the answers kept filled in, and the works whose answer was too old or none.
+  if ((m = detail.match(/^(\d+) filled in, (\d+) passed over$/))) return s.replayed(n(m[1]), n(m[2]))
   if ((m = detail.match(/^stopped: (\d+) refreshed, (\d+) failed, of (\d+)$/))) return s.stopped(n(m[1]), n(m[2]), n(m[3]))
   if ((m = detail.match(/^(\d+) of (\d+): (\d+) refreshed, (\d+) failed$/))) return s.progress(n(m[1]), n(m[2]), n(m[3]), n(m[4]))
   if ((m = detail.match(/^(\d+) refreshed, (\d+) failed(?:, of (\d+))?$/)))

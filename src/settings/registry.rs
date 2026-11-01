@@ -130,6 +130,26 @@ pub const REGISTRY: &[Definition] = &[
         },
         scopes: SERVER_ONLY,
     },
+    Definition {
+        // The crew kept of TMDB's, every department, the most telling jobs
+        // first: a film lists hundreds.
+        key: "tmdb.crewLimit",
+        kind: Kind::Int {
+            min: 0,
+            max: crate::state::MAX_CREW as i64,
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The pictures kept of TMDB's of each type, the best of each
+        // language first; keyart and logos take three fifths of it.
+        key: "tmdb.imageLimit",
+        kind: Kind::Int {
+            min: 1,
+            max: crate::state::MAX_IMAGES as i64,
+        },
+        scopes: SERVER_ONLY,
+    },
     // ── Providers ────────────────────────────────────────────────────────────
     Definition {
         key: "tvdb.searchFallback",
@@ -443,6 +463,23 @@ pub const REGISTRY: &[Definition] = &[
         key: "tmdb.images",
         kind: Kind::Choice {
             options: &["tmdb", "server"],
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Whether the TMDB relay answers the works held here itself, in
+        // TMDB's shape, before asking TMDB: `relay` asks TMDB for all of it.
+        key: "tmdb.relayMode",
+        kind: Kind::Choice {
+            options: &["relay", "local-first"],
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The same for the TheTVDB relay.
+        key: "tvdb.relayMode",
+        kind: Kind::Choice {
+            options: &["relay", "local-first"],
         },
         scopes: SERVER_ONLY,
     },

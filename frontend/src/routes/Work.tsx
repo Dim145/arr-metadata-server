@@ -32,17 +32,20 @@ import { NotFound, Unavailable } from './NotFound'
 import { NumberingBanner } from './admin/editor/NumberingBanner'
 import { FootActions } from './work/bar'
 import { Plate } from './work/Plate'
-import { Identifiers, Ratings, Record, Releases, WhereToWatch, useWatch, watchable } from './work/record'
+import { Companies, Identifiers, Ratings, Record, Releases, WhereToWatch, useWatch, watchable } from './work/record'
 import {
   AlsoKnownAs,
   CastList,
   Collection,
+  CrewList,
   Gallery,
   OnAir,
   Related,
   Seasons,
   Similar,
   Synopsis,
+  Videos,
+  crewShown,
   hasGallery,
   otherTitles,
   useSimilar,
@@ -91,8 +94,15 @@ export function Work() {
   const [picked, setPicked] = useState<string | undefined>(pickedRegion)
   const region = readerRegion(me.data, locale, picked)
   // Played from the plate on a wide screen, from the bar along the foot of a
-  // phone: one player either way.
-  const [trailer, setTrailer] = useState(false)
+  // phone, or from the list of videos: one player either way. The video last
+  // asked for stays mounted once closed, so the dialog is closed rather than
+  // torn down, and the focus goes back to what opened it.
+  const [video, setVideo] = useState<{ key: string; name?: string }>()
+  const [playing, setPlaying] = useState(false)
+  const play = (key: string, name?: string) => {
+    setVideo({ key, name })
+    setPlaying(true)
+  }
   const columns = useTwoColumns()
   // Asked here as the sections ask them, so the page's index offers a way
   // only to what is there.
@@ -120,10 +130,12 @@ export function Work() {
     { id: 'details', label: t.work.details },
     watchable(watch.data) ? { id: 'watch', label: t.work.watch } : undefined,
     credits.length ? { id: 'cast', label: t.work.cast } : undefined,
+    crewShown(item) ? { id: 'crew', label: t.work.crew } : undefined,
     item.kind === 'series' && seasonNumbers(item).some((n) => episodesOf(item, n).length)
       ? { id: 'seasons', label: t.work.seasons }
       : undefined,
     hasGallery(item) ? { id: 'gallery', label: t.gallery.title } : undefined,
+    item.videos?.length ? { id: 'videos', label: t.work.videos } : undefined,
     similar.data?.items.length ? { id: 'similar', label: t.work.similar } : undefined,
     titles.length || item.keywords.some((k) => k.trim())
       ? { id: 'titles', label: titles.length ? t.work.alsoKnownAs : t.work.keywords }
@@ -134,7 +146,7 @@ export function Work() {
     // Keyed by the work, so moving from one to another starts every section
     // afresh: the gallery's tab and the lists opened out were the last one's.
     <article key={item.id} className="pb-8">
-      <Plate item={item} region={region} onTrailer={() => setTrailer(true)} />
+      <Plate item={item} region={region} onTrailer={() => item.trailerYoutubeId && play(item.trailerYoutubeId)} />
 
       {/* Drawn while TMDB numbers the series, and kept once it is given back
           to say so: the banner itself is nothing otherwise. */}
@@ -169,6 +181,7 @@ export function Work() {
 
         <aside className="space-y-6 lg:col-start-2 lg:row-span-2 lg:row-start-1">
           <Record item={item} region={region} />
+          <Companies item={item} />
           <Releases item={item} region={region} />
           <WhereToWatch item={item} picked={picked} onPick={setPicked} />
           <Ratings item={item} />
@@ -177,8 +190,10 @@ export function Work() {
 
         <div className="min-w-0 space-y-14 lg:col-start-1 lg:row-start-2">
           <CastList credits={credits} people={item.people?.byCredit} />
+          <CrewList item={item} />
           {item.kind === 'series' ? <Seasons item={item} /> : null}
           <Gallery item={item} />
+          <Videos item={item} onPlay={play} />
           {item.kind === 'movie' && item.collectionTmdbId ? <Collection item={item} /> : null}
           <Related item={item} />
           <Similar item={item} />
@@ -186,10 +201,20 @@ export function Work() {
         </div>
       </div>
 
-      <FootActions item={item} canWatch={watchable(watch.data)} onTrailer={() => setTrailer(true)} />
+      <FootActions
+        item={item}
+        canWatch={watchable(watch.data)}
+        onTrailer={() => item.trailerYoutubeId && play(item.trailerYoutubeId)}
+      />
 
-      {item.trailerYoutubeId ? (
-        <Trailer youtubeId={item.trailerYoutubeId} title={item.title} open={trailer} onClose={() => setTrailer(false)} />
+      {video ? (
+        <Trailer
+          youtubeId={video.key}
+          title={item.title}
+          name={video.name}
+          open={playing}
+          onClose={() => setPlaying(false)}
+        />
       ) : null}
     </article>
   )

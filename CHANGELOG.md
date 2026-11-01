@@ -69,6 +69,90 @@ may change what the API or the configuration means, and says so here.
   today). It reads with no secret, GitHub's API with the run's own token, and
   writes nothing. `python3 scripts/watch/watch.py` runs it from a checkout;
   CONTRIBUTING.md, "Upstream watch", says how to take a snapshot again.
+- The TMDB relay can answer the works this server holds itself
+  (`tmdb.relayMode = local-first`, on *Opening & APIs*): a film's or a
+  series' document and what is appended to it — the older `releases`,
+  `trailers` and `casts` included — each part asked on its own, a series'
+  seasons and episodes in TMDB's own numbering, `find`, and the catalogue's
+  works first on a search's first page, in TMDB's shape, from the catalogue
+  with its locks and translations, and from TMDB's own document of the work
+  for what the catalogue does not keep. No TMDB key is needed for them.
+  Where to watch, reviews and the like are still asked of TMDB where it
+  knows the work. `relay` stays the default.
+- TheTVDB's relay can answer the works the catalogue holds itself
+  (`tvdb.relayMode = local-first`): a series' record, its translations, its
+  pictures, a page of its episodes in any order it holds, its seasons and
+  episodes, a film's record — written in TheTVDB's shape from the catalogue
+  and from TheTVDB's own record of the work, as last fetched, without asking
+  TheTVDB or needing its key. A series TheTVDB does not know — one TMDB
+  alone lists, a Fan-Kai, one entered by hand — is answered under the number
+  Sonarr keeps it under, its seasons and episodes under negative ids. A
+  search lists the works the catalogue finds before TheTVDB's results.
+  `ams_relay_local_total` counts what both relays answered so.
+- A series' `tvdb_id` in TMDB's ids is the number Sonarr keeps it under,
+  made up where TheTVDB has none: Seerr hands a series entered by hand, or
+  one TMDB alone lists, to Sonarr under a number Sonarr's metadata answers.
+  The relay fills a `tvdb_id` TMDB leaves null for a series held here.
+- TMDB's picture gate serves a picture of another source, or one uploaded,
+  kept in the media store, under its key: what a document written in TMDB's
+  shape names it by when TMDB's clients are sent to this server for
+  pictures.
+- TMDB's own numbering of a series is kept beside TheTVDB's, as an order,
+  `tmdb-aired` ("TMDB (aired)"), written at every refresh that reads TMDB's
+  seasons, and read from TMDB the first time a client asks for a series in
+  it that no refresh has kept it for. Each of its places names the episode
+  the series holds for it — the one of the same TMDB id when the two aired
+  the same day, else the one episode held that aired that day — or carries
+  TMDB's record of it. It is offered on the site and to Plex, as Plex's
+  TMDB agent offers "TheMovieDB (Aired)", not among the season types of
+  TheTVDB's documents, and can be frozen as the aired numbering as any
+  order can. Who numbers a series does not change: TMDB does in TheTVDB's
+  place only after `numbering.fallbackAfter` silent refreshes.
+- Skyhook's TMDB edition, `/v2/tmdb/shows/{language}/{id}/{seasonType}` and
+  `/v2/tmdb/search`, which the real service serves and Sonarr v5 does not
+  call yet: a series by TMDB's id — a Fan-Kai or a series entered by hand by
+  the id Sonarr knows it by — numbered by TMDB (`default`), each episode by
+  its TMDB id, TMDB's episode groups as season types under their bare ids,
+  in the real service's shape. A type the series has not is answered in
+  `default`, where the real service sends no episode; a series TheTVDB
+  numbers whose TMDB numbering cannot be read is a `502`, which Sonarr asks
+  again on. `scripts/e2e-skyhook-v2.sh` and the weekly parity run compare
+  it with the real service.
+- The model keeps what TMDB's and TheTVDB's answers carried all along
+  (migration 0048): networks and companies, and TMDB's keywords, as things
+  of their own with their ids, logos and countries; every video, the chosen
+  trailer unchanged; the whole crew, each credit with TMDB's department and
+  job, up to `tmdb.crewLimit` (30) — the crew beyond directing, writing and
+  production without portraits; TMDB's pictures with their language, size
+  and votes, up to `tmdb.imageLimit` (5) of each kind, the best of each
+  useful language first; a season's title and synopsis, and a person's
+  biography, in every language TMDB has them in. Works held gain them at
+  their next refresh. Radarr is given each crew member's department and job.
+- The season chart shows the AniList and MyAnimeList entry that premieres in
+  the quarter beside the season it belongs to — the second half of a split
+  season among the series carrying on — placed on the season's episodes by
+  the anime identifier list and described from them: its part, episodes,
+  days, status and next episode. `describe=true` adds MyAnimeList's
+  description of each, which the site asks for only when the reader opens
+  it.
+- A work's page lists its whole crew a department at a time, every video its
+  sources list — the trailer chosen first, a YouTube one played in place only
+  once asked for — and its networks and companies with their logos and their
+  countries. Each company and each of TMDB's keywords has a page of its own,
+  `/company/{id}` and `/keyword/{id}` (`GET /api/v1/companies/{id}`,
+  `/keywords/{id}`, open to visitors where the catalogue is), and the
+  catalogue is filtered by them (`company=`, `keywordId=`). A person known
+  only for their crew work has a tab of it.
+- *Opening & APIs* chooses what the TMDB and TheTVDB relays answer themselves
+  (`tmdb.relayMode`, `tvdb.relayMode`), and the settings take how much of
+  TMDB's crew and pictures a work keeps (`tmdb.crewLimit`, `tmdb.imageLimit`).
+- The task `refresh.replay` fills into every work, from the answers kept with
+  it and without asking anybody, what this version keeps that earlier ones
+  let go: networks and companies, TMDB's keywords and videos, the pictures'
+  languages and sizes, the crew's departments and jobs.
+- MyAnimeList is asked for how many episodes an entry is to have, how far it
+  has aired, its type, what it was adapted from and the entries related to
+  it, which describe each season and cour of an anime series.
 
 ### Changed
 
@@ -121,6 +205,16 @@ may change what the API or the configuration means, and says so here.
 - The documentation of the search says what the code does: a series search
   merges the catalogue's results and TMDB's every time, and asks TheTVDB,
   then Skyhook, only while nothing is found.
+- The AniList relay writes more of what was corrected here: the titles
+  hidden here leave an entry's other names, a locked adult flag and main
+  studio are written, and an entry that is one cour of a work takes the
+  dates, status and next episode its corrected schedule gives, and what the
+  work's locked status and dates say of it.
+- Hiding a crew credit hides every crew job of that person on the work, in
+  the TMDB relay's answers too; their directing, writing and producing
+  credits stay.
+- On the site, a season's title and synopsis, and a person's biography, are
+  in the reader's language where TMDB gave them in it.
 
 ### Fixed
 

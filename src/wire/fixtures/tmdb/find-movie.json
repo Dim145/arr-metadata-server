@@ -1,0 +1,50 @@
+{
+ "movie_results": [
+  {
+   "adult": false,
+   "backdrop_path": "/c6OLXfKAk5BKeR6broC8pYiCquX.jpg",
+   "id": 550,
+   "title": "Fight Club",
+   "original_title": "Fight Club",
+   "overview": "A ticking-time-bomb insomniac and a slippery…",
+   "poster_path": "/jSziioSwPVrOy9Yow3XhWIBDjq1.jpg",
+   "media_type": "movie",
+   "original_language": "en",
+   "genre_ids": [
+    18,
+    53
+   ],
+   "popularity": 42.1791,
+   "release_date": "1999-10-15",
+   "softcore": false,
+   "video": false,
+   "vote_average": 8.438,
+   "vote_count": 33199
+  }
+ ],
+ "person_results": [],
+ "tv_results": [
+  {
+   "adult": false,
+   "backdrop_path": null,
+   "id": 340100,
+   "name": "NICK 대하 드라마 파워레인저 와일드포스",
+   "original_name": "NICK 대하 드라마 파워레인저 와일드포스",
+   "overview": "",
+   "poster_path": null,
+   "media_type": "tv",
+   "original_language": "ko",
+   "genre_ids": [],
+   "popularity": 1.8533,
+   "first_air_date": "2002-02-09",
+   "softcore": false,
+   "vote_average": 8.538,
+   "vote_count": 13,
+   "origin_country": [
+    "KR"
+   ]
+  }
+ ],
+ "tv_episode_results": [],
+ "tv_season_results": []
+}

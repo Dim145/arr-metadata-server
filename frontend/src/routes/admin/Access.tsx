@@ -295,6 +295,10 @@ export function Access() {
               />
             ))}
           </section>
+          {/* What each relay answers itself: the works held here, from the
+              catalogue and in the service's own shape, before the service is
+              asked — and then without its key. */}
+          <RelayModes disabled={write.isPending} onChange={set} />
           {/* Beside whose key they ask with, what the relays do when their
               service fails, and where TMDB's clients fetch the pictures. */}
           <RelayFallbacks disabled={write.isPending} onChange={set} />
@@ -455,6 +459,78 @@ function RelayCredential({
         className="justify-self-start max-sm:flex max-sm:w-full max-sm:flex-col max-sm:rounded-card"
       />
     </div>
+  )
+}
+
+/** The relays whose answers can come from the catalogue first, by the setting that says so. */
+const RELAY_MODES = [
+  { api: 'tmdb', key: 'tmdb.relayMode' },
+  { api: 'tvdb', key: 'tvdb.relayMode' },
+] as const
+
+/** What `tmdb.relayMode` and `tvdb.relayMode` take: the service asked for all of it, or the catalogue first. */
+const MODES = ['relay', 'local-first'] as const
+
+type RelayMode = (typeof MODES)[number]
+
+/**
+ * What each relay answers itself, read off the server's own settings: all of
+ * it asked of its service, or the works this server holds answered from the
+ * catalogue first, in the service's shape. What the choice changes is said
+ * under it, and with the catalogue first, what is answered so. A setting the
+ * server does not have is not drawn.
+ */
+function RelayModes({
+  disabled,
+  onChange,
+}: {
+  disabled: boolean
+  onChange: (key: string, value: string) => void
+}) {
+  const { t } = useI18n()
+  const a = t.admin.access
+  const m = a.relayMode
+  const values = useServerValues()
+
+  const relays = RELAY_MODES.flatMap((relay) => {
+    const setting = values.data?.find((value) => value.key === relay.key)
+    if (!setting) return []
+    const mode: RelayMode = setting.value === 'local-first' ? 'local-first' : 'relay'
+    return [{ ...relay, mode }]
+  })
+  if (!relays.length) return null
+
+  return (
+    <section aria-labelledby="relay-modes" className="space-y-5 border-t border-rule px-5 py-4">
+      <div>
+        <p id="relay-modes" className="text-sm font-medium text-bone">
+          {m.title}
+        </p>
+        <p className="mt-1 max-w-prose text-xs leading-relaxed text-bone-faint">{m.lead}</p>
+      </div>
+      {relays.map((relay) => (
+        <div key={relay.api} className="grid gap-x-6 gap-y-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+          <div className="min-w-0">
+            <span className="block text-sm text-bone">{a.apis[relay.api]}</span>
+            <Consequence>{m.consequence[relay.mode](SERVICES[relay.api])}</Consequence>
+            {relay.mode === 'local-first' ? (
+              <p className="mt-3 max-w-prose text-xs leading-relaxed text-bone-faint">{m.answers[relay.api]}</p>
+            ) : null}
+          </div>
+          <Segmented
+            label={m.label(a.apis[relay.api])}
+            value={relay.mode}
+            options={MODES.map((value) => ({ value, label: m.options[value] }))}
+            onChange={(value) => onChange(relay.key, value)}
+            disabled={disabled}
+            // Who answers every client of a relay is no choice to stumble on
+            // with an arrow key.
+            deliberate
+            className="justify-self-start max-sm:flex max-sm:w-full max-sm:flex-col max-sm:rounded-card"
+          />
+        </div>
+      ))}
+    </section>
   )
 }
 

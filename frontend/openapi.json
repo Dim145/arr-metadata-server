@@ -2492,6 +2492,52 @@
         }
       }
     },
+    "/api/v1/companies/{id}": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "A network's or a company's page, by this server's id for it — a work's\n`companies[].company.id`: the works it is credited on that the reader may\nsee, whatever it did for them, and how many it did what for. The\nnetwork's page by the slug of its name, `/networks/{slug}`, stands\nbeside it: that one goes by the works' texts, locks and all.",
+        "operationId": "browse_company",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "This server's id for the network or the company",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "The reader's language: `fr`. The titles, the genre's name and the note\nare read in it where they are written in it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The language is not one"
+          },
+          "404": {
+            "description": "No network or company has that id, or none of its works is one this reader may see"
+          }
+        }
+      }
+    },
     "/api/v1/compare": {
       "get": {
         "tags": [
@@ -3216,6 +3262,24 @@
             "name": "network",
             "in": "query",
             "description": "A network or a studio, by name, whatever its case.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "description": "A network or a company by this server's id for it — a work's\n`companies[].company.id` — whatever it did for the works: what its\npage, `GET /companies/{id}`, lists.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "keywordId",
+            "in": "query",
+            "description": "A keyword by this server's id for it — a work's\n`keywordEntities[].id` — as its page, `GET /keywords/{id}`, lists.",
             "required": false,
             "schema": {
               "type": "string"
@@ -3962,6 +4026,24 @@
             "name": "network",
             "in": "query",
             "description": "A network or a studio, by name, whatever its case.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "company",
+            "in": "query",
+            "description": "A network or a company by this server's id for it — a work's\n`companies[].company.id` — whatever it did for the works: what its\npage, `GET /companies/{id}`, lists.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "keywordId",
+            "in": "query",
+            "description": "A keyword by this server's id for it — a work's\n`keywordEntities[].id` — as its page, `GET /keywords/{id}`, lists.",
             "required": false,
             "schema": {
               "type": "string"
@@ -6678,6 +6760,52 @@
         }
       }
     },
+    "/api/v1/keywords/{id}": {
+      "get": {
+        "tags": [
+          "Catalogue"
+        ],
+        "summary": "A keyword's page, by this server's id for it — a work's\n`keywordEntities[].id`: the works the reader may see that TMDB gives it.\nThe texts of a work's `keywords`, AniList's tags among them, are still\nlisted by `GET /items?keyword=`.",
+        "operationId": "browse_keyword",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "This server's id for the keyword",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "The reader's language: `fr`. The titles, the genre's name and the note\nare read in it where they are written in it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The language is not one"
+          },
+          "404": {
+            "description": "No keyword has that id, or none of its works is one this reader may see"
+          }
+        }
+      }
+    },
     "/api/v1/lists": {
       "get": {
         "tags": [
@@ -8032,6 +8160,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "describe",
+            "in": "query",
+            "description": "Describe each AniList and MyAnimeList entry listed under an entry's\n`cours` as MyAnimeList does, asking it where this server has nothing\nat hand: slower, a few seconds for a season of sequels.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -8509,7 +8646,7 @@
             "description": "No such task"
           },
           "409": {
-            "description": "It is running already, or a backup is being restored"
+            "description": "It is running already, or a task sharing its work is — a refresh in bulk and the answers kept filled in never run together — or a backup is being restored"
           },
           "503": {
             "description": "Its source or its switch is off: no media store, no export path, no certificate of the server's own, the check for a newer version off, neither Sonarr nor Radarr connected, the AVIF copies off, no import rule switched on"
@@ -10030,6 +10167,117 @@
         "security": []
       }
     },
+    "/v2/tmdb/search": {
+      "get": {
+        "tags": [
+          "Sonarr compatibility"
+        ],
+        "summary": "Search series, as Skyhook's TMDB edition answers: without their\nepisodes, each under the id that edition knows it by — a series TheTVDB\nalone lists, which TMDB has no id for, is left out. `term` is as for the\nTheTVDB edition, and so is a search nothing answered.",
+        "operationId": "sonarr_search_tmdb",
+        "parameters": [
+          {
+            "name": "language",
+            "in": "query",
+            "description": "Three-letter language code, as Sonarr writes it; English when left out",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "term",
+            "in": "query",
+            "description": "Free text, or `prefix:id`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SkyhookTmdbShowResource"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller's address is not in the allowlist"
+          },
+          "502": {
+            "description": "No source that could answer this search did, and the catalogue holds nothing by that name"
+          }
+        },
+        "security": []
+      }
+    },
+    "/v2/tmdb/shows/{language}/{tmdb_id}/{season_type}": {
+      "get": {
+        "tags": [
+          "Sonarr compatibility"
+        ],
+        "summary": "A series by TMDB id, as Skyhook's TMDB edition serves it.",
+        "description": "What the TheTVDB edition answers, numbered as TMDB numbers the series:\n`default` is TMDB's own numbering, kept at every refresh that reads TMDB's\nseasons — read from TMDB first for a series no refresh has kept it for\nyet — and a TMDB episode group is asked for by its id on TMDB. Each\nepisode is known by its TMDB id. An order made here is asked for by its\nkey, as on the TheTVDB edition; a type the series has not is answered in\nTMDB's own numbering.\n\nThe id is TMDB's; from 200 000 000 up, the one Sonarr knows a Fan-Kai or\na series entered by hand by, which TMDB does not list, and the answer\nechoes it back. Not found and not answered are told apart as on the\nTheTVDB edition; and a series TheTVDB numbers whose numbering by TMDB\nnothing has kept, while TMDB does not answer, is not answered either.",
+        "operationId": "sonarr_show_tmdb",
+        "parameters": [
+          {
+            "name": "language",
+            "in": "path",
+            "description": "Three-letter language code, as Sonarr writes it: `eng`, `fra`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tmdb_id",
+            "in": "path",
+            "description": "TMDB series id, or the one Sonarr knows a Fan-Kai or a series entered by hand by",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "season_type",
+            "in": "path",
+            "description": "`default`, TMDB's own numbering; a TMDB episode group's id; an order made here, `ams-…`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkyhookTmdbShowResource"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller's address is not in the allowlist"
+          },
+          "404": {
+            "description": "Every source that could resolve this id answered that there is no such series"
+          },
+          "502": {
+            "description": "A source that could have resolved this id did not answer, and nothing is held to answer with; or TMDB's numbering of a series TheTVDB numbers is neither kept nor could be read"
+          }
+        },
+        "security": []
+      }
+    },
     "/v2/tvdb/search": {
       "get": {
         "tags": [
@@ -10188,7 +10436,7 @@
           "TheTVDB compatibility"
         ],
         "summary": "Relay any TheTVDB v4 read, with this server's locks written in on the way\nback.",
-        "description": "A bearer token that is a key issued here is this server's business: the\noperator's own TheTVDB token takes its place, and the client's copy never\nleaves. Any other token is the client's own, and travels as it came. A\ncaller with no token who authenticated with a key — in the header or the\nquery — is asked for with the operator's token too. The operator's own\naccount, `user` and what hangs off it, is nobody else's: refused with\nthe operator's token, read with a client's own. With each client's own\nkey relayed (`tvdb.relayCredential = client`), the operator's token is\nnever used, and a key issued here is refused with a 401 that says why.\n\nA page of episodes in an order this server keeps — a TMDB group's, one\nmade here, the aired order while another is frozen as it, `altdvd` and\n`alttwo` that TheTVDB answers empty — is answered here, with or without\na TheTVDB key of the server's own.\n\nEvery v4 path is accepted; see TheTVDB's own documentation for their\nshapes. The documents about a work of this catalogue are the ones patched:\n`series/{id}` and `movies/{id}`, both `/extended` — with the translations,\nseasons and episodes asked with them — and `/translations/{lang}`; a page\nof a series' episodes in any of its orders, `[/{lang}]`; `seasons/{id}`\nand its `/extended`; one episode, `/extended` and `/translations/{lang}`.",
+        "description": "A bearer token that is a key issued here is this server's business: the\noperator's own TheTVDB token takes its place, and the client's copy never\nleaves. Any other token is the client's own, and travels as it came. A\ncaller with no token who authenticated with a key — in the header or the\nquery — is asked for with the operator's token too. The operator's own\naccount, `user` and what hangs off it, is nobody else's: refused with\nthe operator's token, read with a client's own. With each client's own\nkey relayed (`tvdb.relayCredential = client`), the operator's token is\nnever used, and a key issued here is refused with a 401 that says why.\n\nA page of episodes in an order this server keeps — a TMDB group's, one\nmade here, the aired order while another is frozen as it, `altdvd` and\n`alttwo` that TheTVDB answers empty — is answered here, with or without\na TheTVDB key of the server's own.\n\nWhere an administrator chose so (`tvdb.relayMode = local-first`), a work\nthis catalogue holds — switched on, one the caller may see, by its\nTheTVDB id or the number Sonarr keeps it under — is written here in\nTheTVDB's shape, from the catalogue and from TheTVDB's record of it as\nlast fetched, and TheTVDB is not asked: a series and its translations, a\npage of its episodes in any order it holds, a season, an episode, a\nfilm. A search lists the works the catalogue finds before TheTVDB's own,\non its first page, and alone when TheTVDB fails. A work's text in a\nlanguage held nowhere here is TheTVDB's, or its 404 for a work it does\nnot know.\n\nEvery v4 path is accepted; see TheTVDB's own documentation for their\nshapes. The documents about a work of this catalogue are the ones patched:\n`series/{id}` and `movies/{id}`, both `/extended` — with the translations,\nseasons and episodes asked with them — and `/translations/{lang}`; a page\nof a series' episodes in any of its orders, `[/{lang}]`; `seasons/{id}`\nand its `/extended`; one episode, `/extended` and `/translations/{lang}`.",
         "operationId": "thetvdb_relay",
         "parameters": [
           {
@@ -10203,13 +10451,19 @@
         ],
         "responses": {
           "200": {
-            "description": "TheTVDB's answer, with the fields locked here written in where it is about a work of this catalogue. When TheTVDB fails — no answer, 429, 5xx — its last answer to the same request made with this server's token stands in, with Age, a week old at the most, and a reference list from the database, six months; never for `updates`"
+            "description": "TheTVDB's answer, with the fields locked here written in where it is about a work of this catalogue. When TheTVDB fails — no answer, 429, 5xx — its last answer to the same request made with this server's token stands in, with Age, a week old at the most, and a reference list from the database, six months; never for `updates`. With `tvdb.relayMode = local-first`, a work held here written here, in TheTVDB's shape"
+          },
+          "400": {
+            "description": "With `tvdb.relayMode = local-first`, a page of a held series' episodes narrowed to a number with no season, refused as TheTVDB refuses it"
           },
           "401": {
             "description": "No credential this server or TheTVDB takes; or, with each client's own key relayed, a key issued here"
           },
           "403": {
             "description": "Not a read, or the operator's own account asked for with a key issued here"
+          },
+          "404": {
+            "description": "TheTVDB's own; or, with `tvdb.relayMode = local-first`, the text of a held work TheTVDB does not know in a language held nowhere here, written as TheTVDB writes its own"
           },
           "429": {
             "description": "TheTVDB's own, handed back as it came; or TheTVDB's door here, shut after one, or full, with the seconds left in Retry-After, when nothing kept stands in"
@@ -12642,6 +12896,100 @@
           }
         }
       },
+      "Company": {
+        "type": "object",
+        "description": "A network or a company, kept once for every work it is credited on.",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "This server's id for it: what its page is found by. Empty in a\nsource's answer, until it is stored."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CompanyKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tmdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "tvdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "logo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its logo, an address as its source gives it, like an image's."
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it is from: ISO 3166-1 alpha-2, upper case."
+          }
+        }
+      },
+      "CompanyCredit": {
+        "type": "object",
+        "description": "A company credited on a work: what it did there, where its source lists\nit, and whose list it is.",
+        "required": [
+          "company",
+          "role",
+          "sortOrder"
+        ],
+        "properties": {
+          "company": {
+            "$ref": "#/components/schemas/Company"
+          },
+          "role": {
+            "$ref": "#/components/schemas/CompanyRole"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The source whose list it is: `tmdb`, `tvdb`."
+          }
+        }
+      },
+      "CompanyKind": {
+        "type": "string",
+        "description": "What a company is: a network, which airs works, or a company, which makes\nor sells them. TMDB numbers the two apart — its network 174 is AMC, its\ncompany 174 Warner Bros. Pictures — so a kind is part of what one of its\nids names.",
+        "enum": [
+          "network",
+          "company"
+        ]
+      },
+      "CompanyRole": {
+        "type": "string",
+        "description": "What a company did for a work.",
+        "enum": [
+          "network",
+          "production",
+          "studio",
+          "distributor"
+        ]
+      },
       "Compared": {
         "type": "object",
         "description": "One work of the two, as the comparison draws it.",
@@ -12761,6 +13109,15 @@
             "description": "The source it came from: `tmdb`, `tvdb`, `radarr`."
           }
         }
+      },
+      "CourStatus": {
+        "type": "string",
+        "description": "How far an entry has aired, in AniList's terms.",
+        "enum": [
+          "notYetReleased",
+          "releasing",
+          "finished"
+        ]
       },
       "CoverType": {
         "type": "string",
@@ -13023,7 +13380,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The part played; for one behind the camera, the job, as it has\nalways been kept: what its readers take it from."
           },
           "image": {
             "type": [
@@ -13051,6 +13409,20 @@
           },
           "isManual": {
             "type": "boolean"
+          },
+          "department": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The department of one behind the camera, as TMDB names it:\n`Directing`, `Writing`, `Production`, `Sound`, `Camera`, `Editing`,\n`Art`… None for a part, or where the source names none."
+          },
+          "job": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their job there, as TMDB names it: `Screenplay`, `Original Music\nComposer`, `Director of Photography`."
           }
         }
       },
@@ -13089,7 +13461,8 @@
           "director",
           "writer",
           "producer",
-          "guest"
+          "guest",
+          "crew"
         ]
       },
       "Credits": {
@@ -14081,7 +14454,7 @@
         "properties": {
           "key": {
             "type": "string",
-            "description": "What a client asks for it by — Sonarr v5's season type, Plex's\nepisode order, the TheTVDB relay's season type: `official` for the\naired order, TheTVDB's own type for its others (`dvd`, `absolute`,\n`alternate`, `regional`, `altdvd`, `alttwo`), `tmdb-` and the id of a\nTMDB episode group, `ams-` and a name for one made here."
+            "description": "What a client asks for it by — Sonarr v5's season type, Plex's\nepisode order, the TheTVDB relay's season type: `official` for the\naired order, TheTVDB's own type for its others (`dvd`, `absolute`,\n`alternate`, `regional`, `altdvd`, `alttwo`), `tmdb-aired` for TMDB's\nown numbering, `tmdb-` and the id of a TMDB episode group, `ams-` and\na name for one made here."
           },
           "kind": {
             "$ref": "#/components/schemas/OrderKind"
@@ -14487,12 +14860,14 @@
           "genre",
           "network",
           "year",
-          "decade"
+          "decade",
+          "company",
+          "keyword"
         ]
       },
       "FacetPage": {
         "type": "object",
-        "description": "A page of the catalogue: a genre's, a network's or a studio's, a year's,\na decade's — what it is called, how many works it holds, the five rated\nhighest, how to list the rest, and what the programmer wrote about it.",
+        "description": "A page of the catalogue: a genre's, a network's or a studio's, a year's,\na decade's, a company's or a keyword's — what it is called, how many works\nit holds, the five rated highest, how to list the rest, and what the\nprogrammer wrote about it.",
         "required": [
           "kind",
           "slug",
@@ -14549,7 +14924,40 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/EditorialNote",
-                "description": "The programmer's note on it: in the reader's language, else in\nEnglish, else the one written last."
+                "description": "The programmer's note on it: in the reader's language, else in\nEnglish, else the one written last. A company and a keyword have\nnone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "company": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Company",
+                "description": "A company's page: the network or the company itself — its kind, the\nids its sources file it under, its logo and its country."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "roles": {
+            "type": "object",
+            "description": "What it did for the works the reader may see, by role, and for how\nmany: `{\"network\": 12}`, `{\"production\": 3, \"distributor\": 1}`.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "keyword": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Keyword",
+                "description": "A keyword's page: the keyword itself, with TMDB's id for it."
               },
               {
                 "type": "null"
@@ -15251,6 +15659,40 @@
           },
           "isManual": {
             "type": "boolean"
+          }
+        }
+      },
+      "ImageDetails": {
+        "type": "object",
+        "description": "What a source says of a picture beyond its address: TMDB's size of it and\nhow its members voted on it, by which TMDB ranks its pictures.",
+        "properties": {
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "voteAverage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "voteCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           }
         }
       },
@@ -16345,6 +16787,29 @@
           }
         }
       },
+      "Keyword": {
+        "type": "object",
+        "description": "A keyword, kept once for every work it is given: TMDB's, by its id.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "This server's id for it: what its page is found by. Empty in a\nsource's answer, until it is stored."
+          },
+          "tmdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "Kin": {
         "type": "object",
         "description": "An earlier work named beside one, as a line on a chart says it: its title,\nand the work here that it is when the catalogue holds it.",
@@ -16995,6 +17460,130 @@
           }
         }
       },
+      "MalEntry": {
+        "type": "object",
+        "description": "One MyAnimeList entry — a season or a cour of a series, a film, an OVA —\nas it describes itself, in the official API's words whichever way in\nanswered.",
+        "required": [
+          "malId"
+        ],
+        "properties": {
+          "malId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its main title, the romaji one."
+          },
+          "english": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "japanese": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "synonyms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "synopsis": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Without the credit to whoever wrote it."
+          },
+          "episodes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many episodes it is to have; none while MyAnimeList does not know."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`finished_airing`, `currently_airing` or `not_yet_aired`."
+          },
+          "mediaType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`tv`, `ova`, `movie`, `special`, `ona`, `music`, `tv_special`…"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it was adapted from: `manga`, `light_novel`, `original`…"
+          },
+          "studios": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "starts": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The day it started and the day it ended, as far as MyAnimeList\nknows them: `2023-09-29`, or a month or a year alone."
+          },
+          "ends": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "related": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MalRelated"
+            },
+            "description": "The other anime it is related to; the manga a Jikan answer names\nbeside them are left out, as the official API leaves them."
+          }
+        }
+      },
+      "MalRelated": {
+        "type": "object",
+        "description": "An anime one entry is related to on MyAnimeList.",
+        "required": [
+          "malId",
+          "relation"
+        ],
+        "properties": {
+          "malId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "relation": {
+            "type": "string",
+            "description": "`sequel`, `prequel`, `side_story`, `alternative_version`…"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "MalVia": {
         "type": "string",
         "description": "How MyAnimeList is asked first.",
@@ -17428,6 +18017,37 @@
           "people": {
             "$ref": "#/components/schemas/People",
             "description": "What the sources say of the people the credits name — the credits of\nsingle episodes among it — and, read back, whom each credit is filed\nunder: see [`person::People`]."
+          },
+          "companies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompanyCredit"
+            },
+            "description": "The networks and the companies credited on the work, each with the\nids its sources file it under, its logo and its country, in what it\ndid for the work. The texts `network`, `studio` and\n`productionCompanies` stay what they were, locks and all: these\ndouble them."
+          },
+          "keywordEntities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Keyword"
+            },
+            "description": "TMDB's keywords, each with its id. `keywords` stays the texts every\nsource gave, AniList's tags among them."
+          },
+          "videos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Video"
+            },
+            "description": "Every video the sources list for the work — trailers, teasers, clips\n— in their order. `trailerYoutubeId` stays the one chosen of them."
+          },
+          "imageDetails": {
+            "type": "object",
+            "description": "What a source says of its pictures beyond their addresses — their\nsize, how its members voted on them — by the address the work gives\neach: TMDB's, the only one that says.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ImageDetails"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "lockedFields": {
             "type": "array",
@@ -18667,7 +19287,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The keys of the orders Sonarr v5 and Plex are offered, the aired one\naside: the same order kept by TheTVDB and by TMDB is offered once."
+            "description": "The keys of the orders Sonarr v5 and Plex are offered, the aired one\naside: the same order kept by TheTVDB and by TMDB is offered once.\nTMDB's own numbering, `tmdb-aired`, is offered to Plex alone: Sonarr\nv5 is answered in it by TMDB's id, where it is the default."
           }
         }
       },
@@ -18761,7 +19381,7 @@
             "items": {
               "$ref": "#/components/schemas/EpisodeOrder"
             },
-            "description": "Every other order — TheTVDB's first, the DVDs' at their head, then\nTMDB's episode groups, then those made here — each with its places:\nan episode the work holds by its id as the work gives it now, or the\nrecord the order carries of one it does not. Empty for a film, or a\nseries numbered one way only."
+            "description": "Every other order — TheTVDB's first, the DVDs' at their head, then\nTMDB's own numbering (`tmdb-aired`) and its episode groups, then those\nmade here — each with its places: an episode the work holds by its id\nas the work gives it now, or the record the order carries of one it\ndoes not. Empty for a film, or a series numbered one way only."
           },
           "numbering": {
             "$ref": "#/components/schemas/OrderNumbering",
@@ -21343,6 +21963,149 @@
           "primaryImages": {
             "$ref": "#/components/schemas/PrimaryImages",
             "description": "The poster a person chose to lead the season with, by id among its\nown images: a lock (`season:N/primaryPoster`), as the work's is."
+          },
+          "translations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Translation"
+            },
+            "description": "The season's title and synopsis in other languages, as TMDB's season\ndocuments give them; never a tagline. A text locked on the season in\na language comes before them: see [`fields::season_text`]."
+          }
+        }
+      },
+      "SeasonCour": {
+        "type": "object",
+        "description": "One AniList and MyAnimeList entry a season is, or one of the cours it is\nsplit into, as the anime identifier list places it on the season's\nepisodes, and described from them.",
+        "required": [
+          "part",
+          "parts",
+          "firstEpisode",
+          "lastEpisode",
+          "starts",
+          "episodes",
+          "aired",
+          "status"
+        ],
+        "properties": {
+          "anilistId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "malId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`TV`, `ONA`, `OVA`…, as the list files it."
+          },
+          "part": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which of the season's entries it is, the first being 1, and how many\nthe list splits the season into."
+          },
+          "parts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "firstEpisode": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its first and last episodes the catalogue holds, by their number in\nthe season."
+          },
+          "lastEpisode": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "starts": {
+            "type": "string",
+            "description": "The day it premiered, or will: `YYYY-MM-DD`."
+          },
+          "ends": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its last episode's day, once it has finished."
+          },
+          "episodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its episodes, and how many have aired."
+          },
+          "aired": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CourStatus"
+          },
+          "nextEpisode": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SeasonCourNext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the catalogue already calls it, where the work's related\nentries name it."
+          },
+          "mal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MalEntry",
+                "description": "MyAnimeList's own description of it, when the chart was asked to\ndescribe the entries."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SeasonCourNext": {
+        "type": "object",
+        "description": "The next episode of an entry to air.",
+        "required": [
+          "episode",
+          "episodeNumber",
+          "airDate",
+          "airingAt"
+        ],
+        "properties": {
+          "episode": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its number within the entry, the entry's first being 1, as AniList\ncounts."
+          },
+          "episodeNumber": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its number in the season."
+          },
+          "airDate": {
+            "type": "string"
+          },
+          "airingAt": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it airs, in seconds since the epoch."
           }
         }
       },
@@ -21415,6 +22178,13 @@
                 "type": "null"
               }
             ]
+          },
+          "cours": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeasonCour"
+            },
+            "description": "The AniList and MyAnimeList entries of the season that premiere in\nthe quarter: the season itself where it is one entry, or the cour of\nit that starts here — the second half of a split season among those\ncarrying on."
           }
         }
       },
@@ -22430,6 +23200,298 @@
           }
         }
       },
+      "SkyhookTmdbEpisodeResource": {
+        "type": "object",
+        "description": "An episode as Skyhook's TMDB edition serves it: known by its TMDB id.",
+        "required": [
+          "tmdbShowId",
+          "tmdbId",
+          "seasonNumber",
+          "episodeNumber",
+          "title"
+        ],
+        "properties": {
+          "tmdbShowId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The id the series was asked by."
+          },
+          "tmdbId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "TMDB's id for the episode; for one TMDB gave none — an episode\nTheTVDB alone lists, a record written here — a negative one made of\nwhat names it, the same at every answer."
+          },
+          "seasonNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "episodeNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "title": {
+            "type": "string"
+          },
+          "airDate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "airDateUtc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "overview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finaleType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SkyhookTmdbShowResource": {
+        "type": "object",
+        "description": "A series as Skyhook's TMDB edition serves it, `/v2/tmdb/…`: what the\nTheTVDB edition says of it, asked by TMDB's id and numbered as TMDB\nnumbers it — its episodes known by their TMDB ids, TMDB's episode groups\nits other orders under their bare ids — and without what the real service\nleaves out of this edition: alternative titles, a time of day, an\nepisode's TheTVDB ids, its absolute number, where a special airs and its\nrating.",
+        "required": [
+          "title",
+          "originalTitle",
+          "tmdbId",
+          "slug",
+          "formats",
+          "language",
+          "malIds",
+          "anidbIds",
+          "aniListIds",
+          "lastUpdated",
+          "status",
+          "genres",
+          "translations",
+          "seasonTypes",
+          "actors",
+          "images",
+          "seasons",
+          "metadataSource"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "originalTitle": {
+            "type": "string",
+            "description": "As the TheTVDB edition writes it: see [`ShowResourceV2`]."
+          },
+          "tvdbId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The id the TheTVDB edition knows the series by: TheTVDB's, or the\none this server made for a series TheTVDB does not list (see\n[`ids::for_client`]), so that a series Sonarr holds under it is\nknown as the same. Left out for none, as the real service leaves it\nout of a series TheTVDB does not list."
+          },
+          "tmdbId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The id asked by, echoed back: TMDB's, or for a work no TMDB id names\n— a Fan-Kai, a series entered by hand — the one Sonarr knows it by."
+          },
+          "tvRageId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "tvMazeId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "imdbId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "overview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slug": {
+            "type": "string"
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "originalCountry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "originalLanguage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": "string"
+          },
+          "firstAired": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastAired": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "malIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "anidbIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "aniListIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "lastUpdated": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "runtime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "originalNetwork": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "network": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "genres": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "contentRating": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rating": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SkyhookRatingResource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "translations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkyhookTranslationResource"
+            }
+          },
+          "seasonTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeasonTypeResource"
+            },
+            "description": "TMDB's own numbering first, `default`; then TMDB's episode groups,\neach under its id on TMDB, and the orders made here."
+          },
+          "actors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActorResource"
+            }
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkyhookImageResource"
+            }
+          },
+          "seasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeasonResourceV2"
+            }
+          },
+          "episodes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SkyhookTmdbEpisodeResource"
+            },
+            "description": "Left out of a search result, as the real service leaves it."
+          },
+          "metadataSource": {
+            "type": "string",
+            "description": "`tmdb`; `fankai` for a Fan-Kai, `local` for a series entered by hand\nthat nothing elsewhere names."
+          }
+        }
+      },
       "SkyhookTranslationResource": {
         "type": "object",
         "description": "The series' title and overview in one language. Named apart in the\nspec: Radarr's surface has a `TranslationResource` of its own, in\nPascalCase, and utoipa files schemas by their short name.",
@@ -22925,6 +23987,7 @@
         "enum": [
           "refresh.sweep",
           "refresh.all",
+          "refresh.replay",
           "import.anime",
           "import.imdb",
           "imdb.akas",
@@ -23739,6 +24802,94 @@
             "type": "integer",
             "format": "int64",
             "description": "What they weighed, in bytes."
+          }
+        }
+      },
+      "Video": {
+        "type": "object",
+        "description": "A video a source lists for a work.",
+        "required": [
+          "site",
+          "key",
+          "official",
+          "sortOrder"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "This server's id for it; empty in a source's answer."
+          },
+          "site": {
+            "type": "string",
+            "description": "Where it is: `YouTube`, `Vimeo`."
+          },
+          "key": {
+            "type": "string",
+            "description": "What it is found by there: a YouTube video's id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "videoType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is, as TMDB says: `Trailer`, `Teaser`, `Clip`, `Featurette`,\n`Behind the Scenes`, `Bloopers`, `Opening Credits`."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language it speaks: ISO 639-3, as the rest of the model."
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country it was put out for: ISO 3166-1 alpha-2, upper case."
+          },
+          "official": {
+            "type": "boolean",
+            "description": "Put out by the work's makers."
+          },
+          "publishedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When, as TMDB writes it: `2024-09-17T16:44:25.000Z`."
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its height in lines: `1080`, `2160`."
+          },
+          "tmdbId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB's id for the video itself."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The source that listed it: `tmdb`."
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
           }
         }
       },

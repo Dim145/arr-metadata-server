@@ -579,6 +579,9 @@ fn write_credit(out: &mut String, credit: &Credit, person: Option<&PersonRef>) {
         CreditType::Director => tag(out, "director", Some(&credit.person_name)),
         CreditType::Writer => tag(out, "credits", Some(&credit.person_name)),
         CreditType::Producer => tag(out, "producer", Some(&credit.person_name)),
+        // Kodi's document has no element for the rest of the crew, and an
+        // `<actor>` would put the composer in the cast.
+        CreditType::Crew => {}
     }
 }
 
@@ -666,6 +669,8 @@ mod tests {
                 credit_tmdb_id: None,
                 sort_order: 0,
                 is_manual: false,
+                department: None,
+                job: None,
             },
             Credit {
                 id: "c2".into(),
@@ -677,6 +682,8 @@ mod tests {
                 credit_tmdb_id: None,
                 sort_order: 0,
                 is_manual: false,
+                department: None,
+                job: None,
             },
         ];
         item
@@ -1255,6 +1262,7 @@ mod tests {
             is_manual: false,
             images: Vec::new(),
             primary_images: Default::default(),
+            translations: Vec::new(),
         };
         item.seasons = vec![
             season(0, Some("Specials")),
@@ -1332,6 +1340,7 @@ mod tests {
                 poster("b", "https://example.invalid/s1-other.jpg"),
             ],
             primary_images: Default::default(),
+            translations: Vec::new(),
         };
         item.seasons = vec![season.clone()];
         season.season_number = 0;

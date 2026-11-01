@@ -48,6 +48,8 @@ fn credit(name: &str, tmdb_id: Option<i64>, kind: CreditType) -> Credit {
         credit_tmdb_id: None,
         sort_order: 0,
         is_manual: false,
+        department: None,
+        job: None,
     }
 }
 

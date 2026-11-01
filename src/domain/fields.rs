@@ -548,6 +548,41 @@ pub fn text_lock<'a>(
         .or_else(|| made_in(""))
 }
 
+/// A season's title or synopsis (`field`: `title`, `overview`) as it is
+/// served in `language` (`fra`): the text locked on the season in that
+/// language, else in every language; else the season's translation into it.
+/// `None` when none of them has one, or a lock cleared it: the season's own
+/// text is in the language the catalogue is kept in, and is the caller's to
+/// fall back on only when that is the language asked — a service with no
+/// translation gives none.
+///
+/// A relay writing a service's document in another language than the
+/// catalogue's leaves out the locks made in every language, as
+/// [`lay_only_in`] does for the work's texts: the caller's to skip.
+pub fn season_text(
+    item: &MediaItem,
+    season_number: i32,
+    field: &str,
+    language: &str,
+) -> Option<String> {
+    let scope = Scope::Season(season_number).to_string();
+    if let Some(lock) = text_lock(item, &scope, field, language) {
+        return lock.value.clone();
+    }
+    let translation = item
+        .seasons
+        .iter()
+        .find(|s| s.season_number == season_number)?
+        .translations
+        .iter()
+        .find(|t| t.language == language)?;
+    match field {
+        "title" => translation.title.clone(),
+        "overview" => translation.overview.clone(),
+        _ => None,
+    }
+}
+
 /// Lay over a work the texts locked for a language: in it, else in every
 /// language. A text locked in another language only is left as it is — the
 /// translation laid over it, or the text the work is stored with.
@@ -2195,6 +2230,8 @@ mod tests {
             credit_tmdb_id: None,
             sort_order: order,
             is_manual: manual,
+            department: None,
+            job: None,
         };
         let picture = |id: &str, season: Option<i32>, url: &str, manual: bool| Image {
             id: id.into(),

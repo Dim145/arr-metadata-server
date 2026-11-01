@@ -476,14 +476,28 @@ async fn page(
     );
     let stored = service::language::tmdb_locale(None, &state.language(None, None));
     let mut details = details_of(&state, &person);
-    // A biography in the reader's language, where TMDB has one: kept a day,
-    // as TMDB's answers are, and never written over the one the record keeps.
-    if let (Some(tmdb_id), true) = (person.tmdb_id, locale != stored)
-        && state.tmdb.is_configured()
-        && let Some(raw) = fetch_person(&state, tmdb_id, &locale).await
-        && let Some(biography) = text(&raw, "biography")
-    {
-        details.biography = Some(biography);
+    // A biography in the reader's language, where TMDB has one: the one
+    // kept beside the record, read with it; for a record read before they
+    // were kept, asked of TMDB and kept a day, as its answers are — never
+    // written over the one the record keeps.
+    if locale != stored {
+        let wanted =
+            crate::providers::lang::iso_639_1_to_3(crate::providers::lang::base_language(&locale));
+        let kept = repo::person::translations(&state.db, &person.id).await?;
+        if let Some(biography) = kept
+            .iter()
+            .find(|t| t.language == wanted)
+            .and_then(|t| t.biography.clone())
+        {
+            details.biography = Some(biography);
+        } else if kept.is_empty()
+            && let Some(tmdb_id) = person.tmdb_id
+            && state.tmdb.is_configured()
+            && let Some(raw) = fetch_person(&state, tmdb_id, &locale).await
+            && let Some(biography) = text(&raw, "biography")
+        {
+            details.biography = Some(biography);
+        }
     }
 
     let mut ids: Vec<String> = Vec::new();
@@ -776,6 +790,7 @@ fn read_details(raw: &Value) -> repo::person::Details {
         popularity: raw.get("popularity").and_then(Value::as_f64),
         also_known_as: names,
         original_name: None,
+        translations: tmdb::map::person_translations(raw),
     }
 }
 

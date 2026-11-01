@@ -21,6 +21,30 @@ pub async fn provenance(db: &Db, id: &str) -> Result<Option<crate::merge::proven
         .and_then(|json| serde_json::from_str(&json).ok()))
 }
 
+/// The works `provider` answered for, with when it last did: by work, after
+/// `after` — a cursor — at most `limit` of them. What a pass over the
+/// answers kept reads (`jobs::refresh::replay_snapshots`).
+pub async fn answered_by(
+    db: &Db,
+    provider: &str,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<(String, String)>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT media_id, fetched_at FROM media_provider_snapshot
+          WHERE provider = ? AND media_id > ?
+          ORDER BY media_id LIMIT ?",
+    ))
+    .bind(provider)
+    .bind(after.unwrap_or_default())
+    .bind(limit)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter()
+        .map(|row| Ok((row.text("media_id")?, row.text("fetched_at")?)))
+        .collect()
+}
+
 /// What a refresh of everything works through: the enabled works that have
 /// an identifier elsewhere and are not entries made by hand, in id order,
 /// after `after` — a cursor, so the run is one pass that ends, and nothing

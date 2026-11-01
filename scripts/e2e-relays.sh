@@ -111,15 +111,18 @@ stop_server() {
 # trusted.
 tvdb() { curl -sS --cacert "$WORK/tls/ca.crt" --resolve "api4.thetvdb.com:${CLIENTS_PORT}:127.0.0.1" "$@"; }
 anilist() { curl -sS --cacert "$WORK/tls/ca.crt" --resolve "graphql.anilist.co:${CLIENTS_PORT}:127.0.0.1" "$@"; }
+tmdb() { curl -sS --cacert "$WORK/tls/ca.crt" --resolve "api.themoviedb.org:${CLIENTS_PORT}:127.0.0.1" "$@"; }
 TVDB_DOOR="https://api4.thetvdb.com:${CLIENTS_PORT}"
 ANILIST_DOOR="https://graphql.anilist.co:${CLIENTS_PORT}"
+TMDB_DOOR="https://api.themoviedb.org:${CLIENTS_PORT}"
 QUERY='{"query":"query { Media(id: 16498) { id title { english userPreferred romaji } description } }"}'
 
 start_server server.log
 
-step "the authority covers TheTVDB's and AniList's names"
+step "the authority covers TheTVDB's, AniList's and TMDB's names"
 tvdb -f -o /dev/null "$TVDB_DOOR/health" || fail "the clients' door does not answer api4.thetvdb.com"
 anilist -f -o /dev/null "$ANILIST_DOOR/health" || fail "the clients' door does not answer graphql.anilist.co"
+tmdb -f -o /dev/null "$TMDB_DOOR/health" || fail "the clients' door does not answer api.themoviedb.org"
 ok
 
 # ── The catalogue: two works with locks, a key, a member ──────────────────
@@ -283,6 +286,33 @@ curl -fsS -b "$COOKIES" -o /dev/null -X PUT "$BASE/api/v1/settings/server/-" \
   -H 'content-type: application/json' -d '{"key":"api.tvdb","value":"true"}'
 ok
 
+step "with tvdb.relayMode=local-first, the series held here is written here and TheTVDB is not asked"
+curl -fsS -b "$COOKIES" -o /dev/null -X PUT "$BASE/api/v1/settings/server/-" \
+  -H 'content-type: application/json' -d '{"key":"tvdb.relayMode","value":"local-first"}'
+asked_reset
+tvdb -D "$WORK/local-headers" -H "Authorization: Bearer ${TOKEN}" \
+  "$TVDB_DOOR/v4/series/${TVDB_ID}/extended?meta=translations" \
+  | py "d = json.load(sys.stdin)['data']; assert d['id'] == ${TVDB_ID}, d; assert d['name'] == 'Locked Series Title', d" \
+  || fail "the series was not written here"
+grep -qi '^content-type: application/json;charset=utf-8' "$WORK/local-headers" || fail "not TheTVDB's content type"
+tvdb -H "Authorization: Bearer ${TOKEN}" "$TVDB_DOOR/v4/series/${TVDB_ID}/episodes/official/eng" \
+  | py "eps = json.load(sys.stdin)['data']['episodes']; assert [e['name'] for e in eps] == ['Episode 1', 'Locked Episode Title'], eps" \
+  || fail "the page was not written here"
+code=$(tvdb -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" \
+  "$TVDB_DOOR/v4/series/${TVDB_ID}/episodes/official?page=0&episodeNumber=1")
+[ "$code" = "400" ] || fail "expected 400 for a number with no season, got $code"
+[ "$(asked_count /v4/series)" = "0" ] || fail "TheTVDB was asked"
+ok
+
+step "a search lists the series held here before TheTVDB's results"
+tvdb -H "Authorization: Bearer ${TOKEN}" "$TVDB_DOOR/v4/search?query=Relay%20Series&type=series" \
+  | py "d = json.load(sys.stdin)['data']; assert d[0]['tvdb_id'] == '${TVDB_ID}', d" \
+  || fail "the catalogue's series does not lead"
+[ "$(asked_count /v4/search)" = "1" ] || fail "TheTVDB was not asked for the rest"
+curl -fsS -b "$COOKIES" -o /dev/null -X PUT "$BASE/api/v1/settings/server/-" \
+  -H 'content-type: application/json' -d '{"key":"tvdb.relayMode","value":"relay"}'
+ok
+
 # ── TheTVDB, with each client's own key ───────────────────────────────────
 echo "TheTVDB relay, tvdb.relayCredential=client"
 
@@ -402,6 +432,45 @@ step "the access page counts both relays' calls"
 curl -fsS -b "$COOKIES" "$BASE/api/v1/admin/access" \
   | py 'apis = {a["api"]: a for a in json.load(sys.stdin)["apis"]}; assert apis["tvdb"]["served"] >= 8, apis["tvdb"]; assert apis["tvdb"]["refused"] >= 2, apis["tvdb"]; assert apis["anilist"]["served"] >= 7, apis["anilist"]; assert apis["tvdb"]["policy"] == "apikey" and apis["anilist"]["policy"] == "allowlist", apis' \
   || fail "the counts are not what the run made"
+ok
+
+# ── TMDB, answering a work entered by hand from the catalogue ─────────────
+echo "TMDB relay, tmdb.relayMode=local-first"
+
+step "local-first: a series entered by hand is found in TMDB's search, without TMDB"
+curl -fsS -b "$COOKIES" -o /dev/null -X PUT "$BASE/api/v1/settings/server/-" \
+  -H 'content-type: application/json' -d '{"key":"tmdb.relayMode","value":"local-first"}'
+HAND=$(curl -fsS -b "$COOKIES" -X POST "$BASE/api/v1/items" -H 'content-type: application/json' \
+  -d '{"kind":"series","title":"Wombelune E2E","year":2025,"firstAired":"2024-01-10"}' | py "print(json.load(sys.stdin)['id'])")
+curl -fsS -b "$COOKIES" -o /dev/null -X POST "$BASE/api/v1/items/${HAND}/seasons" \
+  -H 'content-type: application/json' -d '{"seasonNumber":1}'
+curl -fsS -b "$COOKIES" -o /dev/null -X POST "$BASE/api/v1/items/${HAND}/episodes" \
+  -H 'content-type: application/json' -d '{"seasonNumber":1,"episodeNumber":1,"title":"Typed in"}'
+OWN=$(tmdb -fsS "$TMDB_DOOR/3/search/tv?query=wombelune&api_key=$KEY" | py "print(json.load(sys.stdin)['results'][0]['id'])")
+[ -n "$OWN" ] || fail "the series entered by hand is not in TMDB's search"
+ok
+
+step "its document is this server's, with no age, and counted apart"
+tmdb -fsS -D "$WORK/h" -o "$WORK/tv.json" \
+  "$TMDB_DOOR/3/tv/${OWN}?api_key=$KEY&append_to_response=credits,external_ids,season/1,watch/providers"
+grep -qi '^content-type: application/json;charset=utf-8' "$WORK/h" || fail "not TMDB's type"
+! grep -qi '^age:' "$WORK/h" || fail "an age on a document written here"
+py "d = json.load(open('$WORK/tv.json')); assert d['id'] == $OWN and d['season/1']['episodes'][0]['name'] == 'Typed in' and d['watch/providers'] == {'results': {}}, d"
+curl -fsS -b "$COOKIES" "$BASE/api/v1/admin/metrics" | grep -q 'ams_relay_local_total{relay="tmdb"} [1-9]' || fail "not counted"
+ok
+
+step "its TheTVDB id is the number Sonarr adds it by, from Skyhook's dialect"
+TVDB_OWN=$(tmdb -fsS "$TMDB_DOOR/3/tv/${OWN}/external_ids?api_key=$KEY" | py "print(json.load(sys.stdin)['tvdb_id'])")
+[ "$TVDB_OWN" = "$OWN" ] || fail "the TheTVDB id is not Sonarr's number"
+curl -fsS "$BASE/v1/tvdb/shows/en/${TVDB_OWN}" | py "assert json.load(sys.stdin)['tvdbId'] == $TVDB_OWN" \
+  || fail "Skyhook's dialect does not answer that number"
+ok
+
+step "relay mode: the same document is TMDB's to answer"
+curl -fsS -b "$COOKIES" -o /dev/null -X PUT "$BASE/api/v1/settings/server/-" \
+  -H 'content-type: application/json' -d '{"key":"tmdb.relayMode","value":"relay"}'
+code=$(tmdb -s -o /dev/null -w '%{http_code}' "$TMDB_DOOR/3/tv/${OWN}?api_key=$KEY")
+[ "$code" != "200" ] || fail "answered here in relay mode"
 ok
 
 # ── The policies swapped: TheTVDB by address, AniList by key ──────────────

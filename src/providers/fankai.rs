@@ -634,6 +634,7 @@ fn to_item(
                 })
                 .collect(),
             primary_images: Default::default(),
+            translations: Vec::new(),
         });
 
         for film in films {
@@ -727,6 +728,8 @@ fn to_item(
             credit_tmdb_id: None,
             sort_order: slot as i32,
             is_manual: false,
+            department: None,
+            job: None,
         });
     }
 

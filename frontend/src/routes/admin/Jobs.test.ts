@@ -31,3 +31,12 @@ describe('what a run of IMDb’s lists says of itself, in words', () => {
     expect(describeDetail('26 of 27 works rated', fr, 'fr')).toBe('26 œuvres notées sur 27')
   })
 })
+
+describe('what a pass over the answers kept says of itself, in words', () => {
+  it('says how many works it filled in, and how many it passed over', () => {
+    expect(describeDetail('12 filled in, 3 passed over', en, 'en')).toBe('12 works filled in, 3 passed over')
+    expect(describeDetail('1 filled in, 0 passed over', en, 'en')).toBe('1 work filled in, 0 passed over')
+    expect(describeDetail('12 filled in, 1 passed over', fr, 'fr')).toBe('12 œuvres complétées, 1 laissée de côté')
+    expect(describeDetail('0 filled in, 2 passed over', fr, 'fr')).toBe('0 œuvre complétée, 2 laissées de côté')
+  })
+})

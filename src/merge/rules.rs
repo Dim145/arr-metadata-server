@@ -166,6 +166,10 @@ const LINES: &[Line] = &[
         &[TMDB, TVDB, SKYHOOK, RADARR, ANILIST, MAL, FANKAI],
     ),
     line(Identity, "translations", Union, &[TMDB, TVDB, RADARR]),
+    only(
+        line(Identity, "seasonTranslations", Union, &[TMDB]),
+        MediaKind::Series,
+    ),
     line(Identity, "tagline", First, &[TMDB]),
     line(Identity, "productionCountries", Whole, &[TMDB]),
     // Airing and release
@@ -208,6 +212,8 @@ const LINES: &[Line] = &[
         Union,
         &[TMDB, RADARR, ANILIST, FANKAI],
     ),
+    // TMDB's keywords again, each with its id.
+    line(Classification, "keywordEntities", Whole, &[TMDB]),
     line(Classification, "format", First, &[ANILIST]),
     line(
         Classification,
@@ -247,6 +253,10 @@ const LINES: &[Line] = &[
         STUDIO_AUTHORITIES,
     ),
     line(People, "productionCompanies", Whole, &[TMDB]),
+    // The networks and companies as entities, a role at a time from the
+    // first that lists any in it, the others completing them: see
+    // `merge::union_companies`.
+    line(People, "companies", Whole, &[TMDB, TVDB]),
     line(
         People,
         "images",
@@ -255,6 +265,7 @@ const LINES: &[Line] = &[
     ),
     line(People, "themeMusic", First, &[FANKAI]),
     line(People, "trailer", First, &[TMDB, RADARR]),
+    line(People, "videos", Union, &[TMDB]),
     line(People, "homepage", First, &[TMDB, RADARR, FANKAI_WIKI]),
     line(People, "relations", Whole, &[ANILIST, FANKAI_WIKI]),
     // Episodes. TVmaze never supplies the list nor its titles: it numbers some
@@ -640,6 +651,8 @@ mod tests {
             credit_tmdb_id: None,
             sort_order: 0,
             is_manual: false,
+            department: None,
+            job: None,
         }
     }
 

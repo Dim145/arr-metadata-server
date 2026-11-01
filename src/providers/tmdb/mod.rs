@@ -13,7 +13,11 @@ use anyhow::{Context, Result, anyhow};
 use futures::future::join_all;
 use serde_json::Value;
 
-use crate::{config, domain::MediaKind, providers::Gate};
+use crate::{
+    config,
+    domain::MediaKind,
+    providers::{Gate, lang},
+};
 
 pub const IMAGE_BASE: &str = "https://image.tmdb.org/t/p/original";
 
@@ -182,6 +186,7 @@ impl TmdbClient {
         };
 
         let mut tv: models::Tv = Self::typed(&raw, "series")?;
+        tv.asked_in = Some(lang::base_language(&self.language()).to_string());
 
         // TMDB returns an empty overview rather than falling back when a title
         // has no translation in the requested language. Backfill from en-US so
@@ -207,11 +212,9 @@ impl TmdbClient {
                 "external_ids,credits,content_ratings,alternative_titles,keywords,videos,images,translations,episode_groups"
                     .to_string(),
             ),
-            // Posters and logos in the configured language plus language-neutral art.
-            (
-                "include_image_language",
-                format!("{},null", crate::providers::lang::base_language(language)),
-            ),
+            // Posters and logos in the configured language, in English and
+            // without a language: the languages worth keeping (`map::artwork`).
+            ("include_image_language", image_languages(language)),
         ];
 
         self.fetch(&url, &params).await
@@ -276,7 +279,14 @@ impl TmdbClient {
     }
 
     async fn tv_season(&self, id: i64, number: i32) -> Result<Option<models::Season>> {
-        let Some(raw) = self.fetch_season(id, number, &self.language()).await? else {
+        // Its title and synopsis in every language TMDB has them in ride
+        // along, in the call that is made anyway.
+        let url = format!("{}/tv/{id}/season/{number}", self.base);
+        let params = [
+            ("language", self.language()),
+            ("append_to_response", "translations".to_string()),
+        ];
+        let Some(raw) = self.fetch(&url, &params).await? else {
             return Ok(None);
         };
 
@@ -381,6 +391,7 @@ impl TmdbClient {
         };
 
         let mut movie: models::Movie = Self::typed(&raw, "movie")?;
+        movie.asked_in = Some(lang::base_language(&self.language()).to_string());
 
         if self.language() != "en-US"
             && movie.overview.as_deref().unwrap_or_default().is_empty()
@@ -434,9 +445,14 @@ impl TmdbClient {
     /// untyped, for a reader that wants the record rather than the model.
     pub async fn person(&self, id: i64, language: &str) -> Result<Option<Value>> {
         let url = format!("{}/person/{id}", self.base);
+        // Their name and biography in every language TMDB has them in
+        // ride along: kept beside the record (`repo::person`).
         let params = [
             ("language", language.to_string()),
-            ("append_to_response", "images,external_ids".to_string()),
+            (
+                "append_to_response",
+                "images,external_ids,translations".to_string(),
+            ),
         ];
         self.fetch(&url, &params).await
     }
@@ -452,7 +468,7 @@ impl TmdbClient {
                 "external_ids,credits,release_dates,alternative_titles,keywords,videos,images,translations,recommendations"
                     .to_string(),
             ),
-            ("include_image_language", format!("{},null", crate::providers::lang::base_language(language))),
+            ("include_image_language", image_languages(language)),
         ];
 
         self.fetch(&url, &params).await
@@ -653,6 +669,19 @@ pub fn image_url(path: &str) -> String {
     format!("{IMAGE_BASE}{path}")
 }
 
+/// The languages a work's pictures are asked for in, for an answer in
+/// `language`: its own, English, and none — the pictures with no text on
+/// them. Each once.
+fn image_languages(language: &str) -> String {
+    let own = lang::base_language(language).to_ascii_lowercase();
+    let mut asked = vec![own.as_str()];
+    if own != "en" {
+        asked.push("en");
+    }
+    asked.push("null");
+    asked.join(",")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,6 +689,7 @@ mod tests {
     fn season(episodes: Vec<(i32, i32, Option<&str>, Option<&str>)>) -> models::Season {
         models::Season {
             season_number: 1,
+            translations: None,
             episodes: episodes
                 .into_iter()
                 .map(|(s, e, name, overview)| models::Episode {
@@ -698,6 +728,13 @@ mod tests {
         assert_eq!(target.episodes[0].overview.as_deref(), Some("Summary"));
         assert_eq!(target.episodes[1].name.as_deref(), Some("Title 2"));
         assert_eq!(target.episodes[1].overview.as_deref(), Some("Résumé"));
+    }
+
+    #[test]
+    fn pictures_are_asked_for_in_the_catalogues_language_in_english_and_in_none() {
+        assert_eq!(image_languages("fr-FR"), "fr,en,null");
+        assert_eq!(image_languages("en-US"), "en,null", "English once");
+        assert_eq!(image_languages("ja"), "ja,en,null");
     }
 
     #[test]

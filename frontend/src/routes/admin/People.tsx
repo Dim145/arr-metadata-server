@@ -713,6 +713,7 @@ function WorkCredits({
     director: c.director,
     writer: c.writer,
     producer: c.producer,
+    crew: c.crew,
   }
   // What the credit is, past its type: the episode it is on, and the part
   // played or the job done, as the work's own credits say it.

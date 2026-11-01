@@ -1,0 +1,67 @@
+{
+ "page": 1,
+ "results": [
+  {
+   "adult": false,
+   "backdrop_path": "/c6OLXfKAk5BKeR6broC8pYiCquX.jpg",
+   "genre_ids": [
+    18,
+    53
+   ],
+   "id": 550,
+   "title": "Fight Club",
+   "original_language": "en",
+   "original_title": "Fight Club",
+   "overview": "A ticking-time-bomb insomniac and a slippery…",
+   "popularity": 42.1791,
+   "poster_path": "/jSziioSwPVrOy9Yow3XhWIBDjq1.jpg",
+   "release_date": "1999-10-15",
+   "softcore": false,
+   "video": false,
+   "vote_average": 8.438,
+   "vote_count": 33199
+  },
+  {
+   "adult": false,
+   "backdrop_path": "/nlDmuxSjJS1Fi2FgVToPm9ytm5S.jpg",
+   "genre_ids": [
+    28,
+    18,
+    53
+   ],
+   "id": 1213076,
+   "title": "Fight Club",
+   "original_language": "ta",
+   "original_title": "Fight Club",
+   "overview": "A young boy Selva chasing his…",
+   "popularity": 1.5456,
+   "poster_path": "/1h6t9nCYVWOLRskB35K51payMok.jpg",
+   "release_date": "2023-12-15",
+   "softcore": false,
+   "video": false,
+   "vote_average": 6.5,
+   "vote_count": 18
+  },
+  {
+   "adult": false,
+   "backdrop_path": "/2Orc4w8jM6IKnKmiFA5wirfsib5.jpg",
+   "genre_ids": [
+    28
+   ],
+   "id": 1783244,
+   "title": "RISE FIGHT CLUB",
+   "original_language": "ja",
+   "original_title": "RISE FIGHT CLUB",
+   "overview": "RISE FIGHT CLUB was a kickboxing…",
+   "popularity": 1.5001,
+   "poster_path": null,
+   "release_date": "2023-11-19",
+   "softcore": false,
+   "video": true,
+   "vote_average": 0.0,
+   "vote_count": 0
+  }
+ ],
+ "total_pages": 4,
+ "total_results": 66
+}

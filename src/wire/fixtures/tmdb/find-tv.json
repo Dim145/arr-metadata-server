@@ -1,0 +1,31 @@
+{
+ "movie_results": [],
+ "person_results": [],
+ "tv_results": [
+  {
+   "adult": false,
+   "backdrop_path": "/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg",
+   "id": 1396,
+   "name": "Breaking Bad",
+   "original_name": "Breaking Bad",
+   "overview": "Walter White, a New Mexico chemistry…",
+   "poster_path": "/anFx9aTOOYqgS3v7x3R84Kz67ly.jpg",
+   "media_type": "tv",
+   "original_language": "en",
+   "genre_ids": [
+    18,
+    80
+   ],
+   "popularity": 172.2222,
+   "first_air_date": "2008-01-20",
+   "softcore": false,
+   "vote_average": 8.959,
+   "vote_count": 19013,
+   "origin_country": [
+    "US"
+   ]
+  }
+ ],
+ "tv_episode_results": [],
+ "tv_season_results": []
+}

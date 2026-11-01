@@ -1,0 +1,121 @@
+{
+ "cast": [
+  {
+   "adult": false,
+   "gender": 2,
+   "id": 17419,
+   "known_for_department": "Acting",
+   "name": "Bryan Cranston",
+   "original_name": "Bryan Cranston",
+   "popularity": 6.2071,
+   "profile_path": "/7Jahy5LZX2Fo8fGJltMreAI49hC.jpg",
+   "total_episode_count": 62,
+   "roles": [
+    {
+     "credit_id": "52542282760ee313280017f9",
+     "character": "Walter White",
+     "episode_count": 62
+    }
+   ],
+   "order": 0
+  },
+  {
+   "adult": false,
+   "gender": 2,
+   "id": 84497,
+   "known_for_department": "Acting",
+   "name": "Aaron Paul",
+   "original_name": "Aaron Paul",
+   "popularity": 3.51,
+   "profile_path": "/8Ac9uuoYwZoYVAIJfRLzzLsGGJn.jpg",
+   "total_episode_count": 62,
+   "roles": [
+    {
+     "credit_id": "52542282760ee31328001845",
+     "character": "Jesse Pinkman",
+     "episode_count": 62
+    }
+   ],
+   "order": 1
+  },
+  {
+   "adult": false,
+   "gender": 1,
+   "id": 134531,
+   "known_for_department": "Acting",
+   "name": "Anna Gunn",
+   "original_name": "Anna Gunn",
+   "popularity": 3.8204,
+   "profile_path": "/adppyeu1a4REN3khtgmXusrapFi.jpg",
+   "total_episode_count": 62,
+   "roles": [
+    {
+     "credit_id": "52542282760ee3132800181b",
+     "character": "Skyler White",
+     "episode_count": 62
+    }
+   ],
+   "order": 2
+  }
+ ],
+ "crew": [
+  {
+   "adult": false,
+   "gender": 2,
+   "id": 1494529,
+   "known_for_department": "Art",
+   "name": "Mark Hansen",
+   "original_name": "Mark Hansen",
+   "popularity": 0.4494,
+   "profile_path": null,
+   "jobs": [
+    {
+     "credit_id": "690e575cdc4f028746a0bd66",
+     "job": "Property Master",
+     "episode_count": 55
+    }
+   ],
+   "department": "Art",
+   "total_episode_count": 55
+  },
+  {
+   "adult": false,
+   "gender": 2,
+   "id": 1330079,
+   "known_for_department": "Art",
+   "name": "Bjarne Sletteland",
+   "original_name": "Bjarne Sletteland",
+   "popularity": 0.4198,
+   "profile_path": null,
+   "jobs": [
+    {
+     "credit_id": "539980c8c3a3681d0700143a",
+     "job": "Art Direction",
+     "episode_count": 55
+    }
+   ],
+   "department": "Art",
+   "total_episode_count": 55
+  },
+  {
+   "adult": false,
+   "gender": 2,
+   "id": 12706,
+   "known_for_department": "Art",
+   "name": "Mark S. Freeborn",
+   "original_name": "Mark S. Freeborn",
+   "popularity": 0.4822,
+   "profile_path": null,
+   "jobs": [
+    {
+     "credit_id": "539980a1c3a3681d0d00148b",
+     "job": "Production Design",
+     "episode_count": 42
+    }
+   ],
+   "department": "Art",
+   "total_episode_count": 42
+  }
+ ],
+ "id": 1396
+}

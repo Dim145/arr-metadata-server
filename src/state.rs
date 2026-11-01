@@ -20,6 +20,22 @@ use crate::{
 /// Keys a member or an editor may hold until an administrator says otherwise.
 pub const DEFAULT_KEYS_PER_USER: i64 = 5;
 
+/// The crew a work keeps of TMDB's until an administrator says otherwise
+/// (`tmdb.crewLimit`): the jobs a page names, and a few more.
+pub const DEFAULT_CREW: usize = 30;
+
+/// The most crew a work may keep of TMDB's: a large film lists several
+/// hundred, each a row.
+pub const MAX_CREW: usize = 500;
+
+/// The posters and backdrops a work keeps of TMDB's until an administrator
+/// says otherwise (`tmdb.imageLimit`): five, with three keyart and three
+/// logos, as it always kept.
+pub const DEFAULT_IMAGES: usize = 5;
+
+/// The most pictures of one type a work may keep of TMDB's.
+pub const MAX_IMAGES: usize = 50;
+
 /// Who may open an account for themselves. See `api::native::signup`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -391,6 +407,8 @@ impl AppState {
                     "tmdb.castLimit",
                     crate::providers::tmdb::map::DEFAULT_CAST.to_string(),
                 ),
+                ("tmdb.crewLimit", DEFAULT_CREW.to_string()),
+                ("tmdb.imageLimit", DEFAULT_IMAGES.to_string()),
                 ("tvdb.searchFallback", cfg.tvdb.enabled.to_string()),
                 ("skyhook.fallback", cfg.skyhook.fallback.to_string()),
                 ("skyhook.enrich", cfg.skyhook.enrich.to_string()),
@@ -463,6 +481,9 @@ impl AppState {
                 (crate::api::relay::STALE_IF_ERROR, "true".to_string()),
                 // TMDB's own image server, as the relay always sent them to.
                 ("tmdb.images", "tmdb".to_string()),
+                // Asking the service for everything, as the relays always did.
+                ("tmdb.relayMode", "relay".to_string()),
+                ("tvdb.relayMode", "relay".to_string()),
                 ("oidc.enabled", "false".to_string()),
                 ("oidc.scopes", "openid profile email".to_string()),
                 ("oidc.autoRegister", "false".to_string()),
@@ -852,6 +873,24 @@ impl AppState {
             .int_at("tmdb.castLimit", None, None)
             .and_then(|n| usize::try_from(n).ok())
             .map_or(DEFAULT_CAST, |n| n.clamp(1, MAX_CAST))
+    }
+
+    /// How much of TMDB's crew a work keeps, every department, the most
+    /// telling jobs first: none at `0`.
+    pub fn crew_limit(&self) -> usize {
+        self.settings
+            .int_at("tmdb.crewLimit", None, None)
+            .and_then(|n| usize::try_from(n).ok())
+            .map_or(DEFAULT_CREW, |n| n.min(MAX_CREW))
+    }
+
+    /// How many of TMDB's pictures of each type a work keeps, posters and
+    /// backdrops; keyart and logos take three fifths of it, rounded up.
+    pub fn image_limit(&self) -> usize {
+        self.settings
+            .int_at("tmdb.imageLimit", None, None)
+            .and_then(|n| usize::try_from(n).ok())
+            .map_or(DEFAULT_IMAGES, |n| n.clamp(1, MAX_IMAGES))
     }
 
     /// The order the merge takes the providers in, most trusted first, as

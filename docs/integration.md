@@ -18,6 +18,12 @@ named in and the orders its episodes come in. Both are answered by the same
 surface, and nothing below differs between the two. What each is given is in
 [Sonarr and Radarr](sonarr-radarr.md).
 
+The real service answers a third edition under `/v2/tmdb/`, by TMDB's id,
+which Sonarr v5 does not call yet. This server answers it as well — TMDB's own
+numbering, TMDB's episode groups — so that a series Sonarr moves to TMDB is
+not found missing; nothing is set up for it beyond the same name. See
+[Sonarr v5 by TMDB's id](sonarr-radarr.md#sonarr-v5-by-tmdbs-id).
+
 So substituting this server is done at the network layer: resolve those
 hostnames to it, and make the client trust the certificate it presents. That is
 the whole technique. Everything below is detail.
@@ -345,6 +351,13 @@ no key issued here: the `403` reaches it where the surface is guarded by
 address (`AMS_TMDB_AUTH=allowlist`), and under the key policy it is refused
 with `401` first.
 
+With **TMDB relay mode** set to *local-first* (`tmdb.relayMode`), the works this
+server holds are answered from the catalogue — corrections and works entered by
+hand included — in TMDB's own shape, without TMDB and without a key of TMDB's.
+Seerr finds a series entered by hand in its search, the catalogue's works coming
+first, and hands Sonarr the TheTVDB id it reads in the series' ids, which Sonarr
+adds it by. See [Answering from the catalogue](relays.md#answering-from-the-catalogue).
+
 ### TheTVDB and AniList clients
 
 Some clients ask TheTVDB and AniList themselves, whatever they get from TMDB:
@@ -393,6 +406,14 @@ a minute rather than each signing in again, then two, up to ten while it
 keeps refusing; the first refusal is in the log. What was kept of the same
 request answers instead while it is under a week old: see
 [When a service fails](relays.md#when-a-service-fails).
+
+With `tvdb.relayMode = local-first`, the series and films the catalogue holds
+are answered here rather than by TheTVDB — corrected, entered by hand, or known
+to TMDB alone, under the number Sonarr keeps them under — so that Jellyfin's
+plugin, Kodi's scraper, Seerr and tinyMediaManager read the catalogue itself.
+Kodi asks for each episode's text in its own language, then in English: for a
+work TheTVDB does not know, keep the catalogue in the language Kodi is set to.
+See [Answering from the catalogue](relays.md#answering-from-the-catalogue).
 
 Jellyfin's plugin can keep its library in step with TheTVDB's `updates`, a
 scheduled task off by default. The list it reads names, beside TheTVDB's own

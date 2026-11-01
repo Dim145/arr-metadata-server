@@ -1,0 +1,149 @@
+{
+ "status": "success",
+ "data": [
+  {
+   "objectID": "movie-169",
+   "country": "usa",
+   "director": "Lana Wachowski",
+   "extended_title": "The Matrix (1999)",
+   "genres": [
+    "Action",
+    "Science Fiction"
+   ],
+   "studios": [
+    "Warner Bros. Pictures"
+   ],
+   "id": "movie-169",
+   "image_url": "https://artworks.thetvdb.com/banners/movies/169/posters/5f274c00c85c1.jpg",
+   "name": "The Matrix",
+   "first_air_time": "1999-03-31",
+   "overview": "In the 22nd Century, …",
+   "primary_language": "eng",
+   "primary_type": "movie",
+   "status": "Released",
+   "type": "movie",
+   "tvdb_id": "169",
+   "year": "1999",
+   "slug": "the-matrix",
+   "overviews": {
+    "deu": "Der Film beginnt damit, …",
+    "eng": "In the 22nd Century, …",
+    "est": "Häkker Neo avastab, et …"
+   },
+   "translations": {
+    "bul": "Матрицата",
+    "ces": "Matrix",
+    "deu": "The Matrix"
+   },
+   "remote_ids": [
+    {
+     "id": "tt0133093",
+     "type": 2,
+     "sourceName": "IMDB"
+    },
+    {
+     "id": "http://www.warnerbros.com/matrix",
+     "type": 4,
+     "sourceName": "Official Website"
+    },
+    {
+     "id": "603",
+     "type": 10,
+     "sourceName": "TheMovieDB.com"
+    }
+   ],
+   "thumbnail": "https://artworks.thetvdb.com/banners/movies/169/posters/5f274c00c85c1_t.jpg"
+  },
+  {
+   "objectID": "movie-152521",
+   "country": "usa",
+   "director": "Josh Oreck",
+   "extended_title": "Making 'The Matrix' (1999)",
+   "genres": [
+    "Documentary",
+    "Action",
+    "Science Fiction"
+   ],
+   "id": "movie-152521",
+   "image_url": "https://artworks.thetvdb.com/banners/movies/152521/posters/m2yIfRJYwpCgHON1Ig1pNKMWTxp.jpg",
+   "name": "Making 'The Matrix'",
+   "first_air_time": "1999-09-21",
+   "overview": "The digital and practical …",
+   "primary_language": "eng",
+   "primary_type": "movie",
+   "status": "Released",
+   "type": "movie",
+   "tvdb_id": "152521",
+   "year": "1999",
+   "slug": "making-the-matrix",
+   "overviews": {
+    "eng": "The digital and practical …"
+   },
+   "translations": {
+    "eng": "Making 'The Matrix'"
+   },
+   "remote_ids": [
+    {
+     "id": "tt0365467",
+     "type": 2,
+     "sourceName": "IMDB"
+    },
+    {
+     "id": "684431",
+     "type": 10,
+     "sourceName": "TheMovieDB.com"
+    }
+   ],
+   "thumbnail": "https://artworks.thetvdb.com/banners/movies/152521/posters/m2yIfRJYwpCgHON1Ig1pNKMWTxp_t.jpg"
+  },
+  {
+   "objectID": "movie-207382",
+   "country": "usa",
+   "director": "Ron Ford",
+   "extended_title": "V-World Matrix (1999)",
+   "genres": [
+    "Fantasy",
+    "Horror",
+    "Science Fiction"
+   ],
+   "id": "movie-207382",
+   "image_url": "https://artworks.thetvdb.com/banners/images/missing/movie.jpg",
+   "name": "V-World Matrix",
+   "first_air_time": "1999-01-01",
+   "overview": "Two men enter a …",
+   "primary_language": "eng",
+   "primary_type": "movie",
+   "status": "Released",
+   "type": "movie",
+   "tvdb_id": "207382",
+   "year": "1999",
+   "slug": "v-world-matrix",
+   "overviews": {
+    "eng": "Two men enter a …"
+   },
+   "translations": {
+    "eng": "V-World Matrix"
+   },
+   "remote_ids": [
+    {
+     "id": "tt0211096",
+     "type": 2,
+     "sourceName": "IMDB"
+    },
+    {
+     "id": "259464",
+     "type": 10,
+     "sourceName": "TheMovieDB.com"
+    }
+   ],
+   "thumbnail": "https://artworks.thetvdb.com/banners/v4/movie/207382/posters/65df91f062225_t.jpg"
+  }
+ ],
+ "links": {
+  "prev": null,
+  "self": "https://api4.thetvdb.com/v4/search?query=matrix&type=movie&year=1999&limit=5&page=0",
+  "next": "https://api4.thetvdb.com/v4/search?query=matrix&type=movie&year=1999&limit=5&page=1",
+  "total_items": 11,
+  "page_size": 5
+ }
+}

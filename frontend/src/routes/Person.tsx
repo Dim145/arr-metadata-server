@@ -48,13 +48,24 @@ import { NotFound } from './NotFound'
 /** The jobs a career is read by, in the order their tabs are drawn. */
 export const JOBS: readonly PersonJob[] = ['acting', 'directing', 'writing', 'producing']
 
+/**
+ * A tab of the filmography: a job the index of people files somebody under,
+ * or the rest of the crew — a composer, a director of photography, an
+ * editor — whose credits the index counts among their works alone.
+ */
+export type Tab = PersonJob | 'crew'
+
+/** The tabs, in the order they are drawn. */
+const TABS: readonly Tab[] = [...JOBS, 'crew']
+
 /** The job each kind of credit is: a guest star is cast too, not a job behind the camera. */
-const JOB_OF: Record<Role['creditType'], PersonJob> = {
+const JOB_OF: Record<Role['creditType'], Tab> = {
   actor: 'acting',
   guest: 'acting',
   director: 'directing',
   writer: 'writing',
   producer: 'producing',
+  crew: 'crew',
 }
 
 /** The orders a tab can be read in: the newest first, the titles from A, the best rated first. */
@@ -490,23 +501,23 @@ function yearOf(day: string | undefined): number | undefined {
 }
 
 /** The jobs somebody did, each with how many works they did it on, in the order the tabs are drawn. */
-export function jobsOf(roles: Pick<Role, 'workId' | 'creditType'>[]): { job: PersonJob; works: number }[] {
-  const works = new Map<PersonJob, Set<string>>()
+export function jobsOf(roles: Pick<Role, 'workId' | 'creditType'>[]): { job: Tab; works: number }[] {
+  const works = new Map<Tab, Set<string>>()
   for (const role of roles) {
     const job = JOB_OF[role.creditType]
     const seen = works.get(job) ?? new Set<string>()
     seen.add(role.workId)
     works.set(job, seen)
   }
-  return JOBS.flatMap((job) => {
+  return TABS.flatMap((job) => {
     const seen = works.get(job)
     return seen ? [{ job, works: seen.size }] : []
   })
 }
 
 /** The job a page opens on: the one with the most works, the first in the tabs' order of those with as many. */
-export function mostWorked(jobs: { job: PersonJob; works: number }[]): PersonJob | undefined {
-  let most: { job: PersonJob; works: number } | undefined
+export function mostWorked(jobs: { job: Tab; works: number }[]): Tab | undefined {
+  let most: { job: Tab; works: number } | undefined
   for (const entry of jobs) {
     if (!most || entry.works > most.works) most = entry
   }
@@ -518,7 +529,7 @@ export function mostWorked(jobs: { job: PersonJob; works: number }[]): PersonJob
  * the works came — the newest first — with the credits on the work apart
  * from those on single episodes of it.
  */
-export function linesOf(person: Pick<PersonData, 'roles' | 'works'>, job: PersonJob): Line[] {
+export function linesOf(person: Pick<PersonData, 'roles' | 'works'>, job: Tab): Line[] {
   const credited = new Map<string, Pick<Line, 'roles' | 'episodes'>>()
   for (const role of person.roles) {
     if (JOB_OF[role.creditType] !== job) continue

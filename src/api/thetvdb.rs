@@ -335,6 +335,17 @@ async fn signed_in_there(
 /// `alttwo` that TheTVDB answers empty — is answered here, with or without
 /// a TheTVDB key of the server's own.
 ///
+/// Where an administrator chose so (`tvdb.relayMode = local-first`), a work
+/// this catalogue holds — switched on, one the caller may see, by its
+/// TheTVDB id or the number Sonarr keeps it under — is written here in
+/// TheTVDB's shape, from the catalogue and from TheTVDB's record of it as
+/// last fetched, and TheTVDB is not asked: a series and its translations, a
+/// page of its episodes in any order it holds, a season, an episode, a
+/// film. A search lists the works the catalogue finds before TheTVDB's own,
+/// on its first page, and alone when TheTVDB fails. A work's text in a
+/// language held nowhere here is TheTVDB's, or its 404 for a work it does
+/// not know.
+///
 /// Every v4 path is accepted; see TheTVDB's own documentation for their
 /// shapes. The documents about a work of this catalogue are the ones patched:
 /// `series/{id}` and `movies/{id}`, both `/extended` — with the translations,
@@ -347,9 +358,11 @@ async fn signed_in_there(
     // Registered against axum as `/v4/{*path}`; see `router` above.
     params(("path" = String, Path, description = "A TheTVDB v4 path, e.g. `series/81189/extended` or `search?query=…`")),
     responses(
-        (status = 200, description = "TheTVDB's answer, with the fields locked here written in where it is about a work of this catalogue. When TheTVDB fails — no answer, 429, 5xx — its last answer to the same request made with this server's token stands in, with Age, a week old at the most, and a reference list from the database, six months; never for `updates`"),
+        (status = 200, description = "TheTVDB's answer, with the fields locked here written in where it is about a work of this catalogue. When TheTVDB fails — no answer, 429, 5xx — its last answer to the same request made with this server's token stands in, with Age, a week old at the most, and a reference list from the database, six months; never for `updates`. With `tvdb.relayMode = local-first`, a work held here written here, in TheTVDB's shape"),
+        (status = 400, description = "With `tvdb.relayMode = local-first`, a page of a held series' episodes narrowed to a number with no season, refused as TheTVDB refuses it"),
         (status = 401, description = "No credential this server or TheTVDB takes; or, with each client's own key relayed, a key issued here"),
         (status = 403, description = "Not a read, or the operator's own account asked for with a key issued here"),
+        (status = 404, description = "TheTVDB's own; or, with `tvdb.relayMode = local-first`, the text of a held work TheTVDB does not know in a language held nowhere here, written as TheTVDB writes its own"),
         (status = 429, description = "TheTVDB's own, handed back as it came; or TheTVDB's door here, shut after one, or full, with the seconds left in Retry-After, when nothing kept stands in"),
         (status = 503, description = "The relay is off, or this server has no TheTVDB key to stand in with for a document it does not answer itself"),
     ),
@@ -420,6 +433,15 @@ pub async fn relay(
     let path = parts.uri.path().to_string();
     let target = patch_target(&path);
 
+    // A work this catalogue holds, where an administrator chose so: written
+    // here in TheTVDB's shape, TheTVDB not asked — before this server's own
+    // TheTVDB key is asked for, which such an answer does not need.
+    if relay::local_first(&state, relay::Service::Tvdb)
+        && let Some(answer) = local::answered(&state, &identity, &parts, &credential).await?
+    {
+        return Ok(answer);
+    }
+
     // A page of episodes in an order this server keeps and TheTVDB does
     // not, or in the aired order while an order is frozen as it: answered
     // here, TheTVDB not asked — and so before this server's own TheTVDB key
@@ -443,61 +465,32 @@ pub async fn relay(
         return Ok(Json(page).into_response());
     }
 
-    if matches!(credential, Credential::Ours) {
-        if !state.tvdb.is_configured() {
-            // TheTVDB cannot be asked at all. An order it answers with no
-            // episode is answered from what this server read of it, as it
-            // is once TheTVDB has answered it empty.
-            if let Some(Target::Episodes {
-                series,
-                order,
-                language,
-                ..
-            }) = &target
-                && ANSWERED_EMPTY.contains(&order.as_str())
-                && let Some(page) = answered_here(
-                    &state,
-                    *series,
-                    order,
-                    language.as_deref(),
-                    &parts.uri,
-                    true,
-                )
-                .await?
-            {
-                return Ok(Json(page).into_response());
-            }
-            return Err(AppError::ProviderNotConfigured);
-        }
-        if users_own(&path) {
-            return Err(AppError::Forbidden);
-        }
+    // TheTVDB cannot be asked at all. An order it answers with no episode is
+    // answered from what this server read of it, as it is once TheTVDB has
+    // answered it empty.
+    if matches!(credential, Credential::Ours)
+        && !state.tvdb.is_configured()
+        && let Some(Target::Episodes {
+            series,
+            order,
+            language,
+            ..
+        }) = &target
+        && ANSWERED_EMPTY.contains(&order.as_str())
+        && let Some(page) = answered_here(
+            &state,
+            *series,
+            order,
+            language.as_deref(),
+            &parts.uri,
+            true,
+        )
+        .await?
+    {
+        return Ok(Json(page).into_response());
     }
 
-    // What TheTVDB answers, as every relay is answered (`relay::answer`). A
-    // document asked with the operator's token is the same for every caller:
-    // it is kept under the path and query asked, asked once for all who ask
-    // it at once, and stands in for TheTVDB when TheTVDB fails — with its
-    // `Age`, the locks written in all the same. One asked with a client's own
-    // token is none of that. Either way TheTVDB is asked through the door its
-    // client keeps, never waiting for it to open.
-    let cache_key = (parts.method == Method::GET && matches!(credential, Credential::Ours))
-        .then(|| relay_key(&state, &parts.uri));
-    let validators = validators_travel(cache_key.is_some(), &path);
-    let ask = relay::Ask {
-        service: relay::Service::Tvdb,
-        reference: cache_key
-            .as_ref()
-            .filter(|_| relay::is_reference(&path))
-            .map(|_| filed_as(&state, &parts.uri)),
-        key: cache_key,
-        path: path.clone(),
-    };
-    let fetched = relay::answer(&state, ask, {
-        let (state, parts, credential) = (state.clone(), parts.clone(), credential.clone());
-        async move { send(&state, &parts, Bytes::new(), &credential, validators).await }
-    })
-    .await?;
+    let fetched = from_thetvdb(&state, &parts, &credential).await?;
 
     // An order TheTVDB answers no episode for, where the series has seasons
     // of it — `altdvd` and `alttwo` (thetvdb/v4-api#340) — and this server
@@ -564,6 +557,49 @@ pub async fn relay(
     }
 
     Ok((fetched.status, fetched.headers, Body::from(fetched.body)).into_response())
+}
+
+/// What TheTVDB answers a read, as every relay is answered
+/// (`relay::answer`). Asked with the operator's token, it needs this
+/// server's own TheTVDB key, and is never the operator's own account. A
+/// document asked with the operator's token is the same for every caller:
+/// it is kept under the path and query asked, asked once for all who ask it
+/// at once, and stands in for TheTVDB when TheTVDB fails — with its `Age`,
+/// the locks written in all the same. One asked with a client's own token is
+/// none of that. Either way TheTVDB is asked through the door its client
+/// keeps, never waiting for it to open.
+async fn from_thetvdb(
+    state: &AppState,
+    parts: &Parts,
+    credential: &Credential,
+) -> AppResult<relay::Fetched> {
+    let path = parts.uri.path().to_string();
+    if matches!(credential, Credential::Ours) {
+        if !state.tvdb.is_configured() {
+            return Err(AppError::ProviderNotConfigured);
+        }
+        if users_own(&path) {
+            return Err(AppError::Forbidden);
+        }
+    }
+
+    let cache_key = (parts.method == Method::GET && matches!(credential, Credential::Ours))
+        .then(|| relay_key(state, &parts.uri));
+    let validators = validators_travel(cache_key.is_some(), &path);
+    let ask = relay::Ask {
+        service: relay::Service::Tvdb,
+        reference: cache_key
+            .as_ref()
+            .filter(|_| relay::is_reference(&path))
+            .map(|_| filed_as(state, &parts.uri)),
+        key: cache_key,
+        path,
+    };
+    relay::answer(state, ask, {
+        let (state, parts, credential) = (state.clone(), parts.clone(), credential.clone());
+        async move { send(&state, &parts, Bytes::new(), &credential, validators).await }
+    })
+    .await
 }
 
 /// Whether the caller's validators (`If-None-Match`, `If-Modified-Since`)
@@ -1884,6 +1920,1057 @@ mod updates {
     }
 }
 
+/// What the relay answers itself, in TheTVDB's shape, for a work this
+/// catalogue holds, where an administrator chose so (`tvdb.relayMode =
+/// local-first`): neither TheTVDB nor this server's own TheTVDB key is
+/// asked. The documents are written by [`crate::wire::tvdb`]; this finds the
+/// work a path names, and what it is written from.
+///
+/// A work is answered here where the catalogue holds it under the id asked
+/// — TheTVDB's own, or one this server made, as Skyhook hands it Sonarr —
+/// switched on, and one the caller may see; a season or an episode, where
+/// its work is. Anything else is TheTVDB's to answer, as before: a work the
+/// catalogue does not hold, what is not written here — a person, a list, a
+/// company — and a work's text in a language the catalogue holds none in,
+/// where TheTVDB knows the work. One it does not know is answered TheTVDB's
+/// own 404. A search lists the works the catalogue finds before TheTVDB's
+/// own, on its first page.
+mod local {
+    use std::{borrow::Cow, str::FromStr};
+
+    use axum::{
+        http::{HeaderValue, StatusCode, Uri, header, request::Parts},
+        response::{IntoResponse, Response},
+    };
+    use serde_json::{Map, Value, json};
+
+    use super::{Credential, PREFIX, TVDB_TYPES, from_thetvdb, take_hidden};
+    use crate::{
+        api::relay,
+        auth::Identity,
+        db::{RowExt, repo},
+        domain::{EpisodeOrder, ExternalSource, MediaItem, MediaKind},
+        error::AppResult,
+        service::{
+            self, ids, language,
+            orders::{self, Placed},
+        },
+        state::AppState,
+        wire::tvdb::{self as wire, AIRED, Extended, Filter, PageAsked, Style, Work},
+    };
+
+    /// A read the relay may answer itself, as its path names it.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) enum Asked {
+        /// `series/{id}`.
+        Series(i64),
+        /// `series/{id}/extended`.
+        SeriesExtended(i64),
+        /// `series/{id}/artworks`.
+        SeriesArtworks(i64),
+        /// `series/{id}/translations/{lang}`.
+        SeriesText(i64, String),
+        /// `series/{id}/episodes/{season-type}[/{lang}]`.
+        Episodes {
+            series: i64,
+            order: String,
+            language: Option<String>,
+        },
+        /// `seasons/{id}[/extended]`.
+        Season { id: i64, extended: bool },
+        /// `episodes/{id}[/extended]`.
+        Episode { id: i64, extended: bool },
+        /// `episodes/{id}/translations/{lang}`.
+        EpisodeText(i64, String),
+        /// `movies/{id}[/extended]`.
+        Movie { id: i64, extended: bool },
+        /// `movies/{id}/translations/{lang}`.
+        MovieText(i64, String),
+        /// `search`.
+        Search,
+        /// `search/remoteid/{id}`.
+        RemoteId(String),
+    }
+
+    /// Recognise the reads the relay may answer itself. A work's id is
+    /// positive; a season's or an episode's may be one this server made,
+    /// which is negative.
+    pub(super) fn asked(path: &str) -> Option<Asked> {
+        let rest = path.strip_prefix(PREFIX)?;
+        let segments: Vec<&str> = rest.trim_matches('/').split('/').collect();
+        let work = |text: &str| text.parse::<i64>().ok().filter(|id| *id > 0);
+        let child = |text: &str| text.parse::<i64>().ok().filter(|id| *id != 0);
+        Some(match segments.as_slice() {
+            ["series", id] => Asked::Series(work(id)?),
+            ["series", id, "extended"] => Asked::SeriesExtended(work(id)?),
+            ["series", id, "artworks"] => Asked::SeriesArtworks(work(id)?),
+            ["series", id, "translations", lang] => Asked::SeriesText(work(id)?, lang.to_string()),
+            ["series", id, "episodes", order] => Asked::Episodes {
+                series: work(id)?,
+                order: order.to_string(),
+                language: None,
+            },
+            ["series", id, "episodes", order, lang] => Asked::Episodes {
+                series: work(id)?,
+                order: order.to_string(),
+                language: Some(lang.to_string()),
+            },
+            ["seasons", id] => Asked::Season {
+                id: child(id)?,
+                extended: false,
+            },
+            ["seasons", id, "extended"] => Asked::Season {
+                id: child(id)?,
+                extended: true,
+            },
+            ["episodes", id] => Asked::Episode {
+                id: child(id)?,
+                extended: false,
+            },
+            ["episodes", id, "extended"] => Asked::Episode {
+                id: child(id)?,
+                extended: true,
+            },
+            ["episodes", id, "translations", lang] => {
+                Asked::EpisodeText(child(id)?, lang.to_string())
+            }
+            ["movies", id] => Asked::Movie {
+                id: work(id)?,
+                extended: false,
+            },
+            ["movies", id, "extended"] => Asked::Movie {
+                id: work(id)?,
+                extended: true,
+            },
+            ["movies", id, "translations", lang] => Asked::MovieText(work(id)?, lang.to_string()),
+            ["search"] => Asked::Search,
+            ["search", "remoteid", id] => {
+                Asked::RemoteId(urlencoding::decode(id).ok()?.into_owned())
+            }
+            _ => return None,
+        })
+    }
+
+    /// The parameters of a request, each read as TheTVDB reads it: the
+    /// first of its name, an empty one as none.
+    pub(super) struct Query(Vec<(String, String)>);
+
+    impl Query {
+        pub(super) fn of(uri: &Uri) -> Self {
+            Self(
+                url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
+                    .map(|(name, value)| (name.into_owned(), value.trim().to_string()))
+                    .collect(),
+            )
+        }
+
+        pub(super) fn get(&self, name: &str) -> Option<&str> {
+            self.0
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+                .filter(|value| !value.is_empty())
+        }
+
+        fn number<T: FromStr>(&self, name: &str) -> Option<T> {
+            self.get(name)?.parse().ok()
+        }
+
+        /// A flag TheTVDB reads, `short=true`.
+        fn flag(&self, name: &str) -> bool {
+            self.get(name)
+                .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+        }
+
+        /// Whether `meta` asks for this.
+        fn meta(&self, wanted: &str) -> bool {
+            self.get("meta")
+                .is_some_and(|meta| meta.eq_ignore_ascii_case(wanted))
+        }
+    }
+
+    /// Whose episodes' texts, beside the catalogue's own language, a
+    /// document is written with.
+    enum Languages {
+        None,
+        /// The one a document is in.
+        One(String),
+        /// Every one fetched for the work: a document that lists the
+        /// languages each episode has text in.
+        Tried,
+    }
+
+    /// A work found, and what its documents are written from besides it.
+    struct Found {
+        item: MediaItem,
+        /// The id TheTVDB's dialect knows it by.
+        id: i64,
+        record: Option<Map<String, Value>>,
+        texts: wire::Held,
+    }
+
+    impl Found {
+        fn work<'a>(
+            &'a self,
+            stored: &'a str,
+            source: &'a (dyn Fn(&str) -> String + Sync),
+        ) -> Work<'a> {
+            Work::new(
+                &self.item,
+                self.id,
+                self.record.as_ref(),
+                stored,
+                &self.texts,
+                source,
+            )
+        }
+    }
+
+    /// The caller a read is answered for.
+    struct Reader<'s> {
+        state: &'s AppState,
+        /// Whether it may be shown the works for adults the server shows,
+        /// as Sonarr and Radarr may.
+        adult: bool,
+        stored: String,
+    }
+
+    /// What the relay answers itself to a read, where it does: `None` for
+    /// one that is TheTVDB's.
+    pub(super) async fn answered(
+        state: &AppState,
+        identity: &Identity,
+        parts: &Parts,
+        credential: &Credential,
+    ) -> AppResult<Option<Response>> {
+        let Some(asked) = asked(parts.uri.path()) else {
+            return Ok(None);
+        };
+        let query = Query::of(&parts.uri);
+        let reader = Reader {
+            state,
+            adult: state.adult_for_arr(identity.client_id(), identity.peer_id()),
+            stored: language::stored(state),
+        };
+        let answer = match asked {
+            Asked::Series(id) => reader.series(id, Document::Base, &query).await?,
+            Asked::SeriesExtended(id) => reader.series(id, Document::Extended, &query).await?,
+            Asked::SeriesArtworks(id) => reader.series(id, Document::Artworks, &query).await?,
+            Asked::SeriesText(id, segment) => reader.series_text(id, &segment).await?,
+            Asked::Episodes {
+                series,
+                order,
+                language,
+            } => {
+                reader
+                    .episodes(series, &order, language.as_deref(), &parts.uri, &query)
+                    .await?
+            }
+            Asked::Season { id, extended } => reader.season(id, extended, &query).await?,
+            Asked::Episode { id, extended } => reader.episode(id, extended, &query).await?,
+            Asked::EpisodeText(id, segment) => reader.episode_text(id, &segment).await?,
+            Asked::Movie { id, extended } => reader.movie(id, extended, &query).await?,
+            Asked::MovieText(id, segment) => reader.movie_text(id, &segment).await?,
+            Asked::Search => return reader.search(parts, credential, &query).await,
+            Asked::RemoteId(id) => return reader.remote(parts, credential, &id).await,
+        };
+        Ok(answer.map(|(status, document)| respond(parts, status, &document)))
+    }
+
+    /// A document written here, as TheTVDB answers one: counted, and noted.
+    fn respond(parts: &Parts, status: StatusCode, document: &Value) -> Response {
+        crate::metrics::relay_local("tvdb");
+        tracing::debug!(path = %parts.uri.path(), %status, "answered here, in TheTVDB's shape");
+        let mut response = (status, document.to_string()).into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json;charset=utf-8"),
+        );
+        response
+    }
+
+    /// Which of a series' documents.
+    #[derive(Clone, Copy)]
+    enum Document {
+        Base,
+        Extended,
+        Artworks,
+    }
+
+    type Answer = AppResult<Option<(StatusCode, Value)>>;
+
+    impl Reader<'_> {
+        /// A picture's address as its source gave it.
+        fn source(&self) -> impl Fn(&str) -> String + Sync + '_ {
+            |url: &str| self.state.media.unlocalize(url)
+        }
+
+        /// The id a work is known by in TheTVDB's dialect: a series' as
+        /// Skyhook hands it Sonarr; a film's TheTVDB's own, or, entered by
+        /// hand, one made of its catalogue id — TMDB's would name another
+        /// of TheTVDB's films. A number made of a catalogue id only where
+        /// it leads back to the work.
+        async fn handed(&self, item: &MediaItem) -> AppResult<Option<i64>> {
+            let named = |item: &MediaItem| match item.kind {
+                MediaKind::Series => service::series::client_id(item),
+                MediaKind::Movie => item
+                    .external_ids
+                    .tvdb
+                    .or_else(|| item.is_manual.then(|| ids::own(&item.id))),
+            };
+            Ok(
+                service::addressed(self.state, item.kind, std::slice::from_ref(item), named)
+                    .await?
+                    .pop()
+                    .flatten(),
+            )
+        }
+
+        /// A work read, as a document about it is written from it: of
+        /// `kind`, switched on, one the caller may see, with an id in
+        /// TheTVDB's dialect — and TheTVDB's record of it where `record`,
+        /// its episodes' texts in `languages`.
+        async fn found(
+            &self,
+            mut item: MediaItem,
+            kind: MediaKind,
+            record: bool,
+            languages: Languages,
+        ) -> AppResult<Option<Found>> {
+            if item.kind != kind || !item.is_enabled || (item.is_adult && !self.adult) {
+                return Ok(None);
+            }
+            let Some(id) = self.handed(&item).await? else {
+                return Ok(None);
+            };
+            self.state.media.for_clients(&mut item);
+            let record = if record {
+                recorded(self.state, &item.id).await?
+            } else {
+                None
+            };
+            let languages = match languages {
+                Languages::None => Vec::new(),
+                Languages::One(language) => vec![language],
+                Languages::Tried => repo::translation::tried(&self.state.db, &item.id)
+                    .await?
+                    .into_iter()
+                    .map(|tried| tried.language)
+                    .collect(),
+            };
+            let mut texts = wire::Held::new();
+            for language in languages {
+                if language.is_empty() || language == self.stored || texts.contains_key(&language) {
+                    continue;
+                }
+                let held =
+                    repo::translation::for_episodes(&self.state.db, &item.id, &language).await?;
+                if !held.is_empty() {
+                    texts.insert(language, held);
+                }
+            }
+            Ok(Some(Found {
+                item,
+                id,
+                record,
+                texts,
+            }))
+        }
+
+        /// A work by its catalogue id.
+        async fn find(
+            &self,
+            id: &str,
+            kind: MediaKind,
+            record: bool,
+            languages: Languages,
+        ) -> AppResult<Option<Found>> {
+            match service::load(self.state, id).await? {
+                Some(item) => self.found(item, kind, record, languages).await,
+                None => Ok(None),
+            }
+        }
+
+        /// A work of `kind` by one of its ids elsewhere, or one a merge
+        /// folded into it.
+        async fn by_external(
+            &self,
+            kind: MediaKind,
+            source: ExternalSource,
+            value: i64,
+        ) -> AppResult<Option<MediaItem>> {
+            let value = value.to_string();
+            Ok(
+                match repo::item::find_id_by_external(&self.state.db, source, &value).await? {
+                    Some(found) => service::load(self.state, &found).await?,
+                    None => service::merge::aliased(self.state, kind, source, &value).await?,
+                },
+            )
+        }
+
+        /// The series TheTVDB's dialect knows by `id`: its TheTVDB id, or a
+        /// number this server made of TMDB's, of Fankai's, or of the
+        /// catalogue's own for a series entered by hand.
+        async fn find_series(
+            &self,
+            id: i64,
+            record: bool,
+            languages: Languages,
+        ) -> AppResult<Option<Found>> {
+            let item = if ids::is_own(id) {
+                service::by_own_id(self.state, MediaKind::Series, id).await?
+            } else if let Some(fankai) = ids::from_fankai(id) {
+                self.by_external(MediaKind::Series, ExternalSource::Fankai, fankai)
+                    .await?
+            } else if let Some(tmdb) = ids::from_synthetic(id) {
+                self.by_external(MediaKind::Series, ExternalSource::TmdbTv, tmdb)
+                    .await?
+            } else {
+                self.by_external(MediaKind::Series, ExternalSource::TvdbSeries, id)
+                    .await?
+            };
+            match item {
+                Some(item) => self.found(item, MediaKind::Series, record, languages).await,
+                None => Ok(None),
+            }
+        }
+
+        /// The film TheTVDB's dialect knows by `id`: its TheTVDB id, or a
+        /// number made of the catalogue's own for a film entered by hand.
+        async fn find_movie(&self, id: i64) -> AppResult<Option<Found>> {
+            let item = if ids::is_own(id) {
+                service::by_own_id(self.state, MediaKind::Movie, id).await?
+            } else {
+                self.by_external(MediaKind::Movie, ExternalSource::TvdbMovie, id)
+                    .await?
+            };
+            match item {
+                Some(item) => {
+                    self.found(item, MediaKind::Movie, false, Languages::None)
+                        .await
+                }
+                None => Ok(None),
+            }
+        }
+
+        /// `series/{id}`, `/extended`, `/artworks`.
+        async fn series(&self, id: i64, document: Document, query: &Query) -> Answer {
+            let Some(found) = self.find_series(id, true, Languages::None).await? else {
+                return Ok(None);
+            };
+            let source = self.source();
+            let work = found.work(&self.stored, &source);
+            let mut data = match document {
+                Document::Base => Value::Object(work.series()),
+                Document::Extended => {
+                    let asked = Extended {
+                        translations: query.meta("translations"),
+                        episodes: query.meta("episodes"),
+                        short: query.flag("short"),
+                    };
+                    let mut episodes = Vec::new();
+                    if asked.episodes {
+                        let all = orders::for_clients(self.state, &found.item, None).await?;
+                        let (placed, aired) = default_order(&work, &found.item, &all);
+                        let style = Style {
+                            paths: true,
+                            aired,
+                            ..Style::default()
+                        };
+                        episodes = placed
+                            .iter()
+                            .map(|placed| Value::Object(work.episode(placed, &style)))
+                            .collect();
+                    }
+                    Value::Object(work.series_extended(asked, episodes))
+                }
+                Document::Artworks => {
+                    Value::Object(work.series_artworks(query.get("lang"), query.number("type")))
+                }
+            };
+            take_hidden(&mut data, &found.item, &source);
+            Ok(Some((StatusCode::OK, wire::success(data))))
+        }
+
+        /// `series/{id}/translations/{lang}`: TheTVDB's where the catalogue
+        /// holds no text in the language, for a series TheTVDB knows by the
+        /// id asked.
+        async fn series_text(&self, id: i64, segment: &str) -> Answer {
+            let language = language::normalize(segment);
+            if language.is_empty() {
+                return Ok(None);
+            }
+            let Some(found) = self.find_series(id, true, Languages::None).await? else {
+                return Ok(None);
+            };
+            let source = self.source();
+            let work = found.work(&self.stored, &source);
+            Ok(match work.translation(&language) {
+                Some(data) => Some((StatusCode::OK, wire::success(data))),
+                None if found.item.external_ids.tvdb == Some(id) => None,
+                None => Some((StatusCode::NOT_FOUND, wire::not_found())),
+            })
+        }
+
+        /// `series/{id}/episodes/{season-type}[/{lang}]`: the series'
+        /// episodes in any order it holds, its aired one as frozen when one
+        /// is. One of TheTVDB's own the catalogue holds none of is
+        /// TheTVDB's to answer for a series it knows, and an empty page for
+        /// one it does not, as TheTVDB answers a series without that order;
+        /// another the catalogue does not hold is TheTVDB's.
+        async fn episodes(
+            &self,
+            series: i64,
+            order: &str,
+            segment: Option<&str>,
+            uri: &Uri,
+            query: &Query,
+        ) -> Answer {
+            let language = match segment {
+                Some(segment) => match language::normalize(segment) {
+                    language if language.is_empty() => return Ok(None),
+                    language => Some(language),
+                },
+                None => None,
+            };
+            let languages = match &language {
+                Some(language) => Languages::One(language.clone()),
+                None => Languages::Tried,
+            };
+            let Some(found) = self.find_series(series, true, languages).await? else {
+                return Ok(None);
+            };
+            // TheTVDB's own refusal of a number with no season.
+            if language.is_none()
+                && query.get("episodeNumber").is_some()
+                && query.get("season").is_none()
+            {
+                return Ok(Some((StatusCode::BAD_REQUEST, wire::no_season())));
+            }
+            let named = (order != AIRED && order != "default").then_some(order);
+            let all = orders::for_clients(self.state, &found.item, named).await?;
+            let source = self.source();
+            let work = found.work(&self.stored, &source);
+            let (placed, aired) = match order {
+                AIRED => aired_order(&found.item, &all),
+                "default" => default_order(&work, &found.item, &all),
+                _ => match orders::in_use(&found.item, &all, order) {
+                    Some(kept) => (orders::served(&found.item, kept), false),
+                    None if TVDB_TYPES.contains(&order)
+                        && found.item.external_ids.tvdb.is_none() =>
+                    {
+                        (Vec::new(), false)
+                    }
+                    None => return Ok(None),
+                },
+            };
+            let filter = Filter {
+                season: query.number("season"),
+                number: query.number("episodeNumber"),
+                aired: query.get("airDate").map(str::to_string),
+            };
+            let page = query.number::<u64>("page").unwrap_or(0);
+            let link = relay::without_our_params(uri);
+            let previous = (page > 0).then(|| with_page(uri, page - 1));
+            let asked = PageAsked {
+                style: Style {
+                    language: language.as_deref(),
+                    lists: language.is_none(),
+                    paths: language.is_some(),
+                    aired,
+                },
+                filter: &filter,
+                page,
+                link: &link,
+                previous: previous.as_deref(),
+            };
+            Ok(Some((StatusCode::OK, work.episodes_page(&placed, &asked))))
+        }
+
+        /// `seasons/{id}[/extended]`: a season of the aired order, with its
+        /// episodes where extended.
+        async fn season(&self, id: i64, extended: bool, query: &Query) -> Answer {
+            let Some((media, number)) = season_of(self.state, id).await? else {
+                return Ok(None);
+            };
+            let languages = if extended {
+                Languages::Tried
+            } else {
+                Languages::None
+            };
+            let Some(found) = self
+                .find(&media, MediaKind::Series, true, languages)
+                .await?
+            else {
+                return Ok(None);
+            };
+            let source = self.source();
+            let work = found.work(&self.stored, &source);
+            let Some(season) = found
+                .item
+                .seasons
+                .iter()
+                .find(|season| season.season_number == number && work.season_id(season) == id)
+            else {
+                return Ok(None);
+            };
+            let data = if extended {
+                let all = orders::for_clients(self.state, &found.item, None).await?;
+                let (placed, _) = aired_order(&found.item, &all);
+                let of_season: Vec<Placed<'_>> = placed
+                    .into_iter()
+                    .filter(|placed| placed.season_number == number)
+                    .collect();
+                work.season_extended(season, &of_season, query.meta("translations"))
+            } else {
+                work.season(season)
+            };
+            Ok(Some((StatusCode::OK, wire::success(data))))
+        }
+
+        /// `episodes/{id}[/extended]`.
+        async fn episode(&self, id: i64, extended: bool, query: &Query) -> Answer {
+            let Some(media) = episode_of(self.state, id).await? else {
+                return Ok(None);
+            };
+            let Some(found) = self
+                .find(&media, MediaKind::Series, false, Languages::Tried)
+                .await?
+            else {
+                return Ok(None);
+            };
+            let all = orders::for_clients(self.state, &found.item, None).await?;
+            let Some(placed) = placed_episode(&found.item, &all, id) else {
+                return Ok(None);
+            };
+            let source = self.source();
+            let work = found.work(&self.stored, &source);
+            let data = if extended {
+                work.episode_extended(&placed, query.meta("translations"))
+            } else {
+                work.episode_record(&placed)
+            };
+            Ok(Some((StatusCode::OK, wire::success(data))))
+        }
+
+        /// `episodes/{id}/translations/{lang}`: TheTVDB's where the
+        /// catalogue holds no text in the language, for an episode TheTVDB
+        /// knows.
+        async fn episode_text(&self, id: i64, segment: &str) -> Answer {
+            let language = language::normalize(segment);
+            if language.is_empty() {
+                return Ok(None);
+            }
+            let Some(media) = episode_of(self.state, id).await? else {
+                return Ok(None);
+            };
+            let Some(found) = self
+                .find(
+                    &media,
+                    MediaKind::Series,
+                    false,
+                    Languages::One(language.clone()),
+                )
+                .await?
+            else {
+                return Ok(None);
+            };
+            let all = orders::for_clients(self.state, &found.item, None).await?;
+            let Some(placed) = placed_episode(&found.item, &all, id) else {
+                return Ok(None);
+            };
+            let source = self.source();
+            let work = found.work(&self.stored, &source);
+            Ok(match work.episode_translation(&placed, &language) {
+                Some(data) => Some((StatusCode::OK, wire::success(data))),
+                None if placed.episode.tvdb_id == Some(id) => None,
+                None => Some((StatusCode::NOT_FOUND, wire::not_found())),
+            })
+        }
+
+        /// `movies/{id}[/extended]`.
+        async fn movie(&self, id: i64, extended: bool, query: &Query) -> Answer {
+            let Some(found) = self.find_movie(id).await? else {
+                return Ok(None);
+            };
+            let source = self.source();
+            let work = found.work(&self.stored, &source);
+            let mut data = Value::Object(if extended {
+                work.movie_extended(query.flag("short"), query.meta("translations"))
+            } else {
+                work.movie()
+            });
+            take_hidden(&mut data, &found.item, &source);
+            Ok(Some((StatusCode::OK, wire::success(data))))
+        }
+
+        /// `movies/{id}/translations/{lang}`.
+        async fn movie_text(&self, id: i64, segment: &str) -> Answer {
+            let language = language::normalize(segment);
+            if language.is_empty() {
+                return Ok(None);
+            }
+            let Some(found) = self.find_movie(id).await? else {
+                return Ok(None);
+            };
+            let source = self.source();
+            let work = found.work(&self.stored, &source);
+            Ok(match work.translation(&language) {
+                Some(data) => Some((StatusCode::OK, wire::success(data))),
+                None if found.item.external_ids.tvdb == Some(id) => None,
+                None => Some((StatusCode::NOT_FOUND, wire::not_found())),
+            })
+        }
+
+        /// `search`: on its first page, the works the catalogue finds by
+        /// the term — of the type asked, series or films — before TheTVDB's
+        /// own results, none TheTVDB lists twice, and counted with them;
+        /// alone, where TheTVDB did not answer. A search for people or
+        /// companies, and a later page, are TheTVDB's alone.
+        async fn search(
+            &self,
+            parts: &Parts,
+            credential: &Credential,
+            query: &Query,
+        ) -> AppResult<Option<Response>> {
+            let Some(term) = query.get("query").or_else(|| query.get("q")) else {
+                return Ok(None);
+            };
+            let kind = match query.get("type") {
+                None => None,
+                Some("series") => Some(MediaKind::Series),
+                Some("movie") => Some(MediaKind::Movie),
+                Some(_) => return Ok(None),
+            };
+            let first = query.number::<u64>("page").unwrap_or(0) == 0
+                && query.number::<u64>("offset").unwrap_or(0) == 0;
+            if !first {
+                return Ok(None);
+            }
+            let limit = query.number::<i64>("limit").unwrap_or(50).clamp(1, 50);
+            let catalogue = repo::item::Query {
+                term: Some(term.to_string()),
+                kind,
+                year: query.number("year"),
+                sort: repo::item::Sort::Relevance,
+                // By its letters alone: TheTVDB's search, which follows,
+                // forgives a misspelling.
+                tolerance: Some(Vec::new()),
+                limit,
+                include_adult: self.adult,
+                ..Default::default()
+            };
+            let mut hits = Vec::new();
+            for work in repo::item::search(&self.state.db, &catalogue).await? {
+                if let Some(found) = self
+                    .find(&work.id, work.kind, false, Languages::None)
+                    .await?
+                {
+                    let source = self.source();
+                    hits.push(found.work(&self.stored, &source).search_hit());
+                }
+            }
+            if hits.is_empty() {
+                return Ok(None);
+            }
+            let theirs = from_thetvdb(self.state, parts, credential).await;
+            let link = relay::without_our_params(&parts.uri);
+            let document = searched(hits, theirs, &link, limit);
+            Ok(Some(respond(parts, StatusCode::OK, &document)))
+        }
+
+        /// `search/remoteid/{id}`: the works the catalogue holds under that
+        /// id elsewhere — IMDb's, or TMDB's — before TheTVDB's own.
+        async fn remote(
+            &self,
+            parts: &Parts,
+            credential: &Credential,
+            id: &str,
+        ) -> AppResult<Option<Response>> {
+            let id = id.trim();
+            let sources: &[ExternalSource] = if id.starts_with("tt") {
+                &[ExternalSource::Imdb]
+            } else if id.parse::<i64>().is_ok_and(|id| id > 0) {
+                &[ExternalSource::TmdbTv, ExternalSource::TmdbMovie]
+            } else {
+                return Ok(None);
+            };
+            let mut hits = Vec::new();
+            for source in sources {
+                let Some(media) =
+                    repo::item::find_id_by_external(&self.state.db, *source, id).await?
+                else {
+                    continue;
+                };
+                let Some(item) = service::load(self.state, &media).await? else {
+                    continue;
+                };
+                let kind = item.kind;
+                if let Some(found) = self.found(item, kind, false, Languages::None).await? {
+                    let source = self.source();
+                    hits.push(found.work(&self.stored, &source).remote_hit());
+                }
+            }
+            if hits.is_empty() {
+                return Ok(None);
+            }
+            let theirs = from_thetvdb(self.state, parts, credential).await;
+            Ok(Some(respond(
+                parts,
+                StatusCode::OK,
+                &remotely(hits, theirs),
+            )))
+        }
+    }
+
+    /// The episodes as the aired order places them: those of the order
+    /// frozen as it, while one is; else the work's own, specials first, as
+    /// TheTVDB lists them. Whether they are the work's own, which say where
+    /// a special airs among the seasons.
+    fn aired_order<'a>(item: &'a MediaItem, all: &'a [EpisodeOrder]) -> (Vec<Placed<'a>>, bool) {
+        if let Some(placed) = orders::as_official(item, all) {
+            return (placed, false);
+        }
+        let mut placed = orders::aired_placements(item);
+        placed.sort_by_key(|placed| (placed.season_number, placed.episode_number));
+        (placed, true)
+    }
+
+    /// The episodes of the series' default order — those its record
+    /// carries (`meta=episodes`), and its `default` page: the aired order,
+    /// unless TheTVDB's record names another the catalogue holds.
+    fn default_order<'a>(
+        work: &Work<'_>,
+        item: &'a MediaItem,
+        all: &'a [EpisodeOrder],
+    ) -> (Vec<Placed<'a>>, bool) {
+        if let Some(kind) = default_type(work.record)
+            && kind != AIRED
+            && let Some(order) = orders::in_use(item, all, &kind)
+        {
+            return (orders::served(item, order), false);
+        }
+        aired_order(item, all)
+    }
+
+    /// The season type TheTVDB's record names the series' default.
+    fn default_type(record: Option<&Map<String, Value>>) -> Option<String> {
+        let record = record?;
+        let id = record.get("defaultSeasonType")?.as_i64()?;
+        record
+            .get("seasonTypes")?
+            .as_array()?
+            .iter()
+            .find(|kind| kind.get("id").and_then(Value::as_i64) == Some(id))?
+            .get("type")?
+            .as_str()
+            .map(str::to_string)
+    }
+
+    /// The episode `id` names among a work's: one of its own, where the
+    /// aired order puts it; else an order's own record of one it does not
+    /// hold, where that order puts it.
+    fn placed_episode<'a>(
+        item: &'a MediaItem,
+        all: &'a [EpisodeOrder],
+        id: i64,
+    ) -> Option<Placed<'a>> {
+        if let Some(episode) = item
+            .episodes
+            .iter()
+            .find(|episode| Work::episode_id(episode) == id)
+        {
+            return Some(Placed {
+                season_number: episode.season_number,
+                episode_number: episode.episode_number,
+                absolute_number: episode.absolute_episode_number,
+                episode: Cow::Borrowed(episode),
+                own: false,
+                tmdb_id: episode.tmdb_id,
+            });
+        }
+        all.iter()
+            .filter(|order| !order.is_default)
+            .flat_map(|order| orders::placements(item, order))
+            .find(|placed| placed.own && Work::episode_id(&placed.episode) == id)
+    }
+
+    /// TheTVDB's record of a work, its `data`, as it was last fetched.
+    async fn recorded(state: &AppState, media: &str) -> AppResult<Option<Map<String, Value>>> {
+        let kept =
+            repo::snapshot::texts(&state.db, media, &[crate::providers::names::TVDB]).await?;
+        Ok(kept
+            .into_iter()
+            .next()
+            .and_then(|(_, text)| serde_json::from_str::<Value>(&text).ok())
+            .and_then(
+                |mut document| match document.get_mut("data").map(Value::take) {
+                    Some(Value::Object(data)) => Some(data),
+                    _ => None,
+                },
+            ))
+    }
+
+    /// The work holding the season TheTVDB's dialect knows by `id`, and its
+    /// number: one of TheTVDB's ids, or one made of what names it.
+    async fn season_of(state: &AppState, id: i64) -> anyhow::Result<Option<(String, i32)>> {
+        let db = &state.db;
+        if id > 0 {
+            let row = sqlx::query(db.sql(
+                "SELECT media_id, season_number FROM media_season
+                 WHERE tvdb_id = ? ORDER BY media_id LIMIT 1",
+            ))
+            .bind(id)
+            .fetch_optional(db.pool())
+            .await?;
+            return Ok(match row {
+                Some(row) => Some((row.text("media_id")?, row.int("season_number")?)),
+                None => None,
+            });
+        }
+        let rows = sqlx::query(db.sql(
+            "SELECT media_id, season_number, tmdb_id FROM media_season WHERE tvdb_id IS NULL",
+        ))
+        .fetch_all(db.pool())
+        .await?;
+        for row in &rows {
+            let media = row.text("media_id")?;
+            let mut season = repo::child::blank_season(row.int("season_number")?);
+            season.tmdb_id = row.opt_big("tmdb_id")?;
+            if wire::own_season_id(&media, &season) == id {
+                return Ok(Some((media, season.season_number)));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The work holding the episode TheTVDB's dialect knows by `id`: one of
+    /// its own, or an order's own record of one, by TheTVDB's id or by one
+    /// made of what names it.
+    async fn episode_of(state: &AppState, id: i64) -> anyhow::Result<Option<String>> {
+        let db = &state.db;
+        if id > 0 {
+            if let Some(media) = repo::item::find_id_by_episode_tvdb(db, id).await? {
+                return Ok(Some(media));
+            }
+            let row = sqlx::query(db.sql(
+                "SELECT o.media_id AS media_id FROM media_order_episode e
+                 JOIN media_order o ON o.id = e.order_id
+                 WHERE e.tvdb_episode_id = ? ORDER BY o.media_id LIMIT 1",
+            ))
+            .bind(id)
+            .fetch_optional(db.pool())
+            .await?;
+            return Ok(match row {
+                Some(row) => Some(row.text("media_id")?),
+                None => None,
+            });
+        }
+        // Made of TMDB's id for it, else of the row it is kept in: read
+        // back by making each again.
+        for sql in [
+            "SELECT media_id, id, tmdb_id FROM media_episode WHERE tvdb_id IS NULL",
+            "SELECT o.media_id AS media_id, e.id AS id, e.tmdb_episode_id AS tmdb_id
+             FROM media_order_episode e JOIN media_order o ON o.id = e.order_id
+             WHERE e.tvdb_episode_id IS NULL",
+        ] {
+            let rows = sqlx::query(db.sql(sql)).fetch_all(db.pool()).await?;
+            for row in &rows {
+                let mut episode = repo::child::blank_episode(0, 0);
+                episode.id = row.text("id")?;
+                episode.tmdb_id = row.opt_big("tmdb_id")?;
+                if orders::own_episode_id(&episode) == id {
+                    return Ok(Some(row.text("media_id")?));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// A page's address with another page number.
+    fn with_page(uri: &Uri, page: u64) -> String {
+        let mut pairs: Vec<String> = relay::query_without(uri, relay::OUR_PARAMS)
+            .map(|query| {
+                query
+                    .split('&')
+                    .filter(|pair| pair.split('=').next() != Some("page"))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        pairs.push(format!("page={page}"));
+        format!("{}?{}", uri.path(), pairs.join("&"))
+    }
+
+    /// The works the catalogue found, before TheTVDB's results on its first
+    /// page — none it lists twice, by type and id — and counted with them;
+    /// alone, where TheTVDB did not answer.
+    pub(super) fn searched(
+        ours: Vec<Value>,
+        theirs: AppResult<relay::Fetched>,
+        link: &str,
+        limit: i64,
+    ) -> Value {
+        let named = |hit: &Value| -> Option<(String, String)> {
+            Some((
+                hit.get("type")?.as_str()?.to_string(),
+                hit.get("tvdb_id")?.as_str()?.to_string(),
+            ))
+        };
+        let listed: Vec<(String, String)> = ours.iter().filter_map(named).collect();
+        if let Ok(fetched) = theirs
+            && fetched.status == StatusCode::OK
+            && relay::is_json(&fetched.headers)
+            && let Ok(mut document) = serde_json::from_slice::<Value>(&fetched.body)
+            && let Some(results) = document.get_mut("data").and_then(Value::as_array_mut)
+        {
+            let before = results.len();
+            results.retain(|hit| named(hit).is_none_or(|name| !listed.contains(&name)));
+            let dropped = before - results.len();
+            let added = ours.len();
+            let theirs = std::mem::take(results);
+            *results = ours;
+            results.extend(theirs);
+            if let Some(total) = document.pointer_mut("/links/total_items")
+                && let Some(count) = total.as_u64()
+            {
+                *total = Value::from((count + added as u64).saturating_sub(dropped as u64));
+            }
+            return document;
+        }
+        let total = ours.len();
+        json!({
+            "status": "success",
+            "data": ours,
+            "links": { "prev": null, "self": link, "next": null, "total_items": total, "page_size": limit },
+        })
+    }
+
+    /// The works the catalogue holds under a remote id, before TheTVDB's —
+    /// none it lists twice, by kind and id; alone, where TheTVDB did not
+    /// answer.
+    pub(super) fn remotely(ours: Vec<Value>, theirs: AppResult<relay::Fetched>) -> Value {
+        let named = |hit: &Value| -> Option<(String, i64)> {
+            let (kind, record) = hit.as_object()?.iter().next()?;
+            Some((kind.clone(), record.get("id")?.as_i64()?))
+        };
+        let listed: Vec<(String, i64)> = ours.iter().filter_map(named).collect();
+        if let Ok(fetched) = theirs
+            && fetched.status == StatusCode::OK
+            && relay::is_json(&fetched.headers)
+            && let Ok(mut document) = serde_json::from_slice::<Value>(&fetched.body)
+            && let Some(results) = document.get_mut("data").and_then(Value::as_array_mut)
+        {
+            results.retain(|hit| named(hit).is_none_or(|name| !listed.contains(&name)));
+            let theirs = std::mem::take(results);
+            *results = ours;
+            results.extend(theirs);
+            return document;
+        }
+        wire::success(ours)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1906,6 +2993,8 @@ mod tests {
             credit_tmdb_id: None,
             sort_order: 0,
             is_manual: false,
+            department: None,
+            job: None,
         };
         let picture = |file: &str, season: Option<i32>| crate::domain::Image {
             id: crate::db::new_id(),
@@ -1944,6 +3033,7 @@ mod tests {
             is_manual: false,
             images: Vec::new(),
             primary_images: Default::default(),
+            translations: Vec::new(),
         };
         first.images = vec![picture("season-hidden.jpg", Some(1))];
         item.seasons = vec![first];
@@ -2181,6 +3271,82 @@ mod tests {
         assert!(!users_own("/3/user"));
     }
 
+    /// The reads the relay may answer itself, where an administrator chose
+    /// so: a season's or an episode's id may be one this server made,
+    /// negative; a work's never is.
+    #[test]
+    fn the_reads_answered_here_are_recognised() {
+        use local::{Asked, asked};
+
+        assert_eq!(asked("/v4/series/81189"), Some(Asked::Series(81189)));
+        assert_eq!(
+            asked("/v4/series/81189/extended"),
+            Some(Asked::SeriesExtended(81189))
+        );
+        assert_eq!(
+            asked("/v4/series/100001396/artworks"),
+            Some(Asked::SeriesArtworks(100_001_396))
+        );
+        assert_eq!(
+            asked("/v4/series/81189/translations/fra"),
+            Some(Asked::SeriesText(81189, "fra".into()))
+        );
+        assert_eq!(
+            asked("/v4/series/81189/episodes/dvd/eng"),
+            Some(Asked::Episodes {
+                series: 81189,
+                order: "dvd".into(),
+                language: Some("eng".into())
+            })
+        );
+        assert_eq!(
+            asked("/v4/seasons/-42/extended"),
+            Some(Asked::Season {
+                id: -42,
+                extended: true
+            })
+        );
+        assert_eq!(
+            asked("/v4/episodes/-7"),
+            Some(Asked::Episode {
+                id: -7,
+                extended: false
+            })
+        );
+        assert_eq!(
+            asked("/v4/episodes/349232/translations/deu"),
+            Some(Asked::EpisodeText(349_232, "deu".into()))
+        );
+        assert_eq!(
+            asked("/v4/movies/169/extended"),
+            Some(Asked::Movie {
+                id: 169,
+                extended: true
+            })
+        );
+        assert_eq!(asked("/v4/search"), Some(Asked::Search));
+        assert_eq!(
+            asked("/v4/search/remoteid/tt0903747"),
+            Some(Asked::RemoteId("tt0903747".into()))
+        );
+
+        for path in [
+            "/v4/series/-81189",
+            "/v4/series/0/extended",
+            "/v4/series/slug/breaking-bad",
+            "/v4/series/81189/nextAired",
+            "/v4/seasons/types",
+            "/v4/seasons/30272/translations/fra",
+            "/v4/movies/-169",
+            "/v4/people/1/extended",
+            "/v4/search/people",
+            "/v4/languages",
+            "/3/tv/1396",
+        ] {
+            assert_eq!(asked(path), None, "{path}");
+        }
+    }
+
     #[test]
     fn the_other_documents_are_left_alone() {
         assert_eq!(patch_target("/v4/series/81189/episodes"), None);
@@ -2381,6 +3547,7 @@ mod tests {
             is_manual: false,
             images: Vec::new(),
             primary_images: Default::default(),
+            translations: Vec::new(),
         }
     }
 
@@ -4010,5 +5177,531 @@ mod relayed {
         assert_eq!(again, languages);
         assert!(headers.contains_key(header::AGE));
         assert_eq!(stand_in.asked_at("/v4/languages").len(), 2);
+    }
+
+    // ─── what the relay answers itself (`tvdb.relayMode = local-first`) ────
+
+    /// TheTVDB's answers beside a catalogue that holds *The Local
+    /// Lighthouse*: a search that lists it and another series, its first
+    /// page and its next; it again by its IMDb id, beside a film; one of its
+    /// episodes in German.
+    fn tvdb_beside_local(asked: &Asked) -> (StatusCode, Value) {
+        let signed = asked
+            .authorization
+            .as_deref()
+            .is_some_and(|value| value.starts_with("Bearer token-for-"));
+        if !signed || asked.method == "POST" {
+            return tvdb(asked);
+        }
+        match asked.path.as_str() {
+            "/v4/search" if asked.query.contains("page=1") => (
+                StatusCode::OK,
+                json!({ "status": "success", "data": [], "links": {
+                    "prev": "/v4/search?page=0", "self": "/v4/search?page=1", "next": null,
+                    "total_items": 2, "page_size": 5 } }),
+            ),
+            "/v4/search" => (
+                StatusCode::OK,
+                json!({ "status": "success", "data": [
+                    { "objectID": "series-990501", "id": "series-990501",
+                      "name": "The Local Lighthouse", "type": "series", "tvdb_id": "990501" },
+                    { "objectID": "series-990777", "id": "series-990777",
+                      "name": "A Lighthouse Elsewhere", "type": "series", "tvdb_id": "990777" }
+                ], "links": { "prev": null, "self": "/v4/search", "next": null,
+                              "total_items": 2, "page_size": 5 } }),
+            ),
+            "/v4/search/remoteid/tt9905010" => (
+                StatusCode::OK,
+                json!({ "status": "success", "data": [
+                    { "series": { "id": 990501, "name": "The Local Lighthouse" } },
+                    { "movie": { "id": 990888, "name": "The Lighthouse Film" } }
+                ] }),
+            ),
+            "/v4/episodes/990511/translations/deu" => (
+                StatusCode::OK,
+                json!({ "status": "success", "data": {
+                    "name": "Der Leuchtturm", "overview": "TheTVDB's", "language": "deu" } }),
+            ),
+            _ => tvdb(asked),
+        }
+    }
+
+    /// TheTVDB's record of *The Local Lighthouse*, as the catalogue keeps
+    /// it: its Czech name, its DVD season, its people — one of whom a person
+    /// hid here.
+    fn lighthouse_record() -> Value {
+        let aired =
+            json!({ "id": 1, "name": "Aired Order", "type": "official", "alternateName": null });
+        let dvd = json!({ "id": 2, "name": "DVD Order", "type": "dvd", "alternateName": null });
+        json!({ "status": "success", "data": {
+            "id": 990501, "name": "The Local Lighthouse", "slug": "the-local-lighthouse",
+            "score": 4242, "originalLanguage": "eng", "defaultSeasonType": 1,
+            "translations": {
+                "nameTranslations": [
+                    { "name": "Místní maják", "language": "ces" },
+                    { "name": "The Local Lighthouse", "language": "eng", "isPrimary": true }
+                ],
+                "overviewTranslations": [], "aliases": null
+            },
+            "seasonTypes": [aired, dvd],
+            "seasons": [
+                { "id": 990521, "seriesId": 990501, "type": aired, "number": 1 },
+                { "id": 990531, "seriesId": 990501, "type": dvd, "number": 1 }
+            ],
+            "characters": [
+                { "id": 1, "name": "The Keeper", "personName": "Hidden Actor",
+                  "peopleType": "Actor", "type": 3 },
+                { "id": 2, "name": "The Visitor", "personName": "Kept Actor",
+                  "peopleType": "Actor", "type": 3 }
+            ],
+            "episodes": []
+        } })
+    }
+
+    /// *The Local Lighthouse*, held here with TheTVDB's record of it: two
+    /// episodes, French titles, a DVD order that swaps them, an actor a
+    /// person hid.
+    async fn store_lighthouse(state: &AppState) {
+        use crate::{
+            db::repo::{
+                self,
+                child::{blank_episode, blank_season},
+            },
+            domain::{EpisodeOrder, OrderKind, PlacedEpisode},
+        };
+
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.title = "The Local Lighthouse".into();
+        item.slug = "the-local-lighthouse".into();
+        item.original_language = Some("eng".into());
+        item.external_ids.tvdb = Some(990_501);
+        item.external_ids.tmdb = Some(990_601);
+        item.external_ids.imdb = Some("tt9905010".into());
+        let mut season = blank_season(1);
+        season.is_manual = false;
+        season.title = Some("Saison 1".into());
+        season.tvdb_id = Some(990_521);
+        item.seasons = vec![season];
+        for (number, id, title) in [(1, 990_511, "Le phare"), (2, 990_512, "La tempête")] {
+            let mut episode = blank_episode(1, number);
+            episode.is_manual = false;
+            episode.tvdb_id = Some(id);
+            episode.title = title.into();
+            episode.air_date = Some(format!("2026-02-0{number}"));
+            item.episodes.push(episode);
+        }
+        item.credits = vec![
+            serde_json::from_value(json!({
+                "id": crate::db::new_id(), "creditType": "actor", "personName": "Hidden Actor",
+                "characterName": "The Keeper", "tmdbPersonId": 990_901, "sortOrder": 0,
+                "isManual": false,
+            }))
+            .expect("a credit"),
+        ];
+        testing::store(
+            state,
+            &item,
+            &[("credit:actor:tmdb:990901", "hidden", "", json!(true))],
+        )
+        .await;
+        repo::snapshot::put(
+            &state.db,
+            &item.id,
+            "tvdb",
+            &lighthouse_record().to_string(),
+            None,
+        )
+        .await
+        .expect("TheTVDB's record is kept");
+        let dvd = EpisodeOrder {
+            key: "dvd".into(),
+            kind: OrderKind::Dvd,
+            source: "tvdb".into(),
+            source_ref: None,
+            label: "DVD Order".into(),
+            is_default: false,
+            is_frozen: false,
+            announced: None,
+            updated_at: crate::db::now(),
+            episodes: vec![
+                PlacedEpisode::of_tvdb(990_512, 1, 1),
+                PlacedEpisode::of_tvdb(990_511, 1, 2),
+            ],
+        };
+        repo::order::replace_source(&state.db, &item.id, "tvdb", &[dvd])
+            .await
+            .expect("TheTVDB's DVD order");
+    }
+
+    /// The episodes of a page, as `(id, season, number)`.
+    fn placed(page: &Value) -> Vec<(i64, i64, i64)> {
+        let episodes = page["data"]["episodes"]
+            .as_array()
+            .or_else(|| page["data"]["episodes"].as_array())
+            .expect("its episodes");
+        episodes
+            .iter()
+            .map(|episode| {
+                (
+                    episode["id"].as_i64().unwrap(),
+                    episode["seasonNumber"].as_i64().unwrap(),
+                    episode["number"].as_i64().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// How many answers the TheTVDB relay gave itself, as the metrics say.
+    fn answered_here() -> u64 {
+        crate::metrics::render(&[])
+            .lines()
+            .find(|line| line.starts_with("ams_relay_local_total{relay=\"tvdb\"}"))
+            .and_then(|line| line.rsplit(' ').next())
+            .and_then(|count| count.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Where an administrator chose so, a series held here is written here
+    /// in TheTVDB's shape, TheTVDB not asked: its record, a page of its
+    /// episodes in any order it holds, a season, an episode, an episode's
+    /// text in the catalogue's language. Its text in a language held nowhere
+    /// here, an order the catalogue holds none of, are TheTVDB's; what a
+    /// person hid is in none of them.
+    #[tokio::test]
+    async fn a_series_held_here_is_written_here_where_the_relay_answers_first() {
+        let stand_in = StandIn::start(tvdb_beside_local).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        store_lighthouse(&state).await;
+        let path = "/v4/series/990501/extended?meta=translations";
+
+        // TheTVDB's own, by default.
+        get(&state, path, &key).await;
+        assert_eq!(stand_in.asked_at("/v4/series/990501/extended").len(), 1);
+
+        testing::choose(&state, "tvdb.relayMode", "local-first").await;
+        let before = answered_here();
+        let (status, headers, record) = read(&state, path, &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers[header::CONTENT_TYPE],
+            "application/json;charset=utf-8"
+        );
+        assert!(!headers.contains_key(header::AGE));
+        assert!(answered_here() > before);
+        assert_eq!(
+            stand_in.asked_at("/v4/series/990501/extended").len(),
+            1,
+            "TheTVDB not asked again"
+        );
+        let data = &record["data"];
+        assert_eq!(record["status"], json!("success"));
+        assert_eq!(data["id"], json!(990_501));
+        assert_eq!(data["name"], json!("The Local Lighthouse"));
+        let languages: Vec<&str> = data["translations"]["nameTranslations"]
+            .as_array()
+            .expect("its translations")
+            .iter()
+            .map(|entry| entry["language"].as_str().unwrap())
+            .collect();
+        assert_eq!(languages, ["ces", "eng", "fra"]);
+        assert_eq!(
+            data["characters"],
+            json!([{ "id": 2, "name": "The Visitor", "personName": "Kept Actor",
+                     "peopleType": "Actor", "type": 3 }])
+        );
+        assert!(
+            data["remoteIds"]
+                .as_array()
+                .expect("its ids")
+                .contains(&json!({ "id": "990601", "type": 12, "sourceName": "TheMovieDB.com" }))
+        );
+
+        // Its DVD order, as it numbers them; its aired one, in French.
+        let (status, dvd) = get(&state, "/v4/series/990501/episodes/dvd?page=0", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(placed(&dvd), [(990_512, 1, 1), (990_511, 1, 2)]);
+        let (_, french) = get(&state, "/v4/series/990501/episodes/official/fra", &key).await;
+        assert_eq!(french["data"]["episodes"][0]["name"], json!("Le phare"));
+        assert_eq!(french["data"]["id"], json!(990_501));
+        // Narrowed to a number with no season: refused, as TheTVDB does.
+        let (status, refusal) = get(
+            &state,
+            "/v4/series/990501/episodes/official?page=0&episodeNumber=1",
+            &key,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(refusal["message"], json!("empty param season"));
+        // An order of TheTVDB's the catalogue holds none of: TheTVDB's.
+        get(&state, "/v4/series/990501/episodes/absolute", &key).await;
+        assert_eq!(
+            stand_in
+                .asked_at("/v4/series/990501/episodes/absolute")
+                .len(),
+            1
+        );
+
+        let (status, season) = get(
+            &state,
+            "/v4/seasons/990521/extended?meta=translations",
+            &key,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            placed(&season),
+            [(990_511, 1, 1), (990_512, 1, 2)],
+            "the aired order's"
+        );
+        let (status, episode) = get(&state, "/v4/episodes/990512/extended", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            episode["data"]["name"],
+            Value::Null,
+            "nothing held in English"
+        );
+        assert_eq!(episode["data"]["seasons"][0]["id"], json!(990_521));
+        let (_, french) = get(&state, "/v4/episodes/990511/translations/fra", &key).await;
+        assert_eq!(french["data"]["name"], json!("Le phare"));
+        // In German, held nowhere here: TheTVDB's.
+        let (status, german) = get(&state, "/v4/episodes/990511/translations/deu", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(german["data"]["name"], json!("Der Leuchtturm"));
+        assert_eq!(
+            stand_in
+                .asked_at("/v4/episodes/990511/translations/deu")
+                .len(),
+            1
+        );
+
+        for path in [
+            "/v4/series/990501/episodes/dvd",
+            "/v4/series/990501/episodes/official/fra",
+            "/v4/seasons/990521/extended",
+            "/v4/episodes/990512/extended",
+            "/v4/episodes/990511/translations/fra",
+        ] {
+            assert!(stand_in.asked_at(path).is_empty(), "{path}");
+        }
+    }
+
+    /// A server with no TheTVDB key of its own answers the series it holds
+    /// all the same, and a search from its catalogue alone; what only
+    /// TheTVDB could answer is a 503.
+    #[tokio::test]
+    async fn a_series_held_here_needs_no_thetvdb_key_where_the_relay_answers_first() {
+        let stand_in = StandIn::start(tvdb_beside_local).await;
+        let state = server_with(&stand_in, |config| config.tvdb.api_key = None).await;
+        let key = issued(&state).await;
+        store_lighthouse(&state).await;
+        testing::choose(&state, "tvdb.relayMode", "local-first").await;
+
+        let (status, record) = get(&state, "/v4/series/990501", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(record["data"]["slug"], json!("the-local-lighthouse"));
+        let (status, found) = get(
+            &state,
+            "/v4/search?query=Local%20Lighthouse&type=series",
+            &key,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(found["data"][0]["tvdb_id"], json!("990501"));
+        assert_eq!(found["links"]["total_items"], json!(1));
+        let (status, refusal) = get(&state, "/v4/series/990999/extended", &key).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(refusal["error"], json!("provider_not_configured"));
+        for path in ["/v4/login", "/v4/series/990501", "/v4/search"] {
+            assert!(stand_in.asked_at(path).is_empty(), "{path}");
+        }
+    }
+
+    /// A series TheTVDB does not know is written under the number Sonarr
+    /// keeps it under: one TMDB alone names, one entered by hand. Its
+    /// seasons and episodes go by negative ids made of what names them, by
+    /// which they are asked for again; its text in a language held nowhere
+    /// is TheTVDB's 404, and TheTVDB is asked nothing.
+    #[tokio::test]
+    async fn a_series_thetvdb_does_not_know_is_written_under_the_number_sonarr_keeps() {
+        use crate::{
+            db::repo::child::{blank_episode, blank_season},
+            service::ids,
+        };
+
+        let stand_in = StandIn::start(tvdb).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        testing::choose(&state, "tvdb.relayMode", "local-first").await;
+
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.title = "The Harbour Only TMDB Knows".into();
+        item.slug = "the-harbour-only-tmdb-knows".into();
+        item.external_ids.tmdb = Some(990_701);
+        let mut season = blank_season(1);
+        season.is_manual = false;
+        season.tmdb_id = Some(990_711);
+        item.seasons = vec![season];
+        for (number, tmdb, title) in [(1, 990_721, "Le premier quai"), (2, 990_722, "Le second")] {
+            let mut episode = blank_episode(1, number);
+            episode.is_manual = false;
+            episode.tmdb_id = Some(tmdb);
+            episode.title = title.into();
+            item.episodes.push(episode);
+        }
+        testing::store(&state, &item, &[]).await;
+        let id = ids::to_synthetic(990_701).expect("a number");
+
+        let (status, page) = get(&state, &format!("/v4/series/{id}/episodes/official"), &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(page["data"]["series"]["id"], json!(id));
+        let first = page["data"]["episodes"][0]["id"].as_i64().expect("an id");
+        assert!(first < 0);
+        let (status, episode) = get(&state, &format!("/v4/episodes/{first}/extended"), &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(episode["data"]["id"], json!(first));
+        assert_eq!(episode["data"]["seriesId"], json!(id));
+        let (status, record) = get(&state, &format!("/v4/series/{id}/extended"), &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            record["data"]["remoteIds"]
+                .as_array()
+                .expect("its ids")
+                .contains(&json!({ "id": "990701", "type": 12, "sourceName": "TheMovieDB.com" }))
+        );
+        let season = record["data"]["seasons"][0]["id"].as_i64().expect("an id");
+        assert!(season < 0);
+        let (status, season) = get(&state, &format!("/v4/seasons/{season}/extended"), &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(season["data"]["episodes"].as_array().map(Vec::len), Some(2));
+        // In Spanish, held nowhere: TheTVDB's own 404, without asking it.
+        let (status, missing) = get(
+            &state,
+            &format!("/v4/episodes/{first}/translations/spa"),
+            &key,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(missing["status"], json!("failure"));
+        // An order of TheTVDB's it has none of: TheTVDB's empty page.
+        let (status, dvd) = get(&state, &format!("/v4/series/{id}/episodes/dvd"), &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(dvd["data"]["episodes"], json!([]));
+
+        // Entered by hand: the number made of its catalogue id.
+        let mut by_hand = MediaItem::empty(MediaKind::Series);
+        by_hand.is_manual = true;
+        by_hand.title = "The Keeper's Own Hand-Written Series".into();
+        by_hand.slug = "the-keepers-own-hand-written-series".into();
+        testing::store(&state, &by_hand, &[]).await;
+        let own = ids::own(&by_hand.id);
+        let (status, record) = get(&state, &format!("/v4/series/{own}"), &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(record["data"]["id"], json!(own));
+        assert_eq!(
+            record["data"]["name"],
+            json!("The Keeper's Own Hand-Written Series")
+        );
+
+        assert!(stand_in.asked_at("/v4/login").is_empty());
+    }
+
+    /// A series switched off, and one for adults while the server hides
+    /// them, are TheTVDB's to answer, as before.
+    #[tokio::test]
+    async fn a_series_switched_off_or_kept_from_the_caller_is_thetvdbs_to_answer() {
+        let stand_in = StandIn::start(tvdb).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        testing::choose(&state, "tvdb.relayMode", "local-first").await;
+        testing::choose(&state, "adult.mode", "hidden").await;
+
+        for (title, id, enabled, adult) in [
+            ("The Lighthouse Switched Off", 990_801, false, false),
+            ("The Lighthouse For Adults", 990_802, true, true),
+        ] {
+            let mut item = MediaItem::empty(MediaKind::Series);
+            item.title = title.into();
+            item.slug = crate::domain::make_slug(title, None);
+            item.external_ids.tvdb = Some(id);
+            item.is_enabled = enabled;
+            item.is_adult = adult;
+            testing::store(&state, &item, &[]).await;
+            let path = format!("/v4/series/{id}");
+            let (status, _) = get(&state, &path, &key).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{title}: TheTVDB's answer");
+            assert_eq!(stand_in.asked_at(&path).len(), 1, "{title}");
+        }
+    }
+
+    /// A search lists, on its first page, the works the catalogue finds
+    /// before TheTVDB's, none twice, and counts them with TheTVDB's; a later
+    /// page, a search for people, are TheTVDB's alone. By an id elsewhere,
+    /// the same. Where TheTVDB fails, the catalogue's alone.
+    #[tokio::test]
+    async fn the_catalogue_is_searched_before_thetvdb_where_the_relay_answers_first() {
+        let stand_in = StandIn::start(tvdb_beside_local).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        store_lighthouse(&state).await;
+        testing::choose(&state, "tvdb.relayMode", "local-first").await;
+        let listed = |page: &Value| -> Vec<String> {
+            page["data"]
+                .as_array()
+                .expect("its results")
+                .iter()
+                .map(|hit| hit["tvdb_id"].as_str().unwrap_or_default().to_string())
+                .collect()
+        };
+
+        let (status, found) = get(
+            &state,
+            "/v4/search?query=Local%20Lighthouse&type=series&limit=5",
+            &key,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed(&found), ["990501", "990777"]);
+        // The catalogue's, written whole.
+        assert_eq!(found["data"][0]["slug"], json!("the-local-lighthouse"));
+        assert_eq!(found["data"][0]["objectID"], json!("series-990501"));
+        assert_eq!(found["links"]["total_items"], json!(2));
+
+        for query in ["&page=1", "&type=person"] {
+            let (_, theirs) = get(
+                &state,
+                &format!("/v4/search?query=Local%20Lighthouse{query}"),
+                &key,
+            )
+            .await;
+            assert!(
+                theirs["data"]
+                    .as_array()
+                    .expect("its results")
+                    .iter()
+                    .all(|hit| hit.get("slug").is_none()),
+                "{query}"
+            );
+        }
+
+        let (status, remote) = get(&state, "/v4/search/remoteid/tt9905010", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            remote["data"][0]["series"]["slug"],
+            json!("the-local-lighthouse")
+        );
+        assert_eq!(remote["data"][1]["movie"]["id"], json!(990_888));
+        assert_eq!(remote["data"].as_array().map(Vec::len), Some(2));
+
+        let down = StandIn::start(tvdb_down).await;
+        let state = testing::server(&down).await;
+        let key = issued(&state).await;
+        store_lighthouse(&state).await;
+        testing::choose(&state, "tvdb.relayMode", "local-first").await;
+        let (status, alone) = get(&state, "/v4/search?query=Local%20Lighthouse", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed(&alone), ["990501"]);
+        assert_eq!(alone["links"]["total_items"], json!(1));
+        assert_eq!(down.asked_at("/v4/search").len(), 1, "TheTVDB asked first");
     }
 }

@@ -1506,8 +1506,9 @@ fn people(item: &MediaItem, drawn: &Drawn<'_>) -> People {
             CreditType::Producer => people.producers.push(person(None)),
             CreditType::Writer => people.writers.push(person(None)),
             // A series' guest stars are no part of its cast, and the
-            // catalogue keeps no episode's own.
-            CreditType::Guest => {}
+            // catalogue keeps no episode's own; and Plex has no place for
+            // the rest of the crew.
+            CreditType::Guest | CreditType::Crew => {}
         }
     }
     people
@@ -2029,6 +2030,8 @@ mod tests {
             credit_tmdb_id: None,
             sort_order: 0,
             is_manual: false,
+            department: None,
+            job: None,
         }];
 
         let drawn = drawn("eng");

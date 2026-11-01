@@ -120,9 +120,14 @@ alone, which TMDB's own search follows with its own forgiveness.
 The list also takes `person` (a TMDB id, a person's record id, or a name they go by whole,
 whatever its case and accents; a credit a lock hides names nobody), `runtimeMin` and `runtimeMax`
 (minutes), `country` (where a work was made, `FR`), `certification` (a rating as the reader's
-country writes it, read in `region` — by default the country the caller is answered for) and
-`collection`, and sorts by `runtime`, `lastAired` and `episodes` besides. `GET /api/v1/facets`
-takes the same filters and adds the countries and the ratings they leave to choose from.
+country writes it, read in `region` — by default the country the caller is answered for),
+`collection`, `company` (a network or a company by this server's id for it, a work's
+`companies[].company.id`, whatever it did for the work) and `keywordId` (one of TMDB's keywords by
+this server's id for it, a work's `keywordEntities[].id`), and sorts by `runtime`, `lastAired` and
+`episodes` besides. `network=` and `keyword=` still take a name, as the works' texts give it — the
+network's or the studio's, and any source's keyword, AniList's tags among them. `GET
+/api/v1/facets` takes the same filters and adds the countries and the ratings they leave to choose
+from.
 
 The index is kept by the server: a work is written into it as it is stored, and anything else
 that changes what it is found by — a title locked, an alternative title added by hand — has it
@@ -152,7 +157,11 @@ who they are — their name, the one in their own script with the language it is
 life (`details`, asked of TMDB the first time the page is read, then once a month) — and every
 credit on a work the caller may see, the newest work first (`roles`): the kind of credit, the
 part or the job, the credit's id, and for a guest or an episode's director the season, the
-episode, its title and the day it aired; `works` holds those works as cards. A record merged into
+episode, its title and the day it aired; `works` holds those works as cards. A credit of the rest
+of TMDB's crew — a composer, a director of photography, an editor — is of the kind `crew`, its job
+kept as its part as a director's is; the index of people counts it among their works, under no
+job of its own. The biography is the one kept in the language asked, where TMDB gave one — it
+gives every language it has with the person's record — else the record's own. A record merged into
 another answers as that one. Whoever may edit the catalogue is also given `record`, the record as
 it is kept: every field `PUT` takes, the portrait's address at its source, and the other names
 with where each came from (`credit`, `tmdb`, `merged`, `manual`).
@@ -194,14 +203,45 @@ writes one in place of the one there was — an empty body takes it away, with a
 on the same path takes it away. A body with HTML or a link to another site is a `400` that says why
 (see [The programmer's note](editing.md#the-programmers-note)).
 
+A work's networks and companies, and TMDB's keywords, are entities of their own beside the texts
+the work names them by (see [The tagline, the countries and the companies](data.md#the-tagline-the-countries-and-the-companies)). `GET
+/api/v1/companies/{id}` is a network's or a company's page, by this server's id for it, and `GET
+/api/v1/keywords/{id}` a keyword's: they answer as the pages above do — `filter` is `{"company":
+…}` or `{"keywordId": …}` — with the entity itself besides, `company` (its kind, `network` or
+`company`, its TMDB and TheTVDB ids, its logo's address at its source and its country) or `keyword`
+(its TMDB id), and for a company `roles`, how many of the works it did what for (`network`,
+`production`, `studio`, `distributor`). A company credited on nothing the caller may see is a
+`404`, as an id nothing has is; neither carries a programmer's note. The network's page by the slug
+of its name, `/networks/{slug}`, stands beside it, and reads the works' texts.
+
+## A season
+
+`GET /api/v1/seasons/{year}/{season}` is the season chart: what premiered, came back and carried
+on in a quarter of the calendar (`winter` from January, `spring`, `summer`, `autumn`). A series'
+line lists under `cours` the AniList and MyAnimeList entries of its season that premiere in the
+quarter — the season itself where it is one entry, or the cour of it that starts there, as the
+anime identifier list places it — each with its part of the season, its episodes, its first and
+last day, how far it has aired, the next to air, counted from its own first episode, and its title
+where the work's sources named it beside the work. `describe=true` adds MyAnimeList's description
+of each, asking MyAnimeList for those this server does not have at hand: slower, a few seconds for
+a season of sequels, which is why the site asks for it only once a reader opens one.
+
+`GET /api/v1/items/{id}?language=…` lays over each season its title and synopsis in that
+language, where they are held in it — locked in it, else locked in every language, else TMDB's
+translation of the season, read with the season's own document at a refresh; a season with
+nothing in that language keeps its own, as the work's title does.
+
 ## Tasks followed, batches and import rules
 
 `GET /api/v1/admin/tasks/stream` is the one answer that does not end: server-sent events named
 `tasks`, each the whole board — every task as `GET /api/v1/tasks` gives it, and `newestRun` — at
 once, then whenever it changes, whichever instance made the change. A comment every fifteen
 seconds keeps a quiet stream open; it ends after five minutes, and its `retry` asks the client to
-open another. The periodic tasks' schedules, a batch of works and the import rules are described
-with the pages they are on: [When it runs](interface.md#when-it-runs),
+open another. `refresh.replay` fills into every work, from the answers kept with it and without
+asking anybody, what a refresh would bring of the networks and companies, TMDB's keywords and
+videos, its pictures' languages and its crew's departments; see [The Jobs
+page](interface.md#the-jobs-page). The periodic tasks' schedules, a batch of works and the import
+rules are described with the pages they are on: [When it runs](interface.md#when-it-runs),
 [Importing many works at once](editing.md#importing-many-works-at-once) and
 [Import rules](exports.md#filled-on-its-own-import-rules).
 
@@ -311,7 +351,7 @@ and `cargo test` holds it to the code: it fails when two types share a schema's 
 operation has no id of its own, when a field the server always sends is documented as optional,
 and when the interface's copy of the document falls behind.
 
-**The clients' surfaces.** Skyhook's two editions, `/v1/tvdb` and `/v2/tvdb`, `services.sonarr.tv`'s
+**The clients' surfaces.** Skyhook's editions, `/v1/tvdb`, `/v2/tvdb` and `/v2/tmdb`, `services.sonarr.tv`'s
 `/v1/scenemapping`, `api.radarr.video`'s `/v1` and the provider Plex is given are served for as long
 as Sonarr, Radarr and Plex read them, in the shape they read. A change there follows the client — a
 field it starts to read, a value it stops taking — and never the other way round. The relays answer

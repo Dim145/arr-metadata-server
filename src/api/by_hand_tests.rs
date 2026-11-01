@@ -465,3 +465,79 @@ async fn a_work_for_adults_entered_by_hand_is_listed_where_the_server_shows_adul
     let (_, found) = get(&router, "/v1/search?q=brindlemoss&year=").await;
     assert!(listed(&found, "TmdbId", movie), "{found}");
 }
+
+/// Seerr's way to Sonarr for a series entered by hand, with the TMDB relay
+/// answering the works held here itself (`tmdb.relayMode = local-first`):
+/// TMDB's search finds the series, the catalogue's works coming first; its
+/// ids give the TheTVDB id Sonarr keeps it under — one this server made, TMDB
+/// and TheTVDB knowing nothing of it — and Skyhook's dialect serves it under
+/// that very number, which Sonarr adds it by. No key of TMDB's is
+/// configured: none is needed for a work held here, and TMDB, which cannot
+/// be asked, leaves the catalogue's works alone in the search.
+#[tokio::test]
+async fn seerr_finds_a_series_entered_by_hand_in_tmdbs_search_and_hands_it_to_sonarr() {
+    let state = server().await;
+    let router = surfaces(&state);
+    let (status, _) = call(
+        &router,
+        "PUT",
+        "/api/v1/settings/server/-",
+        Some(json!({ "key": "tmdb.relayMode", "value": "local-first" })),
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
+    let id = entered_by_hand(
+        &router,
+        json!({
+            "kind": "series",
+            "title": "Wombelune",
+            "year": 2025,
+            "overview": "A series no source lists, for Seerr to find.",
+            "status": "continuing",
+            "firstAired": "2024-01-10",
+        }),
+    )
+    .await;
+    let handed = ids::own(&id);
+
+    // Seerr's search, then its request for the series as it makes it.
+    let (status, found) = get(&router, "/3/search/tv?query=wombelune&language=en-US").await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(found["results"][0]["id"], handed);
+    assert_eq!(found["results"][0]["name"], "Wombelune");
+    assert_eq!(found["total_results"], 1);
+    let (status, show) = get(
+        &router,
+        &format!(
+            "/3/tv/{handed}?language=en-US&append_to_response=aggregate_credits,credits,\
+             external_ids,keywords,videos,content_ratings,watch/providers"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{show}");
+    assert_eq!(show["name"], "Wombelune");
+    assert_eq!(show["first_air_date"], "2024-01-10");
+    assert_eq!(show["external_ids"]["tvdb_id"], handed);
+    let (status, season) = get(
+        &router,
+        &format!("/3/tv/{handed}/season/1?append_to_response=external_ids"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{season}");
+    assert_eq!(season["episodes"].as_array().map(Vec::len), Some(2));
+    assert_eq!(season["episodes"][0]["name"], "Typed in, 1");
+
+    // The TheTVDB id it hands Sonarr, from the series' ids.
+    let (status, ids_of) = get(&router, &format!("/3/tv/{handed}/external_ids")).await;
+    assert_eq!(status, StatusCode::OK, "{ids_of}");
+    let tvdb_id = ids_of["tvdb_id"].as_i64().expect("a TheTVDB id");
+    assert_eq!(tvdb_id, handed);
+
+    // Sonarr, handed that number, adds the series by it from Skyhook's
+    // dialect.
+    let (status, show) = get(&router, &format!("/v1/tvdb/shows/en/{tvdb_id}")).await;
+    assert_eq!(status, StatusCode::OK, "{show}");
+    assert_eq!(show["tvdbId"], tvdb_id);
+    assert_eq!(show["title"], "Wombelune");
+    assert_eq!(show["episodes"].as_array().map(Vec::len), Some(2));
+}

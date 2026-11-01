@@ -670,6 +670,7 @@ mod tests {
                     &format!("https://img.example/s{index}.jpg"),
                 )],
                 primary_images: Default::default(),
+                translations: Vec::new(),
             })
             .collect();
         show.seasons[0].primary_images.poster = Some("sp0".into());

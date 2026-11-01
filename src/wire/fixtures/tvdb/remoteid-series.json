@@ -1,0 +1,43 @@
+{
+ "status": "success",
+ "data": [
+  {
+   "series": {
+    "id": 70753,
+    "name": "Covington Cross",
+    "slug": "covington-cross",
+    "image": "https://artworks.thetvdb.com/banners/posters/70753-2.jpg",
+    "nameTranslations": [
+     "ces",
+     "eng",
+     "fra"
+    ],
+    "overviewTranslations": [
+     "ces",
+     "eng",
+     "fra"
+    ],
+    "aliases": [],
+    "firstAired": "1992-08-25",
+    "lastAired": "1992-10-31",
+    "nextAired": "",
+    "score": 107,
+    "status": {
+     "id": null,
+     "name": null,
+     "recordType": "",
+     "keepUpdated": false
+    },
+    "originalCountry": "usa",
+    "originalLanguage": "eng",
+    "defaultSeasonType": 1,
+    "isOrderRandomized": false,
+    "lastUpdated": "2026-07-13 01:23:56",
+    "averageRuntime": 45,
+    "episodes": null,
+    "overview": "This is a fanciful …",
+    "year": "1992"
+   }
+  }
+ ]
+}

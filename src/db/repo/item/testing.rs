@@ -47,6 +47,8 @@ pub(super) fn sample() -> MediaItem {
         credit_tmdb_id: Some("52fe4726c3a36847f812048b".into()),
         sort_order: 0,
         is_manual: false,
+        department: None,
+        job: None,
     }];
     item.images = vec![Image {
         id: String::new(),

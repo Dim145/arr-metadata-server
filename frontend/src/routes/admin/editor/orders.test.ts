@@ -17,6 +17,11 @@ describe('an order’s name, as the pages say it', () => {
     expect(orderName(order('alttwo', 'Superfan Order'), words)).toBe('Superfan Order')
     expect(orderName(order('tmdb-5acf93e60e0a26346d0000ce', 'Blu-ray Order', 'tmdb'), words)).toBe('Blu-ray Order')
     expect(orderName(order('ams-mine', 'Mine', 'local'), words)).toBe('Mine')
+    // TMDB's own numbering, in the reader's words where they have some.
+    expect(orderName(order('tmdb-aired', 'TMDB (aired)', 'tmdb'), { ...words, 'tmdb-aired': 'TMDB (diffusion)' })).toBe(
+      'TMDB (diffusion)',
+    )
+    expect(orderName(order('tmdb-aired', 'TMDB (aired)', 'tmdb'), words)).toBe('TMDB (aired)')
   })
 
   it('says where an order comes from only when another goes by the same name', () => {

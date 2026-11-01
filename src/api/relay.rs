@@ -484,7 +484,9 @@ pub fn key_issued_here_refused(service: &str, setting: &str) -> Response {
 
 // ─── What is kept of an answer, and what stands in when the service fails ───
 
-pub use kept::{Ask, Fetched, STALE_IF_ERROR, Service, answer, changed_here, is_reference, unsent};
+pub use kept::{
+    Ask, Fetched, STALE_IF_ERROR, Service, answer, changed_here, is_reference, local_first, unsent,
+};
 
 /// What is kept of an answer, and what stands in when its service fails:
 /// shared by TMDB's, TheTVDB's and AniList's relays ([`answer`]).
@@ -555,6 +557,29 @@ mod kept {
         pub const fn forbids_when_down(self) -> bool {
             matches!(self, Self::Anilist)
         }
+
+        /// The setting that says whether its relay answers the works held
+        /// here itself ([`local_first`]): TMDB's and TheTVDB's; AniList's
+        /// relay always asks AniList.
+        pub const fn mode_setting(self) -> Option<&'static str> {
+            match self {
+                Self::Tmdb => Some("tmdb.relayMode"),
+                Self::Tvdb => Some("tvdb.relayMode"),
+                Self::Anilist => None,
+            }
+        }
+    }
+
+    /// Whether the relay of `service` answers a work this server holds
+    /// itself, in the service's shape, before asking the service
+    /// (`*.relayMode = local-first`); `relay`, the default, asks the service
+    /// for everything. What it answers so is counted apart
+    /// ([`crate::metrics::relay_local`]).
+    pub fn local_first(state: &AppState, service: Service) -> bool {
+        service
+            .mode_setting()
+            .and_then(|key| state.settings.resolve(key, None, None))
+            .is_some_and(|mode| mode == "local-first")
     }
 
     /// The setting that lets what a relay kept stand in for a service that

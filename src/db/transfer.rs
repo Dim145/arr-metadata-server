@@ -45,6 +45,7 @@ const TABLES: &[&str] = &[
     // The people the credits are of, before the credits.
     "person",
     "person_alias",
+    "person_translation",
     "media_credit",
     "media_relation",
     // An order before its places; who numbers a series beside them.
@@ -57,6 +58,13 @@ const TABLES: &[&str] = &[
     "media_release",
     "media_episode_translation",
     "media_language_fetch",
+    "media_season_translation",
+    // The companies and the keywords before what links them to the works.
+    "company",
+    "media_company",
+    "keyword",
+    "media_keyword",
+    "media_video",
     // What changed in each work, after the works.
     "media_change",
     // What a merged work was known by, and the pairs that look like one work.

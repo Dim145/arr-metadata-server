@@ -1239,6 +1239,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/companies/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A network's or a company's page, by this server's id for it — a work's
+         *     `companies[].company.id`: the works it is credited on that the reader may
+         *     see, whatever it did for them, and how many it did what for. The
+         *     network's page by the slug of its name, `/networks/{slug}`, stands
+         *     beside it: that one goes by the works' texts, locks and all.
+         */
+        get: operations["browse_company"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/compare": {
         parameters: {
             query?: never;
@@ -2703,6 +2726,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/keywords/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A keyword's page, by this server's id for it — a work's
+         *     `keywordEntities[].id`: the works the reader may see that TMDB gives it.
+         *     The texts of a work's `keywords`, AniList's tags among them, are still
+         *     listed by `GET /items?keyword=`.
+         */
+        get: operations["browse_keyword"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lists": {
         parameters: {
             query?: never;
@@ -4087,6 +4132,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/tmdb/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search series, as Skyhook's TMDB edition answers: without their
+         *     episodes, each under the id that edition knows it by — a series TheTVDB
+         *     alone lists, which TMDB has no id for, is left out. `term` is as for the
+         *     TheTVDB edition, and so is a search nothing answered.
+         */
+        get: operations["sonarr_search_tmdb"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/tmdb/shows/{language}/{tmdb_id}/{season_type}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A series by TMDB id, as Skyhook's TMDB edition serves it.
+         * @description What the TheTVDB edition answers, numbered as TMDB numbers the series:
+         *     `default` is TMDB's own numbering, kept at every refresh that reads TMDB's
+         *     seasons — read from TMDB first for a series no refresh has kept it for
+         *     yet — and a TMDB episode group is asked for by its id on TMDB. Each
+         *     episode is known by its TMDB id. An order made here is asked for by its
+         *     key, as on the TheTVDB edition; a type the series has not is answered in
+         *     TMDB's own numbering.
+         *
+         *     The id is TMDB's; from 200 000 000 up, the one Sonarr knows a Fan-Kai or
+         *     a series entered by hand by, which TMDB does not list, and the answer
+         *     echoes it back. Not found and not answered are told apart as on the
+         *     TheTVDB edition; and a series TheTVDB numbers whose numbering by TMDB
+         *     nothing has kept, while TMDB does not answer, is not answered either.
+         */
+        get: operations["sonarr_show_tmdb"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/tvdb/search": {
         parameters: {
             query?: never;
@@ -4197,6 +4296,17 @@ export interface paths {
          *     made here, the aired order while another is frozen as it, `altdvd` and
          *     `alttwo` that TheTVDB answers empty — is answered here, with or without
          *     a TheTVDB key of the server's own.
+         *
+         *     Where an administrator chose so (`tvdb.relayMode = local-first`), a work
+         *     this catalogue holds — switched on, one the caller may see, by its
+         *     TheTVDB id or the number Sonarr keeps it under — is written here in
+         *     TheTVDB's shape, from the catalogue and from TheTVDB's record of it as
+         *     last fetched, and TheTVDB is not asked: a series and its translations, a
+         *     page of its episodes in any order it holds, a season, an episode, a
+         *     film. A search lists the works the catalogue finds before TheTVDB's own,
+         *     on its first page, and alone when TheTVDB fails. A work's text in a
+         *     language held nowhere here is TheTVDB's, or its 404 for a work it does
+         *     not know.
          *
          *     Every v4 path is accepted; see TheTVDB's own documentation for their
          *     shapes. The documents about a work of this catalogue are the ones patched:
@@ -5126,6 +5236,49 @@ export interface components {
         Collections: {
             collections: components["schemas"]["CollectionCard"][];
         };
+        /** @description A network or a company, kept once for every work it is credited on. */
+        Company: {
+            /**
+             * @description This server's id for it: what its page is found by. Empty in a
+             *     source's answer, until it is stored.
+             */
+            id?: string;
+            kind: components["schemas"]["CompanyKind"];
+            name: string;
+            /** Format: int64 */
+            tmdbId?: number | null;
+            /** Format: int64 */
+            tvdbId?: number | null;
+            /** @description Its logo, an address as its source gives it, like an image's. */
+            logo?: string | null;
+            /** @description Where it is from: ISO 3166-1 alpha-2, upper case. */
+            country?: string | null;
+        };
+        /**
+         * @description A company credited on a work: what it did there, where its source lists
+         *     it, and whose list it is.
+         */
+        CompanyCredit: {
+            company: components["schemas"]["Company"];
+            role: components["schemas"]["CompanyRole"];
+            /** Format: int32 */
+            sortOrder: number;
+            /** @description The source whose list it is: `tmdb`, `tvdb`. */
+            source?: string | null;
+        };
+        /**
+         * @description What a company is: a network, which airs works, or a company, which makes
+         *     or sells them. TMDB numbers the two apart — its network 174 is AMC, its
+         *     company 174 Warner Bros. Pictures — so a kind is part of what one of its
+         *     ids names.
+         * @enum {string}
+         */
+        CompanyKind: "network" | "company";
+        /**
+         * @description What a company did for a work.
+         * @enum {string}
+         */
+        CompanyRole: "network" | "production" | "studio" | "distributor";
         /** @description One work of the two, as the comparison draws it. */
         Compared: {
             /**
@@ -5176,6 +5329,11 @@ export interface components {
             /** @description The source it came from: `tmdb`, `tvdb`, `radarr`. */
             source?: string | null;
         };
+        /**
+         * @description How far an entry has aired, in AniList's terms.
+         * @enum {string}
+         */
+        CourStatus: "notYetReleased" | "releasing" | "finished";
         /**
          * @description Cover types, using Sonarr and Radarr's spelling so the compatibility
          *     surfaces can emit them without a translation table.
@@ -5247,6 +5405,10 @@ export interface components {
             id: string;
             creditType: components["schemas"]["CreditType"];
             personName: string;
+            /**
+             * @description The part played; for one behind the camera, the job, as it has
+             *     always been kept: what its readers take it from.
+             */
             characterName?: string | null;
             image?: string | null;
             /** Format: int64 */
@@ -5259,6 +5421,17 @@ export interface components {
             /** Format: int32 */
             sortOrder: number;
             isManual: boolean;
+            /**
+             * @description The department of one behind the camera, as TMDB names it:
+             *     `Directing`, `Writing`, `Production`, `Sound`, `Camera`, `Editing`,
+             *     `Art`… None for a part, or where the source names none.
+             */
+            department?: string | null;
+            /**
+             * @description Their job there, as TMDB names it: `Screenplay`, `Original Music
+             *     Composer`, `Director of Photography`.
+             */
+            job?: string | null;
         };
         /** @description What may be changed of a credit. Each key left out stands as it is. */
         CreditEdit: {
@@ -5280,7 +5453,7 @@ export interface components {
             sortOrder?: number | null;
         };
         /** @enum {string} */
-        CreditType: "actor" | "director" | "writer" | "producer" | "guest";
+        CreditType: "actor" | "director" | "writer" | "producer" | "guest" | "crew";
         Credits: {
             Cast?: components["schemas"]["CastResource"][];
             Crew?: components["schemas"]["CrewResource"][];
@@ -5648,8 +5821,9 @@ export interface components {
              * @description What a client asks for it by — Sonarr v5's season type, Plex's
              *     episode order, the TheTVDB relay's season type: `official` for the
              *     aired order, TheTVDB's own type for its others (`dvd`, `absolute`,
-             *     `alternate`, `regional`, `altdvd`, `alttwo`), `tmdb-` and the id of a
-             *     TMDB episode group, `ams-` and a name for one made here.
+             *     `alternate`, `regional`, `altdvd`, `alttwo`), `tmdb-aired` for TMDB's
+             *     own numbering, `tmdb-` and the id of a TMDB episode group, `ams-` and
+             *     a name for one made here.
              */
             key: string;
             kind: components["schemas"]["OrderKind"];
@@ -5808,11 +5982,12 @@ export interface components {
          * @description What a page of the catalogue is of.
          * @enum {string}
          */
-        FacetKind: "genre" | "network" | "year" | "decade";
+        FacetKind: "genre" | "network" | "year" | "decade" | "company" | "keyword";
         /**
          * @description A page of the catalogue: a genre's, a network's or a studio's, a year's,
-         *     a decade's — what it is called, how many works it holds, the five rated
-         *     highest, how to list the rest, and what the programmer wrote about it.
+         *     a decade's, a company's or a keyword's — what it is called, how many works
+         *     it holds, the five rated highest, how to list the rest, and what the
+         *     programmer wrote about it.
          */
         FacetPage: {
             kind: components["schemas"]["FacetKind"];
@@ -5850,6 +6025,15 @@ export interface components {
                 [key: string]: string;
             };
             note?: components["schemas"]["EditorialNote"] | null;
+            company?: components["schemas"]["Company"] | null;
+            /**
+             * @description What it did for the works the reader may see, by role, and for how
+             *     many: `{"network": 12}`, `{"production": 3, "distributor": 1}`.
+             */
+            roles?: {
+                [key: string]: number;
+            };
+            keyword?: components["schemas"]["Keyword"] | null;
         };
         /** @description What the works on view can be narrowed by. */
         Facets: {
@@ -6106,6 +6290,20 @@ export interface components {
             sortOrder: number;
             source?: string | null;
             isManual: boolean;
+        };
+        /**
+         * @description What a source says of a picture beyond its address: TMDB's size of it and
+         *     how its members voted on it, by which TMDB ranks its pictures.
+         */
+        ImageDetails: {
+            /** Format: int32 */
+            width?: number | null;
+            /** Format: int32 */
+            height?: number | null;
+            /** Format: double */
+            voteAverage?: number | null;
+            /** Format: int64 */
+            voteCount?: number | null;
         };
         ImageResource: {
             CoverType: string;
@@ -6486,6 +6684,17 @@ export interface components {
             isEnabled?: boolean | null;
             scopes?: string[] | null;
         };
+        /** @description A keyword, kept once for every work it is given: TMDB's, by its id. */
+        Keyword: {
+            /**
+             * @description This server's id for it: what its page is found by. Empty in a
+             *     source's answer, until it is stored.
+             */
+            id?: string;
+            /** Format: int64 */
+            tmdbId?: number | null;
+            name: string;
+        };
         /**
          * @description An earlier work named beside one, as a line on a chart says it: its title,
          *     and the work here that it is when the catalogue holds it.
@@ -6772,6 +6981,53 @@ export interface components {
             canWrite: boolean;
         };
         /**
+         * @description One MyAnimeList entry — a season or a cour of a series, a film, an OVA —
+         *     as it describes itself, in the official API's words whichever way in
+         *     answered.
+         */
+        MalEntry: {
+            /** Format: int64 */
+            malId: number;
+            /** @description Its main title, the romaji one. */
+            title?: string | null;
+            english?: string | null;
+            japanese?: string | null;
+            synonyms?: string[];
+            /** @description Without the credit to whoever wrote it. */
+            synopsis?: string | null;
+            /**
+             * Format: int64
+             * @description How many episodes it is to have; none while MyAnimeList does not know.
+             */
+            episodes?: number | null;
+            /** @description `finished_airing`, `currently_airing` or `not_yet_aired`. */
+            status?: string | null;
+            /** @description `tv`, `ova`, `movie`, `special`, `ona`, `music`, `tv_special`… */
+            mediaType?: string | null;
+            /** @description What it was adapted from: `manga`, `light_novel`, `original`… */
+            source?: string | null;
+            studios?: string[];
+            /**
+             * @description The day it started and the day it ended, as far as MyAnimeList
+             *     knows them: `2023-09-29`, or a month or a year alone.
+             */
+            starts?: string | null;
+            ends?: string | null;
+            /**
+             * @description The other anime it is related to; the manga a Jikan answer names
+             *     beside them are left out, as the official API leaves them.
+             */
+            related?: components["schemas"]["MalRelated"][];
+        };
+        /** @description An anime one entry is related to on MyAnimeList. */
+        MalRelated: {
+            /** Format: int64 */
+            malId: number;
+            /** @description `sequel`, `prequel`, `side_story`, `alternative_version`… */
+            relation: string;
+            title?: string | null;
+        };
+        /**
          * @description How MyAnimeList is asked first.
          * @enum {string}
          */
@@ -6923,6 +7179,32 @@ export interface components {
              *     under: see [`person::People`].
              */
             people?: components["schemas"]["People"];
+            /**
+             * @description The networks and the companies credited on the work, each with the
+             *     ids its sources file it under, its logo and its country, in what it
+             *     did for the work. The texts `network`, `studio` and
+             *     `productionCompanies` stay what they were, locks and all: these
+             *     double them.
+             */
+            companies?: components["schemas"]["CompanyCredit"][];
+            /**
+             * @description TMDB's keywords, each with its id. `keywords` stays the texts every
+             *     source gave, AniList's tags among them.
+             */
+            keywordEntities?: components["schemas"]["Keyword"][];
+            /**
+             * @description Every video the sources list for the work — trailers, teasers, clips
+             *     — in their order. `trailerYoutubeId` stays the one chosen of them.
+             */
+            videos?: components["schemas"]["Video"][];
+            /**
+             * @description What a source says of its pictures beyond their addresses — their
+             *     size, how its members voted on them — by the address the work gives
+             *     each: TMDB's, the only one that says.
+             */
+            imageDetails?: {
+                [key: string]: components["schemas"]["ImageDetails"];
+            };
             /**
              * @description Fields carrying a manual override, as `scope/field` paths. The web UI
              *     renders a lock next to each of these. A text locked in another
@@ -7399,6 +7681,8 @@ export interface components {
             /**
              * @description The keys of the orders Sonarr v5 and Plex are offered, the aired one
              *     aside: the same order kept by TheTVDB and by TMDB is offered once.
+             *     TMDB's own numbering, `tmdb-aired`, is offered to Plex alone: Sonarr
+             *     v5 is answered in it by TMDB's id, where it is the default.
              */
             offered: string[];
         };
@@ -7434,10 +7718,10 @@ export interface components {
             aired?: components["schemas"]["EpisodeOrder"] | null;
             /**
              * @description Every other order — TheTVDB's first, the DVDs' at their head, then
-             *     TMDB's episode groups, then those made here — each with its places:
-             *     an episode the work holds by its id as the work gives it now, or the
-             *     record the order carries of one it does not. Empty for a film, or a
-             *     series numbered one way only.
+             *     TMDB's own numbering (`tmdb-aired`) and its episode groups, then those
+             *     made here — each with its places: an episode the work holds by its id
+             *     as the work gives it now, or the record the order carries of one it
+             *     does not. Empty for a film, or a series numbered one way only.
              */
             orders: components["schemas"]["EpisodeOrder"][];
             /** @description Who numbers the series, and what its clients are offered. */
@@ -8451,6 +8735,80 @@ export interface components {
              *     own images: a lock (`season:N/primaryPoster`), as the work's is.
              */
             primaryImages?: components["schemas"]["PrimaryImages"];
+            /**
+             * @description The season's title and synopsis in other languages, as TMDB's season
+             *     documents give them; never a tagline. A text locked on the season in
+             *     a language comes before them: see [`fields::season_text`].
+             */
+            translations?: components["schemas"]["Translation"][];
+        };
+        /**
+         * @description One AniList and MyAnimeList entry a season is, or one of the cours it is
+         *     split into, as the anime identifier list places it on the season's
+         *     episodes, and described from them.
+         */
+        SeasonCour: {
+            /** Format: int64 */
+            anilistId?: number | null;
+            /** Format: int64 */
+            malId?: number | null;
+            /** @description `TV`, `ONA`, `OVA`…, as the list files it. */
+            format?: string | null;
+            /**
+             * Format: int32
+             * @description Which of the season's entries it is, the first being 1, and how many
+             *     the list splits the season into.
+             */
+            part: number;
+            /** Format: int32 */
+            parts: number;
+            /**
+             * Format: int32
+             * @description Its first and last episodes the catalogue holds, by their number in
+             *     the season.
+             */
+            firstEpisode: number;
+            /** Format: int32 */
+            lastEpisode: number;
+            /** @description The day it premiered, or will: `YYYY-MM-DD`. */
+            starts: string;
+            /** @description Its last episode's day, once it has finished. */
+            ends?: string | null;
+            /**
+             * Format: int64
+             * @description Its episodes, and how many have aired.
+             */
+            episodes: number;
+            /** Format: int64 */
+            aired: number;
+            status: components["schemas"]["CourStatus"];
+            nextEpisode?: components["schemas"]["SeasonCourNext"] | null;
+            /**
+             * @description What the catalogue already calls it, where the work's related
+             *     entries name it.
+             */
+            title?: string | null;
+            mal?: components["schemas"]["MalEntry"] | null;
+        };
+        /** @description The next episode of an entry to air. */
+        SeasonCourNext: {
+            /**
+             * Format: int32
+             * @description Its number within the entry, the entry's first being 1, as AniList
+             *     counts.
+             */
+            episode: number;
+            /**
+             * Format: int32
+             * @description Its number in the season.
+             */
+            episodeNumber: number;
+            airDate: string;
+            /**
+             * Format: int64
+             * @description When it airs, in seconds since the epoch.
+             */
+            airingAt: number;
         };
         /** @description One line of the chart. */
         SeasonEntry: {
@@ -8477,6 +8835,13 @@ export interface components {
             aired?: number | null;
             nextEpisode?: components["schemas"]["NextEpisode"] | null;
             sequelOf?: components["schemas"]["Kin"] | null;
+            /**
+             * @description The AniList and MyAnimeList entries of the season that premiere in
+             *     the quarter: the season itself where it is one entry, or the cour of
+             *     it that starts here — the second half of a split season among those
+             *     carrying on.
+             */
+            cours?: components["schemas"]["SeasonCour"][];
         };
         /**
          * @description A quarter of the calendar, by the name a season chart gives it.
@@ -8807,6 +9172,103 @@ export interface components {
             count: number;
             value: string;
         };
+        /** @description An episode as Skyhook's TMDB edition serves it: known by its TMDB id. */
+        SkyhookTmdbEpisodeResource: {
+            /**
+             * Format: int64
+             * @description The id the series was asked by.
+             */
+            tmdbShowId: number;
+            /**
+             * Format: int64
+             * @description TMDB's id for the episode; for one TMDB gave none — an episode
+             *     TheTVDB alone lists, a record written here — a negative one made of
+             *     what names it, the same at every answer.
+             */
+            tmdbId: number;
+            /** Format: int32 */
+            seasonNumber: number;
+            /** Format: int32 */
+            episodeNumber: number;
+            title: string;
+            airDate?: string | null;
+            airDateUtc?: string | null;
+            /** Format: int32 */
+            runtime?: number | null;
+            overview?: string | null;
+            image?: string | null;
+            finaleType?: string | null;
+        };
+        /**
+         * @description A series as Skyhook's TMDB edition serves it, `/v2/tmdb/…`: what the
+         *     TheTVDB edition says of it, asked by TMDB's id and numbered as TMDB
+         *     numbers it — its episodes known by their TMDB ids, TMDB's episode groups
+         *     its other orders under their bare ids — and without what the real service
+         *     leaves out of this edition: alternative titles, a time of day, an
+         *     episode's TheTVDB ids, its absolute number, where a special airs and its
+         *     rating.
+         */
+        SkyhookTmdbShowResource: {
+            title: string;
+            /** @description As the TheTVDB edition writes it: see [`ShowResourceV2`]. */
+            originalTitle: string;
+            /**
+             * Format: int64
+             * @description The id the TheTVDB edition knows the series by: TheTVDB's, or the
+             *     one this server made for a series TheTVDB does not list (see
+             *     [`ids::for_client`]), so that a series Sonarr holds under it is
+             *     known as the same. Left out for none, as the real service leaves it
+             *     out of a series TheTVDB does not list.
+             */
+            tvdbId?: number | null;
+            /**
+             * Format: int64
+             * @description The id asked by, echoed back: TMDB's, or for a work no TMDB id names
+             *     — a Fan-Kai, a series entered by hand — the one Sonarr knows it by.
+             */
+            tmdbId: number;
+            /** Format: int64 */
+            tvRageId?: number | null;
+            /** Format: int64 */
+            tvMazeId?: number | null;
+            imdbId?: string | null;
+            overview?: string | null;
+            slug: string;
+            formats: string[];
+            originalCountry?: string | null;
+            originalLanguage?: string | null;
+            language: string;
+            firstAired?: string | null;
+            lastAired?: string | null;
+            malIds: number[];
+            anidbIds: number[];
+            aniListIds: number[];
+            lastUpdated: string;
+            status: string;
+            /** Format: int32 */
+            runtime?: number | null;
+            originalNetwork?: string | null;
+            network?: string | null;
+            genres: string[];
+            contentRating?: string | null;
+            rating?: components["schemas"]["SkyhookRatingResource"] | null;
+            translations: components["schemas"]["SkyhookTranslationResource"][];
+            /**
+             * @description TMDB's own numbering first, `default`; then TMDB's episode groups,
+             *     each under its id on TMDB, and the orders made here.
+             */
+            seasonTypes: components["schemas"]["SeasonTypeResource"][];
+            actors: components["schemas"]["ActorResource"][];
+            images: components["schemas"]["SkyhookImageResource"][];
+            seasons: components["schemas"]["SeasonResourceV2"][];
+            /** @description Left out of a search result, as the real service leaves it. */
+            episodes?: components["schemas"]["SkyhookTmdbEpisodeResource"][] | null;
+            /**
+             * @description `tmdb`; `fankai` for a Fan-Kai, `local` for a series entered by hand
+             *     that nothing elsewhere names.
+             */
+            metadataSource: string;
+        };
         /**
          * @description The series' title and overview in one language. Named apart in the
          *     spec: Radarr's surface has a `TranslationResource` of its own, in
@@ -8984,7 +9446,7 @@ export interface components {
          * @description A task, sent under the name the history files its runs by.
          * @enum {string}
          */
-        TaskId: "refresh.sweep" | "refresh.all" | "import.anime" | "import.imdb" | "imdb.akas" | "imdb.episodes" | "import.batch" | "import.rules" | "export.nfo" | "media.store" | "media.sweep" | "media.variants" | "media.avif" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild" | "listing.relist";
+        TaskId: "refresh.sweep" | "refresh.all" | "refresh.replay" | "import.anime" | "import.imdb" | "imdb.akas" | "imdb.episodes" | "import.batch" | "import.rules" | "export.nfo" | "media.store" | "media.sweep" | "media.variants" | "media.avif" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild" | "listing.relist";
         /** @enum {string} */
         TaskMode: "scheduled" | "manual" | "off";
         /**
@@ -9297,6 +9759,40 @@ export interface components {
              * @description What they weighed, in bytes.
              */
             bytes: number;
+        };
+        /** @description A video a source lists for a work. */
+        Video: {
+            /** @description This server's id for it; empty in a source's answer. */
+            id?: string;
+            /** @description Where it is: `YouTube`, `Vimeo`. */
+            site: string;
+            /** @description What it is found by there: a YouTube video's id. */
+            key: string;
+            name?: string | null;
+            /**
+             * @description What it is, as TMDB says: `Trailer`, `Teaser`, `Clip`, `Featurette`,
+             *     `Behind the Scenes`, `Bloopers`, `Opening Credits`.
+             */
+            videoType?: string | null;
+            /** @description The language it speaks: ISO 639-3, as the rest of the model. */
+            language?: string | null;
+            /** @description The country it was put out for: ISO 3166-1 alpha-2, upper case. */
+            country?: string | null;
+            /** @description Put out by the work's makers. */
+            official: boolean;
+            /** @description When, as TMDB writes it: `2024-09-17T16:44:25.000Z`. */
+            publishedAt?: string | null;
+            /**
+             * Format: int32
+             * @description Its height in lines: `1080`, `2160`.
+             */
+            size?: number | null;
+            /** @description TMDB's id for the video itself. */
+            tmdbId?: string | null;
+            /** @description The source that listed it: `tmdb`. */
+            source?: string | null;
+            /** Format: int32 */
+            sortOrder: number;
         };
         /** @description One work wanted, by its id at a source. */
         WantedWork: {
@@ -12142,6 +12638,48 @@ export interface operations {
             };
         };
     };
+    browse_company: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The reader's language: `fr`. The titles, the genre's name and the note
+                 *     are read in it where they are written in it.
+                 */
+                language?: string;
+            };
+            header?: never;
+            path: {
+                /** @description This server's id for the network or the company */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetPage"];
+                };
+            };
+            /** @description The language is not one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No network or company has that id, or none of its works is one this reader may see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     browse_compare: {
         parameters: {
             query: {
@@ -12696,6 +13234,17 @@ export interface operations {
                 originalLanguage?: string;
                 /** @description A network or a studio, by name, whatever its case. */
                 network?: string;
+                /**
+                 * @description A network or a company by this server's id for it — a work's
+                 *     `companies[].company.id` — whatever it did for the works: what its
+                 *     page, `GET /companies/{id}`, lists.
+                 */
+                company?: string;
+                /**
+                 * @description A keyword by this server's id for it — a work's
+                 *     `keywordEntities[].id` — as its page, `GET /keywords/{id}`, lists.
+                 */
+                keywordId?: string;
                 /** @description The TMDB collection a film belongs to. */
                 collection?: number;
                 /**
@@ -13287,6 +13836,17 @@ export interface operations {
                 originalLanguage?: string;
                 /** @description A network or a studio, by name, whatever its case. */
                 network?: string;
+                /**
+                 * @description A network or a company by this server's id for it — a work's
+                 *     `companies[].company.id` — whatever it did for the works: what its
+                 *     page, `GET /companies/{id}`, lists.
+                 */
+                company?: string;
+                /**
+                 * @description A keyword by this server's id for it — a work's
+                 *     `keywordEntities[].id` — as its page, `GET /keywords/{id}`, lists.
+                 */
+                keywordId?: string;
                 /** @description The TMDB collection a film belongs to. */
                 collection?: number;
                 /**
@@ -15748,6 +16308,48 @@ export interface operations {
             };
         };
     };
+    browse_keyword: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The reader's language: `fr`. The titles, the genre's name and the note
+                 *     are read in it where they are written in it.
+                 */
+                language?: string;
+            };
+            header?: never;
+            path: {
+                /** @description This server's id for the keyword */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetPage"];
+                };
+            };
+            /** @description The language is not one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No keyword has that id, or none of its works is one this reader may see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     lists_list: {
         parameters: {
             query?: never;
@@ -16953,6 +17555,12 @@ export interface operations {
                  *     is counted from it. UTC's when absent, or more than a day off it.
                  */
                 today?: string;
+                /**
+                 * @description Describe each AniList and MyAnimeList entry listed under an entry's
+                 *     `cours` as MyAnimeList does, asking it where this server has nothing
+                 *     at hand: slower, a few seconds for a season of sequels.
+                 */
+                describe?: boolean;
             };
             header?: never;
             path: {
@@ -17395,7 +18003,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description It is running already, or a backup is being restored */
+            /** @description It is running already, or a task sharing its work is — a refresh in bulk and the answers kept filled in never run together — or a backup is being restored */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -18696,6 +19304,91 @@ export interface operations {
             };
         };
     };
+    sonarr_search_tmdb: {
+        parameters: {
+            query?: {
+                /** @description Three-letter language code, as Sonarr writes it; English when left out */
+                language?: string;
+                /** @description Free text, or `prefix:id` */
+                term?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkyhookTmdbShowResource"][];
+                };
+            };
+            /** @description The caller's address is not in the allowlist */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No source that could answer this search did, and the catalogue holds nothing by that name */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    sonarr_show_tmdb: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Three-letter language code, as Sonarr writes it: `eng`, `fra` */
+                language: string;
+                /** @description TMDB series id, or the one Sonarr knows a Fan-Kai or a series entered by hand by */
+                tmdb_id: number;
+                /** @description `default`, TMDB's own numbering; a TMDB episode group's id; an order made here, `ams-…` */
+                season_type: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkyhookTmdbShowResource"];
+                };
+            };
+            /** @description The caller's address is not in the allowlist */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Every source that could resolve this id answered that there is no such series */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A source that could have resolved this id did not answer, and nothing is held to answer with; or TMDB's numbering of a series TheTVDB numbers is neither kept nor could be read */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     sonarr_search_v2: {
         parameters: {
             query?: {
@@ -18850,8 +19543,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description TheTVDB's answer, with the fields locked here written in where it is about a work of this catalogue. When TheTVDB fails — no answer, 429, 5xx — its last answer to the same request made with this server's token stands in, with Age, a week old at the most, and a reference list from the database, six months; never for `updates` */
+            /** @description TheTVDB's answer, with the fields locked here written in where it is about a work of this catalogue. When TheTVDB fails — no answer, 429, 5xx — its last answer to the same request made with this server's token stands in, with Age, a week old at the most, and a reference list from the database, six months; never for `updates`. With `tvdb.relayMode = local-first`, a work held here written here, in TheTVDB's shape */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description With `tvdb.relayMode = local-first`, a page of a held series' episodes narrowed to a number with no season, refused as TheTVDB refuses it */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -18866,6 +19566,13 @@ export interface operations {
             };
             /** @description Not a read, or the operator's own account asked for with a key issued here */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description TheTVDB's own; or, with `tvdb.relayMode = local-first`, the text of a held work TheTVDB does not know in a language held nowhere here, written as TheTVDB writes its own */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

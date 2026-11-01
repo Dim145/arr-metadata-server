@@ -120,6 +120,8 @@ function Credits({ work, onChanged, onRemove }: PanelProps) {
     ['writer', c.writer],
     ['producer', c.producer],
     ['guest', c.guest],
+    // The rest of the crew — a composer, an editor — its job kept as its part.
+    ['crew', c.crew],
   ] as const
 
   const castFilter = (

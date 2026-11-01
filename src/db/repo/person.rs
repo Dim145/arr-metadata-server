@@ -1868,6 +1868,9 @@ pub struct Details {
     pub also_known_as: Vec<String>,
     /// Their name in their own script, where one of those is.
     pub original_name: Option<String>,
+    /// Their name and biography in other languages: written in place of
+    /// those kept when TMDB gave any, else those kept stand.
+    pub translations: Vec<crate::domain::person::PersonTranslation>,
 }
 
 /// Keep what TMDB says of somebody, and when it was asked. On a record put
@@ -1973,10 +1976,55 @@ pub async fn write_details(db: &Db, id: &str, details: &Details) -> Result<()> {
             add_alias(db, &mut tx, id, alias, "tmdb").await?;
         }
     }
+
+    if !details.translations.is_empty() {
+        sqlx::query(db.sql("DELETE FROM person_translation WHERE person_id = ?"))
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        for translation in &details.translations {
+            sqlx::query(db.sql(
+                "INSERT INTO person_translation (person_id, language, name, biography)
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT (person_id, language) DO NOTHING",
+            ))
+            .bind(id)
+            .bind(&translation.language)
+            .bind(&translation.name)
+            .bind(&translation.biography)
+            .execute(&mut *tx)
+            .await
+            .context("failed to keep somebody's biography in another language")?;
+        }
+    }
+
     tx.commit()
         .await
         .context("failed to commit what TMDB says of somebody")?;
     Ok(())
+}
+
+/// Somebody's name and biography in every language kept, by language.
+pub async fn translations(
+    db: &Db,
+    person_id: &str,
+) -> Result<Vec<crate::domain::person::PersonTranslation>> {
+    let rows = sqlx::query(db.sql(
+        "SELECT language, name, biography FROM person_translation
+          WHERE person_id = ? ORDER BY language",
+    ))
+    .bind(person_id)
+    .fetch_all(db.pool())
+    .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(crate::domain::person::PersonTranslation {
+                language: row.text("language")?,
+                name: row.opt_text("name")?,
+                biography: row.opt_text("biography")?,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

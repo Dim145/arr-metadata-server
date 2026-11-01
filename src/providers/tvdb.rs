@@ -23,9 +23,9 @@ use crate::{
     config,
     db::{new_id, now},
     domain::{
-        CountryRelease, CoverType, Credit, CreditType, Episode, EpisodeOrder, ExternalIds, Image,
-        MediaItem, MediaKind, OrderKind, OrderRecord, PlacedEpisode, Season, Translation,
-        make_slug, person::PersonRef,
+        Company, CompanyCredit, CompanyRole, CountryRelease, CoverType, Credit, CreditType,
+        Episode, EpisodeOrder, ExternalIds, Image, MediaItem, MediaKind, OrderKind, OrderRecord,
+        PlacedEpisode, Season, Translation, make_slug, person::PersonRef,
     },
 };
 
@@ -752,8 +752,12 @@ struct SeriesExtended {
     original_country: Option<String>,
     original_language: Option<String>,
     airs_time: Option<String>,
-    original_network: Option<Named>,
-    latest_network: Option<Named>,
+    original_network: Option<CompanyRecord>,
+    latest_network: Option<CompanyRecord>,
+    /// Every company of the series — its networks, studios, producers and
+    /// distributors — each with its kind of company.
+    #[serde(default)]
+    companies: Vec<CompanyRecord>,
     #[serde(default)]
     genres: Vec<Named>,
     #[serde(default)]
@@ -801,6 +805,26 @@ struct CharacterRecord {
 struct Named {
     #[serde(default)]
     name: String,
+}
+
+/// A company as TheTVDB files it: one numbering for networks and companies
+/// alike, and a country in ISO 3166-1 alpha-3 — `usa`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompanyRecord {
+    id: Option<i64>,
+    #[serde(default)]
+    name: String,
+    country: Option<String>,
+    company_type: Option<CompanyType>,
+}
+
+/// What a company was to the series: 1 its network, 2 a studio, 3 a
+/// production company, 4 a distributor, 5 its special effects.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompanyType {
+    company_type_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1070,6 +1094,7 @@ fn to_item(series: &SeriesExtended, language: &str) -> MediaItem {
         None => make_slug(&item.title, item.year),
     };
 
+    item.companies = companies(series);
     item.external_ids = external_ids(series);
     item.content_rating_country = None;
 
@@ -1194,6 +1219,8 @@ fn characters(series: &SeriesExtended, limit: usize) -> (Vec<Credit>, BTreeMap<S
             credit_tmdb_id: None,
             sort_order: i32::try_from(credits.len()).unwrap_or(i32::MAX),
             is_manual: false,
+            department: None,
+            job: None,
         };
         if let Some(id) = part.people_id.filter(|id| *id > 0) {
             known.insert(
@@ -1208,6 +1235,76 @@ fn characters(series: &SeriesExtended, limit: usize) -> (Vec<Credit>, BTreeMap<S
         credits.push(credit);
     }
     (credits, known)
+}
+
+/// The series' companies as entities, each by TheTVDB's id, in what it did:
+/// its networks — the original one first, then the latest — its studios,
+/// its production companies and its distributors, each role in TheTVDB's
+/// order; one listed twice once. Special effects houses are left out.
+fn companies(series: &SeriesExtended) -> Vec<CompanyCredit> {
+    let role_of =
+        |record: &CompanyRecord| match record.company_type.as_ref().and_then(|t| t.company_type_id)
+        {
+            Some(1) => Some(CompanyRole::Network),
+            Some(2) => Some(CompanyRole::Studio),
+            Some(3) => Some(CompanyRole::Production),
+            Some(4) => Some(CompanyRole::Distributor),
+            _ => None,
+        };
+    let networks = series
+        .original_network
+        .iter()
+        .chain(&series.latest_network)
+        .map(|record| (CompanyRole::Network, record));
+    let others = series
+        .companies
+        .iter()
+        .filter_map(|record| Some((role_of(record)?, record)));
+
+    let mut out: Vec<CompanyCredit> = Vec::new();
+    for (role, record) in networks.chain(others) {
+        let name = record.name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let company = Company {
+            id: String::new(),
+            kind: role.kind(),
+            name: name.to_string(),
+            tmdb_id: None,
+            tvdb_id: record.id,
+            logo: None,
+            country: record
+                .country
+                .as_deref()
+                .and_then(crate::providers::lang::iso_3166_3_to_2)
+                .map(str::to_string),
+        };
+        if out
+            .iter()
+            .any(|kept| kept.role == role && kept.company.is_same(&company))
+        {
+            continue;
+        }
+        let sort_order = out.iter().filter(|kept| kept.role == role).count();
+        out.push(CompanyCredit {
+            company,
+            role,
+            sort_order: i32::try_from(sort_order).unwrap_or(i32::MAX),
+            source: Some(crate::providers::names::TVDB.to_string()),
+        });
+    }
+    out
+}
+
+/// The series' companies, read off TheTVDB's answer as it is kept — the
+/// envelope and all — as [`companies`] reads them off a fresh one. None
+/// from a document that is not a series'.
+pub fn companies_of(raw: &Value) -> Vec<CompanyCredit> {
+    let data = raw.get("data").unwrap_or(raw);
+    serde_json::from_value::<SeriesExtended>(data.clone())
+        .map(|series| companies(&series))
+        .unwrap_or_default()
 }
 
 fn external_ids(series: &SeriesExtended) -> ExternalIds {
@@ -1330,6 +1427,7 @@ fn seasons(series: &SeriesExtended) -> Vec<Season> {
                 is_manual: false,
                 images: Vec::new(),
                 primary_images: Default::default(),
+                translations: Vec::new(),
             })
         })
         .collect();
@@ -2085,5 +2183,85 @@ mod tests {
         assert_eq!(alpha3_to_alpha2("usa").as_deref(), Some("US"));
         assert_eq!(alpha3_to_alpha2("USA").as_deref(), Some("US"));
         assert_eq!(alpha3_to_alpha2("xyz"), None);
+    }
+
+    /// The series' companies, as TheTVDB files them: its networks first —
+    /// the original, then the latest — then each kind in TheTVDB's order,
+    /// by TheTVDB's id and with their country in alpha-2.
+    #[test]
+    fn the_series_companies_are_entities_with_thetvdb_s_ids() {
+        let company = |id: i64, name: &str, kind: i64| {
+            serde_json::json!({
+                "id": id, "name": name, "country": "usa",
+                "companyType": { "companyTypeId": kind, "companyTypeName": "whatever" }
+            })
+        };
+        let series: SeriesExtended = serde_json::from_value(serde_json::json!({
+            "id": 81189,
+            "name": "Breaking Bad",
+            "originalNetwork": company(389, "AMC", 1),
+            "latestNetwork": company(389, "AMC", 1),
+            "companies": [
+                company(389, "AMC", 1),
+                company(49088, "High Bridge Productions", 3),
+                company(77, "A Studio", 2),
+                company(88, "A Distributor", 4),
+                company(99, "Some Effects", 5),
+                company(39667, "Sony Pictures Television", 3)
+            ]
+        }))
+        .expect("a series");
+
+        let item = to_item(&series, "eng");
+        // Its role, its name, TheTVDB's id, its country, its place.
+        type Read<'a> = (CompanyRole, &'a str, Option<i64>, Option<&'a str>, i32);
+        let read: Vec<Read<'_>> = item
+            .companies
+            .iter()
+            .map(|c| {
+                (
+                    c.role,
+                    c.company.name.as_str(),
+                    c.company.tvdb_id,
+                    c.company.country.as_deref(),
+                    c.sort_order,
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (CompanyRole::Network, "AMC", Some(389), Some("US"), 0),
+                (
+                    CompanyRole::Production,
+                    "High Bridge Productions",
+                    Some(49088),
+                    Some("US"),
+                    0
+                ),
+                (CompanyRole::Studio, "A Studio", Some(77), Some("US"), 0),
+                (
+                    CompanyRole::Distributor,
+                    "A Distributor",
+                    Some(88),
+                    Some("US"),
+                    0
+                ),
+                (
+                    CompanyRole::Production,
+                    "Sony Pictures Television",
+                    Some(39667),
+                    Some("US"),
+                    1
+                ),
+            ],
+            "AMC once, the special effects left out"
+        );
+        assert!(
+            item.companies
+                .iter()
+                .all(|c| c.company.tmdb_id.is_none() && c.source.as_deref() == Some("tvdb"))
+        );
+        assert_eq!(item.network.as_deref(), Some("AMC"), "the text as before");
     }
 }

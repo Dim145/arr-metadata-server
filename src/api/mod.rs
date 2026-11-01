@@ -410,6 +410,8 @@ mod tests {
             "/v1/tvdb/shows/{language}/{tvdb_id}",
             "/v2/tvdb/shows/{language}/{tvdb_id}/{season_type}",
             "/v2/tvdb/search",
+            "/v2/tmdb/shows/{language}/{tmdb_id}/{season_type}",
+            "/v2/tmdb/search",
             "/v1/movie/{tmdb_id}",
             "/v1/list/imdb/{id}",
             "/3/{path}",
@@ -963,6 +965,7 @@ mod tests {
 
         for path in [
             "/v1/tvdb/shows/{language}/{tvdb_id}",
+            "/v2/tmdb/shows/{language}/{tmdb_id}/{season_type}",
             "/v1/movie/{tmdb_id}",
             "/plex",
             "/plex/library/metadata/{rating_key}",

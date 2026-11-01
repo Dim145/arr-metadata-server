@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::domain::{
-    AlternativeTitle, Credit, Episode, Image, MediaItem, MediaKind, Relation, Season,
+    AlternativeTitle, Credit, Episode, Image, Keyword, MediaItem, MediaKind, Relation, Season,
     fields::ITEM_FIELDS,
 };
 
@@ -28,7 +28,11 @@ use super::{Contribution, DATE_CHECKED, TVDB_NUMBERED};
 /// What the merge takes from the first provider that has one, beyond the
 /// fields a person may edit. Never shown beside a field, but needed to hand a
 /// provider back what it gave when another is synced alone.
-const ALSO_TRACKED: &[&str] = &["popularity", "credits", "relations"];
+const ALSO_TRACKED: &[&str] = &["popularity", "credits", "relations", "keywordEntities"];
+
+/// The lists [`carry_over`] keeps the giver of when the merge came back
+/// without them, as the write keeps the lists.
+const LISTS: &[&str] = &["credits", "relations", "keywordEntities"];
 
 /// The work as stored, beneath every provider in a sync from chosen sources:
 /// whatever nobody gave anew stays as it was. Never a provider of record.
@@ -217,6 +221,8 @@ struct Tracked<'a> {
     credits: &'a [Credit],
     #[serde(skip_serializing_if = "<[Relation]>::is_empty")]
     relations: &'a [Relation],
+    #[serde(skip_serializing_if = "<[Keyword]>::is_empty")]
+    keyword_entities: &'a [Keyword],
 }
 
 fn tracked_json(item: &MediaItem) -> serde_json::Value {
@@ -255,6 +261,7 @@ fn tracked_json(item: &MediaItem) -> serde_json::Value {
         keywords: &item.keywords,
         credits: &item.credits,
         relations: &item.relations,
+        keyword_entities: &item.keyword_entities,
     })
     .unwrap_or_default()
 }
@@ -462,7 +469,7 @@ pub fn carry_over(now: &mut Provenance, before: &Provenance, returned: &Returned
     if !returned.pictures && now.images.is_empty() {
         now.images.clone_from(&before.images);
     }
-    for list in ["credits", "relations"] {
+    for &list in LISTS {
         if !now.fields.contains_key(list)
             && let Some(source) = before.fields.get(list)
         {
@@ -681,12 +688,37 @@ pub fn reconstruct(
             .collect();
     }
 
-    // Each release says whose it is.
+    // Each release says whose it is; so does each company and each video.
     item.releases = stored
         .releases
         .iter()
         .filter(|r| r.source.as_deref() == Some(provider))
         .cloned()
+        .collect();
+    item.companies = stored
+        .companies
+        .iter()
+        .filter(|c| c.source.as_deref() == Some(provider))
+        .cloned()
+        .collect();
+    item.videos = stored
+        .videos
+        .iter()
+        .filter(|v| v.source.as_deref() == Some(provider))
+        .cloned()
+        .collect();
+    // What it said of its own pictures, by their addresses.
+    let own_addresses: std::collections::HashSet<&str> = item
+        .images
+        .iter()
+        .chain(item.seasons.iter().flat_map(|s| s.images.iter()))
+        .map(|image| image.url.as_str())
+        .collect();
+    item.image_details = stored
+        .image_details
+        .iter()
+        .filter(|(address, _)| own_addresses.contains(address.as_str()))
+        .map(|(address, details)| (address.clone(), *details))
         .collect();
 
     let gave_a_list = !item.images.is_empty()
@@ -694,7 +726,9 @@ pub fn reconstruct(
         || !item.translations.is_empty()
         || !item.ratings.is_empty()
         || !item.alternative_titles.is_empty()
-        || !item.releases.is_empty();
+        || !item.releases.is_empty()
+        || !item.companies.is_empty()
+        || !item.videos.is_empty();
     (gave_a_value || gave_a_list).then_some(item)
 }
 
@@ -717,13 +751,14 @@ pub fn leftover(stored: &MediaItem, answered: &[&str]) -> MediaItem {
     for season in &mut item.seasons {
         season.images.retain(kept);
     }
-    // Nor a release the source that answered no longer lists.
-    item.releases.retain(|release| {
-        !release
-            .source
-            .as_deref()
-            .is_some_and(|source| answered.contains(&source))
-    });
+    // Nor a release, a company or a video the source that answered no
+    // longer lists.
+    let theirs = |source: Option<&str>| source.is_some_and(|source| answered.contains(&source));
+    item.releases
+        .retain(|release| !theirs(release.source.as_deref()));
+    item.companies
+        .retain(|company| !theirs(company.source.as_deref()));
+    item.videos.retain(|video| !theirs(video.source.as_deref()));
     item
 }
 
@@ -1249,6 +1284,20 @@ fn is_empty(value: &serde_json::Value) -> bool {
 /// merge completes — compared by what each is, a part and whose name.
 fn compared(name: &str, value: &serde_json::Value) -> serde_json::Value {
     match (name, value) {
+        // Each by TMDB's id and its name: a keyword read back carries this
+        // server's id for it, which a source's answer has none of.
+        ("keywordEntities", serde_json::Value::Array(keywords)) => keywords
+            .iter()
+            .map(|keyword| {
+                let id = keyword.get("tmdbId").map(ToString::to_string);
+                let name = keyword.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                serde_json::Value::String(format!(
+                    "{}|{}",
+                    id.unwrap_or_default(),
+                    name.trim().to_lowercase()
+                ))
+            })
+            .collect(),
         ("credits", serde_json::Value::Array(credits)) => credits
             .iter()
             .map(|credit| {
@@ -1445,6 +1494,7 @@ mod tests {
                 is_manual: false,
                 images,
                 primary_images: Default::default(),
+                translations: Vec::new(),
             }
         }
         fn with_episode(mut item: MediaItem) -> MediaItem {
@@ -1767,6 +1817,11 @@ mod tests {
         item.keywords = vec!["k".into()];
         item.production_countries = vec!["US".into()];
         item.production_companies = vec!["C".into()];
+        item.keyword_entities = vec![Keyword {
+            id: "k1".into(),
+            tmdb_id: Some(1),
+            name: "k".into(),
+        }];
         item.credits = serde_json::from_value(serde_json::json!([
             { "id": "c", "personName": "P", "creditType": "actor", "sortOrder": 0, "isManual": false }
         ]))
@@ -1849,6 +1904,8 @@ mod tests {
             credit_tmdb_id: None,
             sort_order: 0,
             is_manual: false,
+            department: None,
+            job: None,
         };
         let mut tmdb = item("Breaking Bad", None, None);
         tmdb.credits = vec![
@@ -2277,5 +2334,103 @@ mod tests {
         for name in EPISODE_WATCHED {
             assert!(EPISODE_FIELDS.iter().any(|def| def.name == *name), "{name}");
         }
+    }
+
+    /// The companies, the videos, TMDB's keywords and what is said of its
+    /// pictures go back to whoever gave them in a sync from another, and a
+    /// source that answered again is not given its old ones back.
+    #[test]
+    fn companies_videos_keywords_and_picture_details_go_back_to_whoever_gave_them() {
+        use crate::domain::{Company, CompanyCredit, CompanyRole, ImageDetails, Keyword, Video};
+
+        let company = |name: &str, source: &str| CompanyCredit {
+            company: Company {
+                id: String::new(),
+                kind: CompanyRole::Network.kind(),
+                name: name.into(),
+                tmdb_id: (source == "tmdb").then_some(174),
+                tvdb_id: (source == "tvdb").then_some(389),
+                logo: None,
+                country: None,
+            },
+            role: CompanyRole::Network,
+            sort_order: 0,
+            source: Some(source.into()),
+        };
+        let video = |key: &str, source: &str| Video {
+            id: String::new(),
+            site: "YouTube".into(),
+            key: key.into(),
+            name: None,
+            video_type: None,
+            language: None,
+            country: None,
+            official: false,
+            published_at: None,
+            size: None,
+            tmdb_id: None,
+            source: Some(source.into()),
+            sort_order: 0,
+        };
+
+        let mut tmdb = item("A", None, None);
+        tmdb.companies = vec![company("AMC", "tmdb")];
+        tmdb.videos = vec![video("t", "tmdb")];
+        tmdb.keyword_entities = vec![Keyword {
+            id: String::new(),
+            tmdb_id: Some(1508),
+            name: "new mexico".into(),
+        }];
+        tmdb.images.push(poster("tmdb", "https://t/1.jpg"));
+        tmdb.image_details.insert(
+            "https://t/1.jpg".into(),
+            ImageDetails {
+                width: Some(2000),
+                ..Default::default()
+            },
+        );
+        let mut tvdb = item("A", None, None);
+        tvdb.companies = vec![company("AMC", "tvdb"), {
+            let mut studio = company("A Studio", "tvdb");
+            studio.role = CompanyRole::Studio;
+            studio.company.kind = CompanyRole::Studio.kind();
+            studio
+        }];
+        let (stored, provenance) = merge(vec![("tmdb", tmdb), ("tvdb", tvdb)]);
+        assert_eq!(provenance.fields["keywordEntities"].from, "tmdb");
+        assert_eq!(
+            stored.companies.len(),
+            2,
+            "TMDB's network, TheTVDB's studio"
+        );
+
+        let given = reconstruct(&stored, &provenance, "tmdb").expect("TMDB gave");
+        assert_eq!(given.companies.len(), 1);
+        assert_eq!(given.companies[0].company.tmdb_id, Some(174));
+        assert_eq!(
+            given.companies[0].company.tvdb_id,
+            Some(389),
+            "as it was kept, completed"
+        );
+        assert_eq!(given.videos.len(), 1);
+        assert_eq!(given.keyword_entities.len(), 1);
+        assert_eq!(
+            given.image_details["https://t/1.jpg"].width,
+            Some(2000),
+            "what was said of its own pictures"
+        );
+        let given = reconstruct(&stored, &provenance, "tvdb").expect("TheTVDB gave");
+        assert_eq!(given.companies.len(), 1, "its studio");
+        assert!(given.videos.is_empty() && given.keyword_entities.is_empty());
+
+        // TheTVDB synced alone, without its studio now: TMDB's stand.
+        let mut fresh = item("A", None, None);
+        fresh.companies = vec![company("AMC", "tvdb")];
+        let (after, now) = synced(&stored, &provenance, vec![("tvdb", fresh)]);
+        let roles: Vec<CompanyRole> = after.companies.iter().map(|c| c.role).collect();
+        assert_eq!(roles, [CompanyRole::Network], "the studio TheTVDB dropped");
+        assert_eq!(after.videos.len(), 1);
+        assert_eq!(after.keyword_entities.len(), 1);
+        assert_eq!(now.fields["keywordEntities"].from, "tmdb");
     }
 }

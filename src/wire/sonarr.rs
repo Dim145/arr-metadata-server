@@ -494,6 +494,8 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
             credit_tmdb_id: None,
             sort_order: i as i32,
             is_manual: false,
+            department: None,
+            job: None,
         })
         .collect();
 
@@ -529,6 +531,7 @@ pub fn to_item(show: &ShowResource) -> MediaItem {
                 .map(|(i, img)| to_image(img, Some(s.season_number), i as i32))
                 .collect(),
             primary_images: Default::default(),
+            translations: Vec::new(),
         })
         .collect();
 

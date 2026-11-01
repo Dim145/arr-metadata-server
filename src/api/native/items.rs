@@ -81,6 +81,13 @@ pub struct ListQuery {
     pub original_language: Option<String>,
     /// A network or a studio, by name, whatever its case.
     pub network: Option<String>,
+    /// A network or a company by this server's id for it — a work's
+    /// `companies[].company.id` — whatever it did for the works: what its
+    /// page, `GET /companies/{id}`, lists.
+    pub company: Option<String>,
+    /// A keyword by this server's id for it — a work's
+    /// `keywordEntities[].id` — as its page, `GET /keywords/{id}`, lists.
+    pub keyword_id: Option<String>,
     /// The TMDB collection a film belongs to.
     #[serde(default, deserialize_with = "crate::api::extract::empty_as_none")]
     pub collection: Option<i64>,
@@ -326,6 +333,8 @@ pub(super) fn to_query(
         ("keyword", &query.keyword),
         ("status", &query.status),
         ("network", &query.network),
+        ("company", &query.company),
+        ("keywordId", &query.keyword_id),
         ("missing", &query.missing),
         ("person", &query.person),
         ("certification", &query.certification),
@@ -407,6 +416,8 @@ pub(super) fn to_query(
         status: query.status,
         original_language: query.original_language,
         network: query.network,
+        company: query.company,
+        keyword_id: query.keyword_id,
         collection: query.collection,
         person: query.person,
         runtime_min: query.runtime_min,
@@ -691,11 +702,44 @@ async fn detail(
 
     if let Some(language) = crate::api::extract::language(query.language.as_deref())? {
         crate::service::language::apply(&state, &mut item, &language).await?;
+        lay_season_texts(&state, &mut item, &language);
     }
 
     service::redact_for_reader(&identity, std::slice::from_mut(&mut item));
 
     Ok(Json(item))
+}
+
+/// Lay each season's title and synopsis in the language asked, where they
+/// are held in it: locked in it, else locked in every language, else TMDB's
+/// translation of the season (see [`crate::domain::fields::season_text`]).
+/// The catalogue's own language needs nothing, its seasons being read in
+/// it; a season with no text in the language keeps its own, as the work's
+/// title does.
+fn lay_season_texts(state: &AppState, item: &mut MediaItem, requested: &str) {
+    let language = service::language::normalize(requested);
+    if language.is_empty() || language == service::language::stored(state) {
+        return;
+    }
+    let texts: Vec<(Option<String>, Option<String>)> = item
+        .seasons
+        .iter()
+        .map(|season| {
+            let text = |field: &str| {
+                crate::domain::fields::season_text(item, season.season_number, field, &language)
+                    .filter(|text| !text.trim().is_empty())
+            };
+            (text("title"), text("overview"))
+        })
+        .collect();
+    for (season, (title, overview)) in item.seasons.iter_mut().zip(texts) {
+        if let Some(title) = title {
+            season.title = Some(title);
+        }
+        if let Some(overview) = overview {
+            season.overview = Some(overview);
+        }
+    }
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -2067,6 +2111,95 @@ mod tests {
             .expect("listed");
         assert_eq!(found.first().map(String::as_str), Some("Breaking Bad"));
         assert_eq!(total, found.len() as i64);
+    }
+
+    #[tokio::test]
+    async fn a_seasons_title_and_synopsis_are_read_in_the_language_asked_where_held() {
+        let state = crate::api::native::testing::server().await;
+        let mut work = MediaItem::empty(MediaKind::Series);
+        work.title = "Tidewater Almanac".into();
+        work.slug = make_slug(&work.title, None);
+        use crate::domain::Translation;
+
+        let season = |number: i32, title: &str, translations: Vec<Translation>| {
+            let mut season = crate::db::repo::child::blank_season(number);
+            // As a source gave it: a season made by hand is written apart.
+            season.is_manual = false;
+            season.title = Some(title.into());
+            season.overview = Some(format!("{title}, as kept."));
+            season.translations = translations;
+            season
+        };
+        let said = |language: &str, title: &str, overview: &str| Translation {
+            language: language.into(),
+            title: Some(title.into()),
+            overview: Some(overview.into()),
+            tagline: None,
+            is_manual: false,
+        };
+        work.seasons = vec![
+            season(
+                1,
+                "The Ebb",
+                vec![said("fra", "Le Reflux", "La mer se retire.")],
+            ),
+            // Held in German alone, and with a French title TMDB left empty.
+            season(
+                2,
+                "The Flow",
+                vec![
+                    said("deu", "Die Flut", "Das Meer kommt."),
+                    said("fra", " ", ""),
+                ],
+            ),
+        ];
+        repo::item::upsert(
+            &state.db,
+            ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+
+        let read = |language: &'static str| {
+            let state = state.clone();
+            let id = work.id.clone();
+            async move {
+                let Json(item) = detail(
+                    State(state),
+                    admin(),
+                    Path(id),
+                    Query(DetailQuery {
+                        language: Some(language.into()),
+                    }),
+                )
+                .await
+                .expect("read");
+                item.seasons
+                    .iter()
+                    .map(|s| {
+                        (
+                            s.title.clone().unwrap_or_default(),
+                            s.overview.clone().unwrap_or_default(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }
+        };
+        let pair = |title: &str, overview: &str| (title.to_string(), overview.to_string());
+
+        assert_eq!(
+            read("fr").await,
+            [
+                pair("Le Reflux", "La mer se retire."),
+                pair("The Flow", "The Flow, as kept."),
+            ]
+        );
+        assert_eq!(read("de-DE").await[1], pair("Die Flut", "Das Meer kommt."));
+        // The catalogue's own language is the seasons' own.
+        assert_eq!(read("en").await[0], pair("The Ebb", "The Ebb, as kept."));
     }
 
     #[tokio::test]

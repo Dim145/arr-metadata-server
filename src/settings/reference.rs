@@ -98,6 +98,19 @@ const GROUPS: &[Group] = &[
                  and a portrait to fetch and keep; a work already held takes a new figure at its \
                  next refresh.",
             ),
+            set(
+                "tmdb.crewLimit",
+                "How many of TMDB's crew a work keeps, every department — directing, writing, \
+                 production, music, camera, editing and the rest — the most telling jobs first. \
+                 `0` keeps none; a work already held takes a new figure at its next refresh.",
+            ),
+            set(
+                "tmdb.imageLimit",
+                "How many of TMDB's posters and backdrops a work keeps, the best of each \
+                 language first; keyart and logos take three fifths of it, rounded up — so `5` \
+                 keeps five posters, five backdrops, three keyart and three logos. A work \
+                 already held takes a new figure at its next refresh.",
+            ),
         ],
     },
     Group {
@@ -413,8 +426,8 @@ const GROUPS: &[Group] = &[
             ),
             set(
                 "api.sonarr",
-                "Sonarr's API: Skyhook's two editions, `/v1/tvdb/…` and `/v2/tvdb/…`, and the \
-                 alternate-title list of `services.sonarr.tv`, `/v1/scenemapping`.",
+                "Sonarr's API: Skyhook's editions, `/v1/tvdb/…`, `/v2/tvdb/…` and `/v2/tmdb/…`, \
+                 and the alternate-title list of `services.sonarr.tv`, `/v1/scenemapping`.",
             ),
             set(
                 "api.radarr",
@@ -487,6 +500,23 @@ const GROUPS: &[Group] = &[
                  `/3/configuration`: `tmdb`, TMDB's own image server; `server`, this server, \
                  from the media it keeps — which takes a media store (`AMS_MEDIA_STORAGE`) and \
                  `AMS_PUBLIC_URL`. Without either, `server` does what `tmdb` does.",
+            ),
+            set(
+                "tmdb.relayMode",
+                "How the TMDB relay answers: `relay` asks TMDB for everything and writes the \
+                 locks into its answers; `local-first` answers a work this server holds — a film, \
+                 a series, its seasons and episodes, a `find` by one of its ids — itself, in \
+                 TMDB's shape, from the catalogue, corrections and works entered by hand \
+                 included, puts the catalogue's works first in searches, and asks TMDB for the \
+                 rest. See [The relays](relays.md).",
+            ),
+            set(
+                "tvdb.relayMode",
+                "How the TheTVDB relay answers: `relay` asks TheTVDB for everything and writes \
+                 the locks into its answers; `local-first` answers a series or a film this \
+                 server holds — its record, its episodes in any order, its seasons and episodes \
+                 — itself, in TheTVDB's shape, from the catalogue, puts the catalogue's works \
+                 first in searches, and asks TheTVDB for the rest. See [The relays](relays.md).",
             ),
         ],
     },
