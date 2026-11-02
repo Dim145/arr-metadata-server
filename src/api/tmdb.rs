@@ -1752,6 +1752,21 @@ mod here {
         ids::for_tmdb(item.kind, &item.id, item.is_manual, &item.external_ids)
     }
 
+    /// [`answered`], for a work reached otherwise than by its number — a
+    /// search, another site's id: a number made of a catalogue id only
+    /// where it leads back to the work, as every dialect hands it
+    /// ([`service::addressed`]). Of two works entered by hand that make one
+    /// number, the one entered later is not answered under it.
+    async fn handed(state: &AppState, item: &MediaItem) -> AppResult<Option<i64>> {
+        let answered = |item: &MediaItem| answered(state, item);
+        Ok(
+            service::addressed(state, item.kind, std::slice::from_ref(item), answered)
+                .await?
+                .pop()
+                .flatten(),
+        )
+    }
+
     /// What a document of a work is written from beside the work: TMDB's
     /// own document of it, whose numbering its seasons are, the language
     /// asked, and what is held in that language of its episodes.
@@ -1999,6 +2014,18 @@ mod here {
             gate: context.gate,
         };
         let work = context.work(&item, id, &pictures);
+        let seasons: Vec<i32> = appended
+            .iter()
+            .filter_map(|name| {
+                name.strip_prefix("season/")?
+                    .split('/')
+                    .next()?
+                    .parse()
+                    .ok()
+            })
+            .collect();
+        let credits = episode_credits(state, &item, &work, &seasons).await?;
+        let work = work.with_episode_credits(credits);
         let tmdb_id = item.external_ids.tmdb;
         let path =
             |below: &str| format!("/3/{}/{}/{below}", kind_path(kind), tmdb_id.unwrap_or(id));
@@ -2055,6 +2082,23 @@ mod here {
             map.extend(added);
         }
         Ok(Some((StatusCode::OK, document)))
+    }
+
+    /// The credits of the episodes TMDB's seasons `asked` hold, as the work
+    /// numbers them — their guests, their directors and writers — for the
+    /// documents of those seasons and their episodes. Nothing read for a
+    /// film, nor where no season is asked.
+    async fn episode_credits(
+        state: &AppState,
+        item: &MediaItem,
+        work: &Work<'_>,
+        asked: &[i32],
+    ) -> AppResult<Vec<(i32, i32, crate::domain::Credit)>> {
+        if item.kind != MediaKind::Series || asked.is_empty() {
+            return Ok(Vec::new());
+        }
+        let seasons = work.held_seasons(asked);
+        Ok(repo::item::episode_credits(&state.db, &item.id, &seasons).await?)
     }
 
     /// What a series' document carries of one of its seasons, asked with it
@@ -2132,6 +2176,8 @@ mod here {
             gate: context.gate,
         };
         let work = context.work(&item, id, &pictures);
+        let credits = episode_credits(state, &item, &work, &[season]).await?;
+        let work = work.with_episode_credits(credits);
         let held_here = match episode {
             Some(episode) => work.has_episode(season, episode),
             None => work.has_season(season),
@@ -2260,7 +2306,7 @@ mod here {
         let Some(item) = found else {
             return Ok(None);
         };
-        let Some(id) = answered(state, &item) else {
+        let Some(id) = handed(state, &item).await? else {
             return Ok(None);
         };
         let context = Context::listed(state, parts, &item).await?;
@@ -2399,7 +2445,7 @@ mod here {
             let Some(item) = service::load(state, &found.id).await? else {
                 continue;
             };
-            let Some(id) = answered(state, &item) else {
+            let Some(id) = handed(state, &item).await? else {
                 continue;
             };
             let context = Context::listed(state, parts, &item).await?;
@@ -5420,6 +5466,71 @@ mod local {
     }
 
     #[tokio::test]
+    async fn an_episodes_guests_and_crew_are_the_catalogues_credits_of_it() {
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, _) = server(&stand_in).await;
+        let mut series = MediaItem::empty(MediaKind::Series);
+        series.title = "Feuilleton aux invités E3".into();
+        series.slug = "feuilleton-aux-invites-e3".into();
+        series.is_manual = true;
+        series.episodes = vec![episode(1, 1), episode(1, 2)];
+        let mut guest = actor("Une invitée", 990_801);
+        guest.credit_type = CreditType::Guest;
+        guest.character_name = Some("La voisine".into());
+        let mut director = actor("Un réalisateur", 990_802);
+        director.credit_type = CreditType::Director;
+        director.character_name = None;
+        director.department = Some("Directing".into());
+        director.job = Some("Director".into());
+        series.people.episodes = [guest, director]
+            .into_iter()
+            .map(|credit| crate::domain::person::EpisodeCredit {
+                season_number: 1,
+                episode_number: 1,
+                tmdb_episode_id: None,
+                credit,
+            })
+            .collect();
+        testing::store(&state, &series, &[]).await;
+        crate::service::listing::after_write(&state, &series.id).await;
+        let handed = ids::own(&series.id);
+
+        let (status, season) = get(&state, &format!("/3/tv/{handed}/season/1")).await;
+        assert_eq!(status, StatusCode::OK, "{season}");
+        let first = &season["episodes"][0];
+        assert_eq!(first["guest_stars"][0]["name"], json!("Une invitée"));
+        assert_eq!(first["guest_stars"][0]["character"], json!("La voisine"));
+        assert_eq!(first["guest_stars"][0]["id"], json!(990_801));
+        assert_eq!(first["crew"][0]["job"], json!("Director"));
+        assert_eq!(first["crew"][0]["department"], json!("Directing"));
+        assert_eq!(season["episodes"][1]["guest_stars"], json!([]));
+
+        // Its own credits: the series' regulars in it are not the
+        // catalogue's to say.
+        let (_, credits) = get(
+            &state,
+            &format!("/3/tv/{handed}/season/1/episode/1/credits"),
+        )
+        .await;
+        assert_eq!(
+            credits["guest_stars"][0]["credit_id"],
+            json!("credit-990801")
+        );
+        assert_eq!(credits["crew"][0]["name"], json!("Un réalisateur"));
+        assert_eq!(credits["cast"], json!([]));
+        // Asked with the series, the same.
+        let (_, show) = get(
+            &state,
+            &format!("/3/tv/{handed}?append_to_response=season/1/episode/1"),
+        )
+        .await;
+        assert_eq!(
+            show["season/1/episode/1"]["guest_stars"][0]["name"],
+            json!("Une invitée")
+        );
+    }
+
+    #[tokio::test]
     async fn the_seasons_of_a_series_numbered_otherwise_than_tmdb_are_tmdbs() {
         let stand_in = StandIn::start(tmdb).await;
         let (state, _) = server(&stand_in).await;
@@ -5453,6 +5564,65 @@ mod local {
         let (status, _) = get(&state, "/3/find/tt0000001?external_source=imdb_id").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(stand_in.asked_at("/3/find/tt0000001").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn of_two_works_entered_by_hand_that_make_one_number_the_first_alone_is_answered() {
+        let stand_in = StandIn::start(tmdb).await;
+        let (state, _) = server(&stand_in).await;
+        // Two catalogue ids that make one number, as works entered by hand
+        // before each was drawn one of its own may.
+        let (first, later) = (
+            "01a10aa3-9e94-7144-506f-1487f725b434",
+            "01a133a0-39ad-7711-326a-4ec28f5dd166",
+        );
+        let number = ids::own(first);
+        assert_eq!(ids::own(later), number);
+        for (id, title, slug, imdb) in [
+            (
+                first,
+                "Doublon tapé à la main, l'aîné",
+                "doublon-aine",
+                "tt9905601",
+            ),
+            (
+                later,
+                "Doublon tapé à la main, le cadet",
+                "doublon-cadet",
+                "tt9905602",
+            ),
+        ] {
+            let mut series = MediaItem::empty(MediaKind::Series);
+            series.id = id.into();
+            series.title = title.into();
+            series.slug = slug.into();
+            series.is_manual = true;
+            series.external_ids.imdb = Some(imdb.into());
+            series.episodes = vec![episode(1, 1)];
+            testing::store(&state, &series, &[]).await;
+            crate::service::listing::after_write(&state, id).await;
+        }
+
+        // TMDB failing its search: the catalogue's, the first alone, under
+        // the number that leads back to it.
+        let (status, page) = get(&state, "/3/search/tv?query=doublon").await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["results"].as_array().map(Vec::len), Some(1), "{page}");
+        assert_eq!(page["results"][0]["id"], json!(number));
+        assert_eq!(
+            page["results"][0]["name"],
+            json!("Doublon tapé à la main, l'aîné")
+        );
+        // By another site's id: the first under its number; the later one
+        // under none, so TMDB's answer.
+        let (_, found) = get(&state, "/3/find/tt9905601?external_source=imdb_id").await;
+        assert_eq!(found["tv_results"][0]["id"], json!(number));
+        let (status, _) = get(&state, "/3/find/tt9905602?external_source=imdb_id").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(stand_in.asked_at("/3/find/tt9905602").len(), 1);
+        // By the number: the first.
+        let (_, document) = get(&state, &format!("/3/tv/{number}")).await;
+        assert_eq!(document["name"], json!("Doublon tapé à la main, l'aîné"));
     }
 
     #[tokio::test]

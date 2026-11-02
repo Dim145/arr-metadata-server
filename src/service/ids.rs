@@ -39,13 +39,18 @@
 //! | Skyhook (Sonarr), [`for_client`] | TheTVDB's id | [`own`] | TMDB's id + [`SYNTHETIC_OFFSET`] | Fankai's id + [`FANKAI_OFFSET`] |
 //! | Radarr, [`for_client`] | TMDB's id | [`own`] | — | — |
 //! | TMDB's `/3`, [`for_tmdb`] | TMDB's id | [`own`] | TMDB's id | Fankai's id + [`FANKAI_OFFSET`] |
-//! | TheTVDB's `/v4`, [`for_client`] | TheTVDB's id | [`own`] | TMDB's id + [`SYNTHETIC_OFFSET`] | Fankai's id + [`FANKAI_OFFSET`] |
+//! | TheTVDB's `/v4`, [`for_tvdb`] | TheTVDB's id, a film's too | [`own`] | TMDB's id + [`SYNTHETIC_OFFSET`] | Fankai's id + [`FANKAI_OFFSET`] |
 //!
 //! In TMDB's dialect a series TheTVDB alone names has no id, and TMDB's
 //! clients are never shown it; where TMDB's dialect gives a series' TheTVDB
 //! id (`external_ids.tvdb_id`), it is the number Sonarr keeps the series
 //! under ([`for_client`]), made up or not. AniList's dialect hands nothing of
 //! its own yet: its relay answers no work itself.
+//!
+//! Two works entered by hand before each was drawn a number of its own may
+//! make one ([`own`]). Every dialect hands it to the one entered first alone,
+//! through [`crate::service::addressed`], so that the number leads back to
+//! the work it was handed for, whichever dialect it is asked in.
 
 use crate::domain::{ExternalIds, MediaKind};
 
@@ -159,9 +164,32 @@ pub fn for_tmdb(
     is_manual: bool,
     ids: &ExternalIds,
 ) -> Option<i64> {
-    ids.tmdb.or_else(|| {
-        for_client(kind, catalogue_id, is_manual, ids).filter(|id| *id >= FANKAI_OFFSET)
-    })
+    in_tmdbs_dialect(ids.tmdb, for_client(kind, catalogue_id, is_manual, ids))
+}
+
+/// [`for_tmdb`], from TMDB's id and the number Sonarr or Radarr is handed
+/// for the work (`handed`), as [`for_client`] makes it or as
+/// [`crate::service::addressed`] lets it through: TMDB's own; else `handed`
+/// where it is one of this server's own, from [`FANKAI_OFFSET`] up.
+pub fn in_tmdbs_dialect(tmdb: Option<i64>, handed: Option<i64>) -> Option<i64> {
+    tmdb.or_else(|| handed.filter(|id| *id >= FANKAI_OFFSET))
+}
+
+/// The id a work is known by in TheTVDB's dialect — what the TheTVDB relay
+/// answers it under, and is asked for it by: a series' as Sonarr keeps it
+/// ([`for_client`]); a film's TheTVDB's own — TMDB's would name another of
+/// TheTVDB's films — or, for a film entered by hand TheTVDB does not list,
+/// the number made of its catalogue id ([`own`]).
+pub fn for_tvdb(
+    kind: MediaKind,
+    catalogue_id: &str,
+    is_manual: bool,
+    ids: &ExternalIds,
+) -> Option<i64> {
+    match kind {
+        MediaKind::Series => for_client(kind, catalogue_id, is_manual, ids),
+        MediaKind::Movie => ids.tvdb.or_else(|| is_manual.then(|| own(catalogue_id))),
+    }
 }
 
 /// The id Sonarr keeps a series under from what names it elsewhere:
@@ -361,6 +389,47 @@ mod tests {
         let tvdb = ids(None, Some(81189), None);
         assert_eq!(for_tmdb(MediaKind::Series, id, false, &tvdb), None);
         assert_eq!(for_tmdb(MediaKind::Series, id, false, &nothing), None);
+    }
+
+    #[test]
+    fn tmdbs_dialect_takes_the_number_handed_only_from_this_servers_own_ranges() {
+        assert_eq!(in_tmdbs_dialect(Some(1396), Some(81189)), Some(1396));
+        // TheTVDB's id, or one made of TMDB's: of another space.
+        assert_eq!(in_tmdbs_dialect(None, Some(81189)), None);
+        assert_eq!(in_tmdbs_dialect(None, to_synthetic(1396)), None);
+        // A Fan-Kai's, a work entered by hand's: the number handed.
+        assert_eq!(in_tmdbs_dialect(None, to_fankai(12)), Some(200_000_012));
+        let id = "01a17789-b167-736d-8873-605960d7e943";
+        assert_eq!(in_tmdbs_dialect(None, Some(own(id))), Some(own(id)));
+        // None handed — the number leads to another work entered by hand.
+        assert_eq!(in_tmdbs_dialect(None, None), None);
+    }
+
+    #[test]
+    fn thetvdbs_dialect_names_a_film_by_thetvdbs_id_never_by_tmdbs() {
+        let id = "01a17789-b167-736d-8873-605960d7e943";
+        let ids = |tmdb: Option<i64>, tvdb: Option<i64>| ExternalIds {
+            tmdb,
+            tvdb,
+            ..Default::default()
+        };
+        let film = ids(Some(603), Some(169));
+        assert_eq!(for_tvdb(MediaKind::Movie, id, false, &film), Some(169));
+        // TMDB's alone would name another of TheTVDB's films: none, but for
+        // a film entered by hand, the number the other dialects make it.
+        let tmdbs = ids(Some(603), None);
+        assert_eq!(for_tvdb(MediaKind::Movie, id, false, &tmdbs), None);
+        assert_eq!(for_tvdb(MediaKind::Movie, id, true, &tmdbs), Some(own(id)));
+        // A series, as Sonarr keeps it.
+        let series = ids(Some(1396), None);
+        assert_eq!(
+            for_tvdb(MediaKind::Series, id, false, &series),
+            to_synthetic(1396)
+        );
+        assert_eq!(
+            for_tvdb(MediaKind::Series, id, true, &ExternalIds::default()),
+            Some(own(id))
+        );
     }
 
     #[test]

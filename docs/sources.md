@@ -56,6 +56,11 @@ TheTVDB's 2×01), each of TMDB's episodes is paired by the day it aired:
 
 One the day speaks against, and that nothing else claims, gives nothing.
 
+What TMDB says of a season — its name, synopsis, first day, id, pictures and
+names in other languages — goes to TheTVDB's season of its number only where its
+episodes, paired so, are that season's and no other's: TMDB's sagas of *One
+Piece* lend TheTVDB's arcs nothing.
+
 Measured against the live APIs with all four providers configured:
 
 | Series | Numbered episodes | With absolute numbers | With overviews |

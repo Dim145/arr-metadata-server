@@ -73,10 +73,12 @@ may change what the API or the configuration means, and says so here.
   (`tmdb.relayMode = local-first`, on *Opening & APIs*): a film's or a
   series' document and what is appended to it — the older `releases`,
   `trailers` and `casts` included — each part asked on its own, a series'
-  seasons and episodes in TMDB's own numbering, `find`, and the catalogue's
-  works first on a search's first page, in TMDB's shape, from the catalogue
-  with its locks and translations, and from TMDB's own document of the work
-  for what the catalogue does not keep. No TMDB key is needed for them.
+  seasons and episodes in TMDB's own numbering, each episode with the
+  guests, director and writers the catalogue keeps of it, `find`, and the
+  catalogue's works first on a search's first page, in TMDB's shape, from
+  the catalogue with its locks and translations, and from TMDB's own
+  document of the work for what the catalogue does not keep. No TMDB key is
+  needed for them.
   Where to watch, reviews and the like are still asked of TMDB where it
   knows the work. `relay` stays the default.
 - TheTVDB's relay can answer the works the catalogue holds itself
@@ -209,12 +211,19 @@ may change what the API or the configuration means, and says so here.
   hidden here leave an entry's other names, a locked adult flag and main
   studio are written, and an entry that is one cour of a work takes the
   dates, status and next episode its corrected schedule gives, and what the
-  work's locked status and dates say of it.
+  work's locked status and dates say of it. A locked title and synopsis go
+  into the entry that is the whole work alone, where every entry of it took
+  them: one of its seasons or cours keeps AniList's name, and a client lists
+  each season under its own.
 - Hiding a crew credit hides every crew job of that person on the work, in
   the TMDB relay's answers too; their directing, writing and producing
   credits stay.
-- On the site, a season's title and synopsis, and a person's biography, are
-  in the reader's language where TMDB gave them in it.
+- A season's title and synopsis are in the language asked where TMDB gave
+  them in it or somebody wrote them for it: on the site, in Plex, and — its
+  name — in Sonarr v5's Skyhook, whose TMDB edition now names a season
+  wherever TMDB cuts it as the series is, where it named one only when the
+  whole numbering was the series' own. A person's biography on the site is
+  in the reader's language too.
 
 ### Fixed
 
@@ -227,6 +236,15 @@ may change what the API or the configuration means, and says so here.
   day each aired where their numbers disagree with it: of *One Piece*'s
   1,242 episodes, 1,201 take a TMDB id, every one the episode of its date,
   where 1,194 of TMDB's are numbered otherwise.
+- The seasons of such a series fared the same: TMDB's sagas of *One Piece*
+  lent TheTVDB's arc of the same number their name, synopsis, first day,
+  TMDB id, pictures and names in other languages. A season of TMDB's lends
+  them only where its episodes, paired by the day they aired, are that
+  season's and no other's.
+- Two works entered by hand before each was drawn a number of its own may
+  make one. Skyhook's and TheTVDB's dialects answered the first alone under
+  it, but TMDB's search and `find` listed both, so a client could add the
+  later one under the first's number; they answer the first alone too.
 - The seasons and episodes asked with a series' TMDB document
   (`append_to_response=season/1,season/1/images,season/1/episode/2`) take the
   locks and lose the posters hidden here, as the same documents asked on

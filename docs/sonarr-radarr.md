@@ -43,8 +43,11 @@ reading: the same series, with what v5 reads besides.
   (US)'s Superfan order — as the real service serves them; asked in one it has
   not, they are numbered as they aired, as Skyhook answers. See
   [Orders](#orders).
-- **Seasons.** A season's title and year. A title that only says the season's
-  number is kept back, as the real service keeps it.
+- **Seasons.** A season's title and year, the title in the language asked
+  where TMDB gave the season's name in it or somebody wrote it for it. A title
+  that only says the season's number is kept back, as the real service keeps
+  it. Asked by TMDB's id, a season TMDB cuts as the series is takes the
+  series' season's title; one it cuts otherwise has none of theirs.
 - **Episodes.** An episode's ids under both names the service and the client
   use (`tvdbId` and `metadataId`).
 - **Who numbers it.** `metadataSource` is `tvdb`, or `tmdb` for a series TMDB

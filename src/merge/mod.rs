@@ -167,7 +167,8 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
     if by_day {
         align_specials(&merged.episodes, &mut displaced_episodes);
     }
-    merge_seasons(&mut merged.seasons, displaced_seasons);
+    let alike = Alike::of(&merged.episodes, &displaced_episodes, by_day);
+    merge_seasons(&mut merged.seasons, displaced_seasons, &alike);
     merge_episodes(&mut merged.episodes, displaced_episodes, by_day);
 
     for mut contribution in contributions {
@@ -350,7 +351,8 @@ fn fold(into: &mut MediaItem, other: MediaItem, by_day: bool) {
     if into.seasons.is_empty() {
         into.seasons = other.seasons;
     } else {
-        merge_seasons(&mut into.seasons, other.seasons);
+        let alike = Alike::of(&into.episodes, &other.episodes, by_day);
+        merge_seasons(&mut into.seasons, other.seasons, &alike);
     }
 
     if into.episodes.is_empty() {
@@ -623,9 +625,13 @@ fn union_videos(into: &mut Vec<Video>, other: Vec<Video>) {
 }
 
 /// Fill seasons the spine already has. A season only another provider knows
-/// about is dropped, for the same reason as episodes.
-fn merge_seasons(into: &mut [Season], other: Vec<Season>) {
+/// about is dropped, for the same reason as episodes; so is one of the same
+/// number that is another season ([`Alike`]).
+fn merge_seasons(into: &mut [Season], other: Vec<Season>, alike: &Alike) {
     for season in other {
+        if !alike.is(season.season_number) {
+            continue;
+        }
         let Some(existing) = into
             .iter_mut()
             .find(|s| s.season_number == season.season_number)
@@ -640,6 +646,48 @@ fn merge_seasons(into: &mut [Season], other: Vec<Season>) {
         existing.tvdb_id = existing.tvdb_id.or(season.tvdb_id);
         union_images(&mut existing.images, season.images);
         union_translations(&mut existing.translations, season.translations);
+    }
+}
+
+/// Which of another provider's seasons are the list's of their number, as
+/// their episodes say once paired ([`paired`]): those none of whose
+/// episodes went into another of the list's seasons, and into whose number
+/// of the list none of another season's came — every one, for a provider
+/// that numbers the series as the list does, or that lists no episode to
+/// tell by.
+///
+/// TMDB cuts One Piece into sagas where TheTVDB keeps arcs: TMDB's second
+/// season is not TheTVDB's second, and its name, its synopsis, its first
+/// day, its id, its pictures and its names in other languages are another
+/// season's. Paired by number, TheTVDB's second took all of them, and the
+/// clients that read a season's name in their language were given an arc
+/// for another.
+struct Alike {
+    /// The other's seasons an episode of went into another of the list's.
+    strayed: std::collections::HashSet<i32>,
+    /// The list's seasons an episode of another season was paired into.
+    crowded: std::collections::HashSet<i32>,
+}
+
+impl Alike {
+    fn of(into: &[Episode], other: &[Episode], by_day: bool) -> Self {
+        let mut alike = Alike {
+            strayed: Default::default(),
+            crowded: Default::default(),
+        };
+        for (episode, pair) in other.iter().zip(paired(into, other, by_day)) {
+            if let Some(index) = pair
+                && into[index].season_number != episode.season_number
+            {
+                alike.strayed.insert(episode.season_number);
+                alike.crowded.insert(into[index].season_number);
+            }
+        }
+        alike
+    }
+
+    fn is(&self, season: i32) -> bool {
+        !self.strayed.contains(&season) && !self.crowded.contains(&season)
     }
 }
 
@@ -1653,6 +1701,86 @@ mod tests {
         );
         assert_eq!(merged.episodes[2].overview.as_deref(), Some("TMDB's 103."));
         assert_eq!(merged.episodes[4].overview.as_deref(), Some("TMDB's 105."));
+    }
+
+    #[test]
+    fn a_season_tmdb_cuts_otherwise_lends_the_list_nothing_of_its_own() {
+        // TMDB's first season holds TheTVDB's first and the start of its
+        // second: its name, its id and its names in other languages are a
+        // saga's, not either arc's. TheTVDB's third is TMDB's third, cut
+        // alike: it takes what TMDB has of it.
+        let named = |number: i32, title: &str, tmdb_id: Option<i64>| Season {
+            id: format!("s{number}"),
+            season_number: number,
+            title: Some(title.into()),
+            overview: Some(format!("{title}, told.")),
+            air_date: None,
+            tmdb_id,
+            tvdb_id: None,
+            is_manual: false,
+            images: Vec::new(),
+            primary_images: Default::default(),
+            translations: vec![Translation {
+                language: "fra".into(),
+                title: Some(format!("{title}, en français")),
+                overview: None,
+                tagline: None,
+                is_manual: false,
+            }],
+        };
+        let bare = |number: i32| Season {
+            title: None,
+            overview: None,
+            translations: Vec::new(),
+            ..named(number, "", None)
+        };
+        let mut tvdb = base("tvdb", "Sagas");
+        tvdb.item.seasons = vec![bare(1), bare(2), bare(3)];
+        tvdb.item.episodes = vec![
+            aired(1, 1, Some("2024-01-07"), None),
+            aired(1, 2, Some("2024-01-14"), None),
+            aired(2, 1, Some("2024-01-21"), None),
+            aired(2, 2, Some("2024-01-28"), None),
+            aired(3, 1, Some("2024-07-07"), None),
+        ];
+        let mut tmdb = base("tmdb", "Sagas");
+        tmdb.item.seasons = vec![
+            named(1, "Saga of the East", Some(901)),
+            named(2, "Saga of the Sea", Some(902)),
+            named(3, "Arc of the Summer", Some(903)),
+        ];
+        tmdb.item.episodes = vec![
+            aired(1, 1, Some("2024-01-07"), Some(101)),
+            aired(1, 2, Some("2024-01-14"), Some(102)),
+            aired(1, 3, Some("2024-01-21"), Some(103)),
+            aired(2, 1, Some("2024-01-28"), Some(104)),
+            aired(3, 1, Some("2024-07-07"), Some(105)),
+        ];
+
+        let merged = combine(vec![tmdb, tvdb], &priority()).unwrap();
+        let season = |n: i32| {
+            merged
+                .seasons
+                .iter()
+                .find(|s| s.season_number == n)
+                .unwrap()
+        };
+        // TMDB's first went partly into TheTVDB's second, and so into its
+        // second came another season's: neither lends a thing.
+        for n in [1, 2] {
+            assert_eq!(season(n).title, None, "season {n}");
+            assert_eq!(season(n).overview, None, "season {n}");
+            assert_eq!(season(n).tmdb_id, None, "season {n}");
+            assert!(season(n).translations.is_empty(), "season {n}");
+        }
+        assert_eq!(season(3).title.as_deref(), Some("Arc of the Summer"));
+        assert_eq!(season(3).tmdb_id, Some(903));
+        assert_eq!(season(3).translations.len(), 1);
+        // The episodes, paired by the day, take theirs all the same.
+        assert_eq!(
+            tmdb_ids(&merged),
+            [Some(101), Some(102), Some(103), Some(104), Some(105)]
+        );
     }
 
     #[test]

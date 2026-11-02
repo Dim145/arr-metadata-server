@@ -382,6 +382,7 @@ pub async fn apply(state: &AppState, item: &mut MediaItem, requested: &str) -> R
     overlay_item(item, &language);
 
     if item.kind == MediaKind::Series {
+        overlay_seasons(item, &language);
         overlay_episodes(state, item, &language).await?;
     }
     fields::lay(item, &language);
@@ -444,6 +445,7 @@ pub async fn apply_stored_many(
     let mut held = repo::translation::for_episodes_of(&state.db, &series, &language).await?;
 
     for item in items.iter_mut() {
+        overlay_seasons(item, &language);
         if let Some(texts) = held.remove(&item.id) {
             overlay_texts(item, &texts);
         }
@@ -544,6 +546,34 @@ pub fn holds_tagline(item: &MediaItem, language: &str) -> bool {
 /// locks once the translation is in.
 fn locked(item: &MediaItem, path: &str) -> bool {
     item.locked_fields.iter().any(|f| f == path)
+}
+
+/// Lay over each season its title and synopsis in `language`, where they
+/// are held in it ([`fields::season_text`]): locked in it, else in every
+/// language, else TMDB's translation of the season. What the site, Plex and
+/// Sonarr v5 show of a season, in the language each asks. A season with no
+/// text in it keeps its own, as the work's title does — a season's name is
+/// often one in every language.
+fn overlay_seasons(item: &mut MediaItem, language: &str) {
+    let texts: Vec<(Option<String>, Option<String>)> = item
+        .seasons
+        .iter()
+        .map(|season| {
+            let text = |field: &str| {
+                fields::season_text(item, season.season_number, field, language)
+                    .filter(|text| !text.trim().is_empty())
+            };
+            (text("title"), text("overview"))
+        })
+        .collect();
+    for (season, (title, overview)) in item.seasons.iter_mut().zip(texts) {
+        if let Some(title) = title {
+            season.title = Some(title);
+        }
+        if let Some(overview) = overview {
+            season.overview = Some(overview);
+        }
+    }
 }
 
 async fn overlay_episodes(state: &AppState, item: &mut MediaItem, language: &str) -> Result<()> {
@@ -1327,6 +1357,75 @@ mod tests {
         assert_eq!(episode.season_number, 1);
         assert_eq!(episode.runtime, Some(58));
         assert_eq!(episode.air_date.as_deref(), Some("2008-01-20"));
+    }
+
+    #[test]
+    fn a_seasons_name_and_synopsis_are_laid_in_the_language_asked_but_a_lock() {
+        let season =
+            |number: i32, title: &str, french: Option<(&str, &str)>| crate::domain::Season {
+                id: format!("s{number}"),
+                season_number: number,
+                title: Some(title.into()),
+                overview: Some(format!("{title}, as stored.")),
+                air_date: None,
+                tmdb_id: None,
+                tvdb_id: None,
+                is_manual: false,
+                images: Vec::new(),
+                primary_images: Default::default(),
+                translations: french
+                    .map(|(title, overview)| Translation {
+                        language: "fra".into(),
+                        title: Some(title.into()),
+                        overview: Some(overview.into()),
+                        tagline: None,
+                        is_manual: false,
+                    })
+                    .into_iter()
+                    .collect(),
+            };
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.seasons = vec![
+            season(1, "Season 1", Some(("Saison 1", "Le début."))),
+            season(
+                2,
+                "Stranger Things 2",
+                Some(("Stranger Things 2", "La suite.")),
+            ),
+            season(3, "Stranger Things 3", None),
+            season(4, "Stranger Things 4", Some(("  ", ""))),
+        ];
+        // Somebody wrote season 2's synopsis for French: theirs.
+        item.locked_texts = vec![fields::LockedText {
+            scope: "season:2".into(),
+            field: "overview".into(),
+            language: "fra".into(),
+            value: Some("Écrite ici.".into()),
+        }];
+
+        overlay_seasons(&mut item, "fra");
+        let texts: Vec<(Option<&str>, Option<&str>)> = item
+            .seasons
+            .iter()
+            .map(|s| (s.title.as_deref(), s.overview.as_deref()))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                (Some("Saison 1"), Some("Le début.")),
+                (Some("Stranger Things 2"), Some("Écrite ici.")),
+                // None in French: the text it is stored with.
+                (
+                    Some("Stranger Things 3"),
+                    Some("Stranger Things 3, as stored.")
+                ),
+                // A blank one is none.
+                (
+                    Some("Stranger Things 4"),
+                    Some("Stranger Things 4, as stored.")
+                ),
+            ]
+        );
     }
 
     /// A season as TMDB answers it: each episode its number, its id, a name.

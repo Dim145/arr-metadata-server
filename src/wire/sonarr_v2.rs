@@ -12,7 +12,7 @@
 //! Written only. What this server reads from the real Skyhook is still its
 //! first edition: see `providers::skyhook`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -631,8 +631,11 @@ fn tmdb_season_types(item: &MediaItem, orders: &[EpisodeOrder]) -> Vec<SeasonTyp
 
 /// The seasons and episodes of the TMDB edition, as `placements` number
 /// them. A season lends the aired season of its number its pictures, and
-/// its name only where the numbering is the work's own as it aired
-/// (`as_aired`), as the TheTVDB edition lends them.
+/// its name — in the language asked, where one is held in it — where it is
+/// that season: the numbering is the work's own as it aired (`as_aired`),
+/// or it places that season's episodes there and nowhere else
+/// ([`seasons_as_held`]), as TMDB numbers most series. A season TMDB cuts
+/// otherwise is another one, its name another's.
 fn tmdb_placed(
     item: &MediaItem,
     placements: &[Placed<'_>],
@@ -640,8 +643,9 @@ fn tmdb_placed(
     as_aired: bool,
 ) -> (Vec<SeasonResourceV2>, Vec<EpisodeResourceTmdb>) {
     let mut seasons = placed_seasons(item, placements);
-    if as_aired {
-        for season in &mut seasons {
+    let held = seasons_as_held(placements);
+    for season in &mut seasons {
+        if as_aired || held.contains(&season.season_number) {
             season.title = item
                 .seasons
                 .iter()
@@ -904,6 +908,26 @@ fn placed(
     }
 
     (seasons, episodes)
+}
+
+/// The seasons a numbering places as the work holds them: each episode of
+/// the work's it places in one is of the work's season of that number, and
+/// none of that season's goes into another. The order's own records of
+/// episodes the work does not hold say nothing either way.
+fn seasons_as_held(placements: &[Placed<'_>]) -> HashSet<i32> {
+    let mut held = HashSet::new();
+    let mut strayed = HashSet::new();
+    for placed in placements.iter().filter(|placed| !placed.own) {
+        let aired = placed.episode.season_number;
+        if aired == placed.season_number {
+            held.insert(aired);
+        } else {
+            strayed.insert(aired);
+            strayed.insert(placed.season_number);
+        }
+    }
+    held.retain(|season| !strayed.contains(season));
+    held
 }
 
 /// The seasons an order's places fall in, each once: no name of their own,
@@ -1985,6 +2009,42 @@ mod tests {
             assert!(sent["episodes"][0].get(key).is_none(), "{key}");
         }
         assert_eq!(sent["episodes"][0]["tmdbId"], 904);
+    }
+
+    #[test]
+    fn the_tmdb_edition_names_a_season_tmdb_cuts_as_the_series_does_and_no_other() {
+        let it = series();
+        let own = own(&it);
+        let titles = |show: &ShowResourceTmdb| -> Vec<(i32, Option<String>)> {
+            show.seasons
+                .iter()
+                .map(|s| (s.season_number, s.title.clone()))
+                .collect()
+        };
+
+        // TMDB's first season ends with the Kyoto arc's first episode: it is
+        // neither of the series' seasons, and is given no name of theirs.
+        let kenshin = kenshins_tmdb_orders();
+        let show = from_item_by_tmdb(&it, &asked_by_tmdb(&own, &kenshin, TMDB_DEFAULT));
+        assert_eq!(titles(&show), [(0, None), (1, None)]);
+
+        // Cut as the series is: each season its own name.
+        let mut alike = orders();
+        alike.push(tmdb_aired(vec![
+            tmdb_place(904, Some(4), 0, 1),
+            tmdb_place(901, Some(1), 1, 1),
+            tmdb_place(902, Some(2), 1, 2),
+            tmdb_place(903, Some(3), 2, 1),
+        ]));
+        let show = from_item_by_tmdb(&it, &asked_by_tmdb(&own, &alike, TMDB_DEFAULT));
+        assert_eq!(
+            titles(&show),
+            [
+                (0, None),
+                (1, Some("東京編".into())),
+                (2, Some("京都編".into()))
+            ]
+        );
     }
 
     #[test]

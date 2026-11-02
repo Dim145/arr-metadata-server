@@ -211,6 +211,8 @@ in Plex puts this provider's record back.
   answered by. What names no language is taken for none asked. A title, an
   overview or a tagline locked for one language alone is what Plex is given when
   it asks in that language; see [Editing](editing.md#locking-a-text-for-one-language).
+  A season's title and synopsis are in that language where TMDB gave them in it
+  or somebody wrote them for it, else as stored.
   A season or an episode nobody named is called *Season 2*, *Saison 2*,
   *Staffel 2* — in French, German, Spanish, Italian, Portuguese or Dutch, else in
   English. The tagline is held in the language the catalogue is stored in alone,
