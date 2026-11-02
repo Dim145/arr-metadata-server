@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-11-02
+
 ### Added
 
 - The relays stand in for a service that fails. When TMDB, TheTVDB or
@@ -2849,7 +2851,8 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/Dim145/arr-metadata-server/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.10.0...v0.11.0
