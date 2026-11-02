@@ -1387,6 +1387,14 @@ mod tests {
             season.title = Some(title.into());
             work.seasons.push(season);
         }
+        // TMDB's name and synopsis of the first in French.
+        work.seasons[0].translations = vec![Translation {
+            language: "fra".into(),
+            title: Some("Arc de Tokyo".into()),
+            overview: Some("Kenshin arrive à Tokyo.".into()),
+            tagline: None,
+            is_manual: false,
+        }];
         for (season, number, tvdb_id, aired) in [
             (1, 1, 1001, "2023-07-07"),
             (1, 2, 1002, "2023-07-14"),
@@ -1991,8 +1999,8 @@ mod tests {
         .await;
         assert_eq!(found["Metadata"][0]["Children"]["size"], 2);
 
-        // In French, the series' own name, and the words for a season with
-        // none.
+        // In French, the series' own name, a season's held in French, and
+        // the words for a season with none.
         let (_, answer) = ask(
             &state,
             "/plex/library/metadata/show-tvdb-416802?includeChildren=1",
@@ -2001,6 +2009,11 @@ mod tests {
         .await;
         let show = &answer["MediaContainer"]["Metadata"][0];
         assert_eq!(show["title"], "Kenshin le vagabond");
+        assert_eq!(show["Children"]["Metadata"][0]["title"], "Arc de Tokyo");
+        assert_eq!(
+            show["Children"]["Metadata"][0]["summary"],
+            "Kenshin arrive à Tokyo."
+        );
         assert_eq!(show["Children"]["Metadata"][1]["title"], "Saison 2");
     }
 

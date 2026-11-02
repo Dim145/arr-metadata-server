@@ -363,6 +363,9 @@ pub struct Work<'a> {
     /// Its episodes as TMDB numbers them, worked out once ([`Self::spots`]).
     spots: OnceLock<Vec<Spot>>,
     episode_texts: HashMap<(i32, i32), EpisodeText>,
+    /// The credits of its episodes read for the seasons asked, by the
+    /// catalogue's numbers ([`Self::with_episode_credits`]).
+    episode_credits: HashMap<(i32, i32), Vec<Credit>>,
     today: NaiveDate,
     withheld: Withheld,
 }
@@ -393,6 +396,7 @@ impl<'a> Work<'a> {
             numbering: Numbering::Own,
             spots: OnceLock::new(),
             episode_texts: HashMap::new(),
+            episode_credits: HashMap::new(),
             today: chrono::Utc::now().date_naive(),
             withheld,
         }
@@ -422,6 +426,34 @@ impl<'a> Work<'a> {
     pub fn with_episode_texts(mut self, texts: HashMap<(i32, i32), EpisodeText>) -> Self {
         self.episode_texts = texts;
         self
+    }
+
+    /// The credits of its episodes — their guests, their directors and
+    /// writers — each by its episode's numbers in the catalogue's own
+    /// numbering, as [`crate::db::repo::item::episode_credits`] reads them
+    /// for the seasons [`Self::held_seasons`] names.
+    pub fn with_episode_credits(mut self, credits: Vec<(i32, i32, Credit)>) -> Self {
+        let mut by_episode: HashMap<(i32, i32), Vec<Credit>> = HashMap::new();
+        for (season, number, credit) in credits {
+            by_episode.entry((season, number)).or_default().push(credit);
+        }
+        self.episode_credits = by_episode;
+        self
+    }
+
+    /// The catalogue's seasons that the episodes of TMDB's seasons `asked`
+    /// are of, as the work numbers them: whose episodes' credits a season's
+    /// document lists.
+    pub fn held_seasons(&self, asked: &[i32]) -> Vec<i32> {
+        let mut seasons: Vec<i32> = asked
+            .iter()
+            .flat_map(|season| self.episodes_of(*season))
+            .filter(|spot| !spot.own)
+            .map(|spot| spot.episode.season_number)
+            .collect();
+        seasons.sort_unstable();
+        seasons.dedup();
+        seasons
     }
 
     #[cfg(test)]
@@ -1136,6 +1168,41 @@ impl<'a> Work<'a> {
             crew.push(entry.clone());
         }
         crew
+    }
+
+    /// An episode's guests and its crew, as TMDB lists them: the catalogue's
+    /// credits of that episode — its guests, its director and its writers —
+    /// each with what is known of the person. Not the work's credits, which
+    /// are all a person hides: they stay. None for an order's own record of
+    /// an episode the work does not hold.
+    fn episode_people(&self, spot: &Spot) -> (Vec<Value>, Vec<Value>) {
+        let mut guests = Vec::new();
+        let mut crew = Vec::new();
+        if spot.own {
+            return (guests, crew);
+        }
+        let numbers = (spot.episode.season_number, spot.episode.episode_number);
+        for credit in self.episode_credits.get(&numbers).into_iter().flatten() {
+            let credit_id = credit.credit_tmdb_id.clone().unwrap_or_default();
+            if matches!(credit.credit_type, CreditType::Guest | CreditType::Actor) {
+                let mut person = self.person(credit, None, "Acting");
+                person.insert(
+                    "character".into(),
+                    json!(credit.character_name.clone().unwrap_or_default()),
+                );
+                person.insert("credit_id".into(), json!(credit_id));
+                person.insert("order".into(), json!(credit.sort_order));
+                guests.push(Value::Object(person));
+            } else {
+                let (department, job) = department_and_job(credit);
+                let mut person = self.person(credit, None, &department);
+                person.insert("credit_id".into(), json!(credit_id));
+                person.insert("department".into(), json!(department));
+                person.insert("job".into(), json!(job));
+                crew.push(Value::Object(person));
+            }
+        }
+        (guests, crew)
     }
 
     /// Who created a series: the catalogue's creators, then TMDB's it does
@@ -2350,9 +2417,10 @@ pub fn season(work: &Work, number: i32) -> Option<Value> {
         .into_iter()
         .map(|episode| {
             let mut fields = work.episode_fields(episode);
+            let (guests, crew) = work.episode_people(episode);
             fields.insert("show_id".into(), json!(work.id));
-            fields.insert("crew".into(), json!([]));
-            fields.insert("guest_stars".into(), json!([]));
+            fields.insert("crew".into(), json!(crew));
+            fields.insert("guest_stars".into(), json!(guests));
             Value::Object(fields)
         })
         .collect();
@@ -2460,8 +2528,9 @@ pub fn episode(work: &Work, season: i32, number: i32) -> Option<Value> {
     }
     let spot = work.episode_at(season, number)?;
     let mut fields = work.episode_fields(spot);
-    fields.insert("crew".into(), json!([]));
-    fields.insert("guest_stars".into(), json!([]));
+    let (guests, crew) = work.episode_people(spot);
+    fields.insert("crew".into(), json!(crew));
+    fields.insert("guest_stars".into(), json!(guests));
     Some(Value::Object(fields))
 }
 
@@ -2480,7 +2549,11 @@ pub fn episode_part(work: &Work, season: i32, number: i32, name: &str, _filters:
         Part::Doc(value)
     };
     match name {
-        "credits" => doc(json!({ "cast": [], "crew": [], "guest_stars": [] })),
+        // The series' regulars in it are not the catalogue's to say.
+        "credits" => {
+            let (guests, crew) = work.episode_people(spot);
+            doc(json!({ "cast": [], "crew": crew, "guest_stars": guests }))
+        }
         "images" => {
             let stills: Vec<Value> = episode
                 .image

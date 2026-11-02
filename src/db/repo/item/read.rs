@@ -713,6 +713,50 @@ async fn load_credits(db: &Db, media_id: &str) -> Result<(Vec<Credit>, People)> 
     Ok((credits, people))
 }
 
+/// The credits of a work's episodes in `seasons` — their guests, their
+/// directors and their writers — each by its episode's numbers in the
+/// work's own numbering, as the work's locks correct or hide them: what a
+/// season's or an episode's own document lists of its people. The work's
+/// own are not among them ([`load_credits`]).
+pub async fn episode_credits(
+    db: &Db,
+    media_id: &str,
+    seasons: &[i32],
+) -> Result<Vec<(i32, i32, Credit)>> {
+    if seasons.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = vec!["?"; seasons.len()].join(", ");
+    let sql = format!(
+        "SELECT c.id, c.credit_type, c.person_name, c.character_name, c.image,
+                c.tmdb_person_id, c.credit_tmdb_id, c.sort_order, c.is_manual,
+                c.department, c.job, c.season_number, c.episode_number
+           FROM media_credit c
+          WHERE c.media_id = ? AND c.season_number IN ({placeholders})
+            AND c.episode_number IS NOT NULL
+          ORDER BY c.season_number, c.episode_number, c.credit_type, c.sort_order"
+    );
+    let mut query = sqlx::query(db.sql(&sql)).bind(media_id);
+    for season in seasons {
+        query = query.bind(*season);
+    }
+    let rows = query.fetch_all(db.pool()).await?;
+    let locks = crate::db::repo::override_field::list(db, media_id).await?;
+
+    let mut credits = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let Some(credit) = crate::domain::fields::edit_credit(map_credit(row)?, &locks) else {
+            continue;
+        };
+        credits.push((
+            row.int("season_number")?,
+            row.int("episode_number")?,
+            credit,
+        ));
+    }
+    Ok(credits)
+}
+
 pub(super) fn map_credit(row: &sqlx::any::AnyRow) -> Result<Credit> {
     Ok(Credit {
         id: row.text("id")?,

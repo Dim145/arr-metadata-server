@@ -547,8 +547,10 @@ struct Work {
 impl Held {
     /// The work an entry is: by AniList's id, which numbers anime and manga
     /// alike in one sequence; or, on an anime alone, by MyAnimeList's. And
-    /// which of its seasons or cours the entry is, where the list places it.
-    fn of(&self, object: &Map<String, Value>) -> Option<(&MediaItem, Option<&Cour>)> {
+    /// which of its seasons or cours the entry is, where the list places it;
+    /// and whether it is the whole work as far as the list says — one the
+    /// list does not split, or the one entry it keeps whole.
+    fn of(&self, object: &Map<String, Value>) -> Option<(&MediaItem, Option<&Cour>, bool)> {
         let anilist = object.get("id").and_then(Value::as_i64);
         let mal = object
             .get("idMal")
@@ -566,7 +568,8 @@ impl Held {
         };
         let cour = placed(&|cour| anilist.is_some() && cour.anilist == anilist)
             .or_else(|| placed(&|cour| mal.is_some() && cour.mal == mal));
-        Some((&work.item, cour))
+        let whole = cour.map_or(work.cours.is_empty(), |cour| cour.whole);
+        Some((&work.item, cour, whole))
     }
 }
 
@@ -732,9 +735,9 @@ fn write_entries(value: &mut Value, held: &Held, now: i64) -> bool {
     match value {
         Value::Object(object) => {
             if is_entry(object)
-                && let Some((item, cour)) = held.of(object)
+                && let Some((item, cour, whole)) = held.of(object)
             {
-                changed |= write_entry(object, item, cour, now);
+                changed |= write_entry(object, item, cour, whole, now);
             }
             for child in object.values_mut() {
                 changed |= write_entries(child, held, now);
@@ -754,14 +757,21 @@ fn write_entries(value: &mut Value, held: &Held, now: i64) -> bool {
 /// for, since a GraphQL answer carries nothing it was not asked. Where the
 /// entry is one of the work's seasons or cours (`cour`), what was corrected
 /// of when the work airs is written as it bears on that one.
+///
+/// A title and an overview are the work's: written into an entry that is
+/// the whole of it (`whole`), never into one of its seasons or cours, which
+/// AniList names and tells of apart — the work's locked title over each
+/// would leave a client one name for every season of it.
 fn write_entry(
     object: &mut Map<String, Value>,
     item: &MediaItem,
     cour: Option<&Cour>,
+    whole: bool,
     now: i64,
 ) -> bool {
     let mut changed = false;
-    if relay::is_locked(item, "title")
+    if whole
+        && relay::is_locked(item, "title")
         && let Some(Value::Object(title)) = object.get_mut("title")
     {
         // The English and the preferred name are what a client shows; the
@@ -773,7 +783,8 @@ fn write_entry(
             }
         }
     }
-    if relay::is_locked(item, "overview")
+    if whole
+        && relay::is_locked(item, "overview")
         && let Some(overview) = &item.overview
         && object.contains_key("description")
     {
@@ -1909,6 +1920,7 @@ mod tests {
             object.as_object_mut().unwrap(),
             &item,
             None,
+            true,
             NOW
         ));
         assert_eq!(
@@ -1941,7 +1953,7 @@ mod tests {
             is_manual: false,
         }];
         let mut entry = object(json!({ "id": 1, "synonyms": [" hidden one ", "Kept", 3] }));
-        assert!(write_entry(&mut entry, &item, None, NOW));
+        assert!(write_entry(&mut entry, &item, None, true, NOW));
         assert_eq!(entry["synonyms"], json!(["Kept", 3]));
         // Nothing hidden: nothing taken.
         let mut entry = object(json!({ "id": 1, "synonyms": ["Kept"] }));
@@ -1953,14 +1965,14 @@ mod tests {
         let mut item = locked_anime();
         item.is_adult = true;
         let mut entry = object(json!({ "id": 1, "isAdult": false }));
-        write_entry(&mut entry, &item, None, NOW);
+        write_entry(&mut entry, &item, None, true, NOW);
         assert_eq!(entry["isAdult"], json!(false), "not locked");
 
         item.locked_fields.push("item/isAdult".into());
-        assert!(write_entry(&mut entry, &item, None, NOW));
+        assert!(write_entry(&mut entry, &item, None, true, NOW));
         assert_eq!(entry["isAdult"], json!(true));
         let mut unasked = object(json!({ "id": 1 }));
-        write_entry(&mut unasked, &item, None, NOW);
+        write_entry(&mut unasked, &item, None, true, NOW);
         assert!(unasked.get("isAdult").is_none());
     }
 
@@ -2069,10 +2081,97 @@ mod tests {
     }
 
     #[test]
+    fn a_locked_title_and_overview_are_written_into_the_whole_work_alone() {
+        let item = locked_anime();
+        let season = || {
+            object(json!({
+                "id": 3,
+                "title": {
+                    "romaji": "Shingeki no Kyojin Season 2",
+                    "english": "Attack on Titan Season 2",
+                    "userPreferred": "Shingeki no Kyojin Season 2"
+                },
+                "description": "AniList's, of the second season",
+                "genres": ["Action"]
+            }))
+        };
+        // One of its seasons or cours: AniList's names and words for it
+        // stay; the work's genres are written all the same.
+        let mut cour = season();
+        assert!(write_entry(
+            &mut cour,
+            &item,
+            Some(&second_half()),
+            false,
+            NOW
+        ));
+        assert_eq!(cour["title"]["english"], json!("Attack on Titan Season 2"));
+        assert_eq!(
+            cour["title"]["userPreferred"],
+            json!("Shingeki no Kyojin Season 2")
+        );
+        assert_eq!(
+            cour["description"],
+            json!("AniList's, of the second season")
+        );
+        assert_eq!(cour["genres"], json!(["Drame"]));
+        // The whole work: the locked ones.
+        let mut whole = season();
+        assert!(write_entry(&mut whole, &item, None, true, NOW));
+        assert_eq!(whole["title"]["english"], json!("Mon titre"));
+        assert_eq!(
+            whole["title"]["romaji"],
+            json!("Shingeki no Kyojin Season 2")
+        );
+        assert_eq!(whole["description"], json!("Mon résumé"));
+    }
+
+    #[test]
+    fn an_entry_is_the_whole_work_unless_the_list_splits_it_otherwise() {
+        let entry = |id: i64| object(json!({ "id": id, "type": "ANIME" }));
+        // A work the list does not split: any entry of it stands for it.
+        let unsplit = held(&[1], &[], locked_anime());
+        assert!(
+            unsplit
+                .of(&entry(1))
+                .is_some_and(|(_, cour, whole)| cour.is_none() && whole)
+        );
+        // Split: the half of a season is not the whole work, the entry the
+        // list keeps whole is, and one it files beside them without placing
+        // it is not either.
+        let mut kept_whole = second_half();
+        kept_whole.anilist = Some(4);
+        kept_whole.whole = true;
+        let split = held_split(
+            &[3, 4, 5],
+            &[],
+            locked_anime(),
+            vec![second_half(), kept_whole],
+        );
+        assert!(
+            split
+                .of(&entry(3))
+                .is_some_and(|(_, cour, whole)| cour.is_some() && !whole)
+        );
+        assert!(split.of(&entry(4)).is_some_and(|(_, _, whole)| whole));
+        assert!(
+            split
+                .of(&entry(5))
+                .is_some_and(|(_, cour, whole)| cour.is_none() && !whole)
+        );
+    }
+
+    #[test]
     fn a_cour_whose_schedule_was_corrected_here_is_written_as_its_episodes_say() {
         let item = locked_anime();
         let mut entry = as_anilist_has_it();
-        assert!(write_entry(&mut entry, &item, Some(&second_half()), NOW));
+        assert!(write_entry(
+            &mut entry,
+            &item,
+            Some(&second_half()),
+            false,
+            NOW
+        ));
         assert_eq!(entry["status"], json!("RELEASING"));
         assert_eq!(
             entry["startDate"],

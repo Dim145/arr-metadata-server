@@ -2205,18 +2205,12 @@ mod local {
             |url: &str| self.state.media.unlocalize(url)
         }
 
-        /// The id a work is known by in TheTVDB's dialect: a series' as
-        /// Skyhook hands it Sonarr; a film's TheTVDB's own, or, entered by
-        /// hand, one made of its catalogue id — TMDB's would name another
-        /// of TheTVDB's films. A number made of a catalogue id only where
-        /// it leads back to the work.
+        /// The id a work is known by in TheTVDB's dialect ([`ids::for_tvdb`]):
+        /// a number made of a catalogue id only where it leads back to the
+        /// work.
         async fn handed(&self, item: &MediaItem) -> AppResult<Option<i64>> {
-            let named = |item: &MediaItem| match item.kind {
-                MediaKind::Series => service::series::client_id(item),
-                MediaKind::Movie => item
-                    .external_ids
-                    .tvdb
-                    .or_else(|| item.is_manual.then(|| ids::own(&item.id))),
+            let named = |item: &MediaItem| {
+                ids::for_tvdb(item.kind, &item.id, item.is_manual, &item.external_ids)
             };
             Ok(
                 service::addressed(self.state, item.kind, std::slice::from_ref(item), named)

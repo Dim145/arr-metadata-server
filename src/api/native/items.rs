@@ -700,46 +700,15 @@ async fn detail(
         service::hide_adult_relations(std::slice::from_mut(&mut item));
     }
 
+    // The seasons' titles and synopses with the rest: locked in the
+    // language, else in every one, else TMDB's translation of the season.
     if let Some(language) = crate::api::extract::language(query.language.as_deref())? {
         crate::service::language::apply(&state, &mut item, &language).await?;
-        lay_season_texts(&state, &mut item, &language);
     }
 
     service::redact_for_reader(&identity, std::slice::from_mut(&mut item));
 
     Ok(Json(item))
-}
-
-/// Lay each season's title and synopsis in the language asked, where they
-/// are held in it: locked in it, else locked in every language, else TMDB's
-/// translation of the season (see [`crate::domain::fields::season_text`]).
-/// The catalogue's own language needs nothing, its seasons being read in
-/// it; a season with no text in the language keeps its own, as the work's
-/// title does.
-fn lay_season_texts(state: &AppState, item: &mut MediaItem, requested: &str) {
-    let language = service::language::normalize(requested);
-    if language.is_empty() || language == service::language::stored(state) {
-        return;
-    }
-    let texts: Vec<(Option<String>, Option<String>)> = item
-        .seasons
-        .iter()
-        .map(|season| {
-            let text = |field: &str| {
-                crate::domain::fields::season_text(item, season.season_number, field, &language)
-                    .filter(|text| !text.trim().is_empty())
-            };
-            (text("title"), text("overview"))
-        })
-        .collect();
-    for (season, (title, overview)) in item.seasons.iter_mut().zip(texts) {
-        if let Some(title) = title {
-            season.title = Some(title);
-        }
-        if let Some(overview) = overview {
-            season.overview = Some(overview);
-        }
-    }
 }
 
 #[derive(Deserialize, ToSchema)]

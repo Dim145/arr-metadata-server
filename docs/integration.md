@@ -347,9 +347,11 @@ Of TMDB's v4 API only the public lists are relayed. Radarr's *TMDb User*
 import list, which reads an account's watchlist and lists, is answered `403`
 in TMDB's own shape — `status_code` 3, with a message naming this server — and
 imports nothing, rather than an empty list Radarr would act on. Radarr carries
-no key issued here: the `403` reaches it where the surface is guarded by
-address (`AMS_TMDB_AUTH=allowlist`), and under the key policy it is refused
-with `401` first.
+no key issued here, its own being compiled in: the `403` reaches it where the
+surface is guarded by address (`AMS_TMDB_AUTH=allowlist`), which its TMDB
+lists need anyway. Under the key policy it is refused with `401` first, as
+any caller without a key is: the `403` names this server's version and
+address, which such a caller is not told.
 
 With **TMDB relay mode** set to *local-first* (`tmdb.relayMode`), the works this
 server holds are answered from the catalogue — corrections and works entered by

@@ -178,8 +178,10 @@ server's own: without one, a client signs in with a key issued here all the same
 and reads them, `altdvd` and `alttwo` from what was read; whatever only TheTVDB can
 answer is `503`. See [Orders](sonarr-radarr.md#orders).
 
-**AniList** (`graphql.anilist.co`): the title, description, genres and pictures of
-each entry the answer carries; its other names, less the titles hidden here; its
+**AniList** (`graphql.anilist.co`): the genres and pictures of each entry the
+answer carries, and the title and description of the one that is the whole
+work — not of an entry that is one of its seasons or cours, which keeps
+AniList's name for it; its other names, less the titles hidden here; its
 adult flag; its main studio — the studio AniList lists under the locked name put
 first and made the one main studio, or written over the name of the first where
 the client asked nothing else of it, never beside another studio's id. Where the
@@ -400,7 +402,10 @@ nothing in — the original title, an empty overview, `Season 1`, `Episode 1`. A
 text locked in every language is the catalogue's own text, as the relay writes it.
 The companies, keywords, crew, videos and pictures are the catalogue's — the
 pictures in every language held, `include_image_language` honoured — and a work
-not refreshed since this version reads them from TMDB's document of it. A picture
+not refreshed since this version reads them from TMDB's document of it. A season's
+and an episode's documents list each episode's guests, director and writers as
+the catalogue keeps them; a season's regulars are not the catalogue's to say, and
+its `credits` are empty. A picture
 is named by TMDB's path; one of another source, or uploaded, only where TMDB's
 clients are sent to this server for pictures (`tmdb.images = server`), by its key
 in the media store, which the gate serves.

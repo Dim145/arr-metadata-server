@@ -485,7 +485,7 @@ async fn search_tmdb(
     for (item, client_id) in items.iter_mut().zip(client_ids) {
         // One this edition cannot name would show in the list and fail on
         // add.
-        let Some(id) = tmdb_edition_id(item, client_id) else {
+        let Some(id) = ids::in_tmdbs_dialect(item.external_ids.tmdb, client_id) else {
             continue;
         };
         if let Some(client_id) = client_id {
@@ -523,16 +523,6 @@ async fn by_tmdb_id(state: &AppState, id: i64) -> anyhow::Result<Option<MediaIte
         return series::by_client_id(state, id).await;
     }
     series::by_tmdb_id(state, id).await
-}
-
-/// The id Skyhook's TMDB edition knows a series by: TMDB's, or — for a
-/// Fan-Kai or a series entered by hand, which TMDB does not list — the one
-/// Sonarr knows it by (`client_id`), from [`ids::FANKAI_OFFSET`] up. None
-/// for a series TheTVDB alone lists.
-fn tmdb_edition_id(item: &MediaItem, client_id: Option<i64>) -> Option<i64> {
-    item.external_ids
-        .tmdb
-        .or_else(|| client_id.filter(|id| *id >= ids::FANKAI_OFFSET))
 }
 
 /// The language in the URL, as a tag, or a 400.
