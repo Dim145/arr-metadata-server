@@ -305,7 +305,7 @@ sent, and a value the server does not know is refused with a `400`. Exactly:
 | `imdb` | has no IMDb identifier |
 | `refresh` | was never refreshed although it has an identifier to be refreshed by. A work entered by hand is never refreshed, and is not counted |
 | `duplicates` | is one of a pair proposed as one work, not said to be two, the other still a work of its own: see [Duplicates](#duplicates) |
-| `mediaFailed` | has a picture, a photograph or a theme — its own, a season's, an episode's, its cast's, a related work's, its characters' or their voices', a network's or a company's logo, its collection's — that the media store gave up fetching, as the Media page lists them: so that another can be chosen |
+| `mediaFailed` | has a picture, a photograph or a theme — its own, a season's, an episode's, its cast's, a related work's, its characters' or their voices' — that the media store gave up fetching, as the Media page lists them: so that another can be chosen. A network's or a company's logo, or a collection's picture, shows on many works: one given up on is counted once, on the Media page, and lists none of them here |
 
 The figure beside each filter is `GET /api/v1/admin/gaps`, which counts what each `missing`
 value lists, through the same definition and over the same works — disabled ones included,

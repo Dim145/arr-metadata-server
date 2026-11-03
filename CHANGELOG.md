@@ -43,9 +43,12 @@ may change what the API or the configuration means, and says so here.
   export read the one kept. Companies' logos, collections' pictures,
   characters' pictures and their voices' portraits are kept by the media
   store, as a work's pictures and the cast's photographs are, and the works
-  whose media failed include those whose pictures of these did. A work's
-  media list (`GET /api/v1/items/{id}/media`) names them beside its own, as
-  its totals count them, and a copy of one may be forgotten from the work.
+  whose media failed include those whose characters' pictures or voices'
+  portraits did. A company's logo or a collection's picture given up on is
+  counted once, on the Media page, and is no failure of each work that shows
+  it. A work's media list (`GET /api/v1/items/{id}/media`) names them all
+  beside its own, as its totals count them, and a copy of one may be
+  forgotten from the work.
 - With `tmdb.relayMode = local-first`, a collection the catalogue keeps one of
   the films of is answered here in TMDB's shape — in the language asked, with
   its pictures and its translations — and with `tvdb.relayMode = local-first`,

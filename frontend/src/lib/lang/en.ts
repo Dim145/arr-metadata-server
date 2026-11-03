@@ -1313,7 +1313,7 @@ export const en = {
       policy: 'Policy',
       calls: 'Since the start',
       on: 'On',
-      toggle: (name: string) => `Answer on the ${name} API`,
+      toggle: (name: string) => `${name}: answer calls`,
       apis: {
         sonarr: 'Sonarr',
         radarr: 'Radarr',
@@ -2151,7 +2151,6 @@ export const en = {
     },
     settings: 'Settings',
     backToSite: 'Back to the catalogue',
-    signedInAs: (who: string) => `Signed in as ${who}`,
     sections: 'Sections',
     inPage: 'On this page',
     up: 'Back',

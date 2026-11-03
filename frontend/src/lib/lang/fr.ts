@@ -24,6 +24,9 @@ const de = (name: string) => (elides(name) ? `d’${name}` : `de ${name}`)
 /** "que" before a name, elided before a vowel: "que TMDB", "qu’AniList". */
 const que = (name: string) => (elides(name) ? `qu’${name}` : `que ${name}`)
 
+/** A label within a sentence, its first letter lowered: "le relais TMDB". */
+const inSentence = (label: string) => label.charAt(0).toLocaleLowerCase('fr') + label.slice(1)
+
 /**
  * The form a count's words take, by French rules, where 0 is singular like
  * 1: "0 œuvre". A word that means exactly one — "un compte" — is asked for
@@ -1244,7 +1247,7 @@ export const fr: Dict = {
       credential: {
         title: 'Avec quelle clé les relais interrogent',
         lead: 'TMDB et TheTVDB répondent selon leurs propres conditions d’utilisation. Quelle que soit la clé, les champs verrouillés ici sont réécrits dans leurs réponses.',
-        label: (relay: string) => `Avec quelle clé le ${relay} interroge`,
+        label: (relay: string) => `Avec quelle clé le ${inSentence(relay)} interroge`,
         options: { server: 'La clé du serveur', client: 'Celle de chaque client' },
         consequence: {
           server: (service: string) =>
@@ -1288,7 +1291,7 @@ export const fr: Dict = {
       relayMode: {
         title: 'Ce que les relais répondent eux-mêmes',
         lead: 'Si un relais demande tout à son service, ou répond lui-même pour les œuvres que ce serveur détient, depuis le catalogue, à la forme du service.',
-        label: (relay: string) => `Ce que le ${relay} répond lui-même`,
+        label: (relay: string) => `Ce que le ${inSentence(relay)} répond lui-même`,
         options: { relay: 'Demander au service', 'local-first': 'Le catalogue d’abord' },
         consequence: {
           relay: (service: string) =>
@@ -1309,7 +1312,7 @@ export const fr: Dict = {
       policy: 'Politique',
       calls: 'Depuis le démarrage',
       on: 'Ouverte',
-      toggle: (name: string) => `Répondre sur l’API ${name}`,
+      toggle: (name: string) => `${name} : répondre aux appels`,
       apis: {
         sonarr: 'Sonarr',
         radarr: 'Radarr',
@@ -2144,7 +2147,6 @@ export const fr: Dict = {
     },
     settings: 'Réglages',
     backToSite: 'Retour au catalogue',
-    signedInAs: (who: string) => `Connecté en tant ${que(who)}`,
     sections: 'Sections',
     inPage: 'Sur cette page',
     up: 'Retour',

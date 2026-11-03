@@ -826,22 +826,27 @@ pub async fn counts(db: &Db) -> Result<Counts> {
 /// covers, its characters' pictures and their voices' portraits, its
 /// companies' logos, its collection's poster and background, its theme —
 /// every column [`unknown_origins`] fetches from, by the work. A picture
-/// shared by two works is each one's.
+/// shared by two works is each one's. `shared` marks a company's logo and a
+/// collection's pictures, which many works show: one given up on is the
+/// media page's to count, once, never a failure of each of its works — an
+/// address a work also holds as its own is its own.
 const WORK_ADDRESSES: &str = "
-    SELECT media_id, url AS origin FROM media_image
-    UNION SELECT media_id, image FROM media_episode WHERE image IS NOT NULL
-    UNION SELECT media_id, image FROM media_credit WHERE image IS NOT NULL
-    UNION SELECT media_id, image FROM media_relation WHERE image IS NOT NULL
-    UNION SELECT l.media_id, h.image FROM media_character l
-          JOIN character h ON h.id = l.character_id WHERE h.image IS NOT NULL
-    UNION SELECT media_id, image FROM media_character_voice WHERE image IS NOT NULL
-    UNION SELECT l.media_id, k.logo FROM media_company l
-          JOIN company k ON k.id = l.company_id WHERE k.logo IS NOT NULL
-    UNION SELECT m.id, s.poster FROM media_item m
-          JOIN collection s ON s.tmdb_id = m.collection_tmdb_id WHERE s.poster IS NOT NULL
-    UNION SELECT m.id, s.backdrop FROM media_item m
-          JOIN collection s ON s.tmdb_id = m.collection_tmdb_id WHERE s.backdrop IS NOT NULL
-    UNION SELECT id, theme_music FROM media_item WHERE theme_music IS NOT NULL";
+    SELECT media_id, origin, MIN(shared) AS shared FROM (
+        SELECT media_id, url AS origin, 0 AS shared FROM media_image
+        UNION ALL SELECT media_id, image, 0 FROM media_episode WHERE image IS NOT NULL
+        UNION ALL SELECT media_id, image, 0 FROM media_credit WHERE image IS NOT NULL
+        UNION ALL SELECT media_id, image, 0 FROM media_relation WHERE image IS NOT NULL
+        UNION ALL SELECT l.media_id, h.image, 0 FROM media_character l
+              JOIN character h ON h.id = l.character_id WHERE h.image IS NOT NULL
+        UNION ALL SELECT media_id, image, 0 FROM media_character_voice WHERE image IS NOT NULL
+        UNION ALL SELECT l.media_id, k.logo, 1 FROM media_company l
+              JOIN company k ON k.id = l.company_id WHERE k.logo IS NOT NULL
+        UNION ALL SELECT m.id, s.poster, 1 FROM media_item m
+              JOIN collection s ON s.tmdb_id = m.collection_tmdb_id WHERE s.poster IS NOT NULL
+        UNION ALL SELECT m.id, s.backdrop, 1 FROM media_item m
+              JOIN collection s ON s.tmdb_id = m.collection_tmdb_id WHERE s.backdrop IS NOT NULL
+        UNION ALL SELECT id, theme_music, 0 FROM media_item WHERE theme_music IS NOT NULL
+    ) addresses GROUP BY media_id, origin";
 
 /// What one work's media come to.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, ToSchema)]
@@ -896,7 +901,7 @@ fn by_work_sql(tail: &str) -> String {
                 SELECT r.media_id AS id,
                        SUM(CASE WHEN a.status = 'stored' THEN 1 ELSE 0 END) AS stored,
                        SUM(CASE WHEN a.status = 'pending' THEN 1 ELSE 0 END) AS pending,
-                       SUM(CASE WHEN a.status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                       SUM(CASE WHEN a.status = 'failed' AND r.shared = 0 THEN 1 ELSE 0 END) AS failed,
                        CAST(COALESCE(SUM(CASE WHEN a.status = 'stored' THEN a.bytes ELSE 0 END), 0) AS BIGINT) AS bytes,
                        CAST(COALESCE(SUM(CASE WHEN a.status = 'stored' THEN c.bytes ELSE 0 END), 0) AS BIGINT) AS copies
                   FROM refs r
@@ -970,34 +975,37 @@ pub async fn by_work(
 }
 
 /// What one work's media come to; nought of each for a work that points at
-/// none.
+/// none. A company's logo or a collection's picture given up on is no
+/// failure of the work's, as in [`by_work`].
 pub async fn work_totals(db: &Db, id: &str) -> Result<WorkTotals> {
     // Its own rows only, each table by the work's index; each picture's
     // copies by the picture's hash.
     let row = sqlx::query(db.sql(
         "WITH refs AS (
-            SELECT url AS origin FROM media_image WHERE media_id = ?
-            UNION SELECT image FROM media_episode WHERE media_id = ? AND image IS NOT NULL
-            UNION SELECT image FROM media_credit WHERE media_id = ? AND image IS NOT NULL
-            UNION SELECT image FROM media_relation WHERE media_id = ? AND image IS NOT NULL
-            UNION SELECT h.image FROM media_character l JOIN character h ON h.id = l.character_id
-                   WHERE l.media_id = ? AND h.image IS NOT NULL
-            UNION SELECT image FROM media_character_voice WHERE media_id = ? AND image IS NOT NULL
-            UNION SELECT k.logo FROM media_company l JOIN company k ON k.id = l.company_id
-                   WHERE l.media_id = ? AND k.logo IS NOT NULL
-            UNION SELECT s.poster FROM media_item m
-                   JOIN collection s ON s.tmdb_id = m.collection_tmdb_id
-                   WHERE m.id = ? AND s.poster IS NOT NULL
-            UNION SELECT s.backdrop FROM media_item m
-                   JOIN collection s ON s.tmdb_id = m.collection_tmdb_id
-                   WHERE m.id = ? AND s.backdrop IS NOT NULL
-            UNION SELECT theme_music FROM media_item WHERE id = ? AND theme_music IS NOT NULL)
+            SELECT origin, MIN(shared) AS shared FROM (
+                SELECT url AS origin, 0 AS shared FROM media_image WHERE media_id = ?
+                UNION ALL SELECT image, 0 FROM media_episode WHERE media_id = ? AND image IS NOT NULL
+                UNION ALL SELECT image, 0 FROM media_credit WHERE media_id = ? AND image IS NOT NULL
+                UNION ALL SELECT image, 0 FROM media_relation WHERE media_id = ? AND image IS NOT NULL
+                UNION ALL SELECT h.image, 0 FROM media_character l JOIN character h ON h.id = l.character_id
+                       WHERE l.media_id = ? AND h.image IS NOT NULL
+                UNION ALL SELECT image, 0 FROM media_character_voice WHERE media_id = ? AND image IS NOT NULL
+                UNION ALL SELECT k.logo, 1 FROM media_company l JOIN company k ON k.id = l.company_id
+                       WHERE l.media_id = ? AND k.logo IS NOT NULL
+                UNION ALL SELECT s.poster, 1 FROM media_item m
+                       JOIN collection s ON s.tmdb_id = m.collection_tmdb_id
+                       WHERE m.id = ? AND s.poster IS NOT NULL
+                UNION ALL SELECT s.backdrop, 1 FROM media_item m
+                       JOIN collection s ON s.tmdb_id = m.collection_tmdb_id
+                       WHERE m.id = ? AND s.backdrop IS NOT NULL
+                UNION ALL SELECT theme_music, 0 FROM media_item WHERE id = ? AND theme_music IS NOT NULL
+            ) addresses GROUP BY origin)
          SELECT COALESCE(SUM(CASE WHEN x.status = 'stored' THEN 1 ELSE 0 END), 0) AS stored,
                 COALESCE(SUM(CASE WHEN x.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
-                COALESCE(SUM(CASE WHEN x.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+                COALESCE(SUM(CASE WHEN x.status = 'failed' AND x.shared = 0 THEN 1 ELSE 0 END), 0) AS failed,
                 CAST(COALESCE(SUM(CASE WHEN x.status = 'stored' THEN x.bytes ELSE 0 END), 0) AS BIGINT) AS bytes,
                 CAST(COALESCE(SUM(CASE WHEN x.status = 'stored' THEN x.copies ELSE 0 END), 0) AS BIGINT) AS copies
-           FROM (SELECT a.status, a.bytes,
+           FROM (SELECT a.status, a.bytes, r.shared,
                         (SELECT COALESCE(SUM(v.bytes), 0) FROM media_variant v WHERE v.stem = a.sha256) AS copies
                    FROM refs r
                    JOIN media_asset a ON a.origin = r.origin) x",
@@ -2078,30 +2086,67 @@ mod tests {
             );
         }
 
-        // Every one of them the work's: counted on its media page, and one
-        // given up on is a work whose media failed.
+        // Every one of them the work's: counted on its media page. One given
+        // up on is a failure of the work's when it is the work's own — a
+        // character's picture — never when it is a network's logo or a
+        // saga's picture, which many works show.
         assert_eq!(work_totals(&db, &item.id).await.unwrap().pending, 5);
-        sqlx::query(db.sql("UPDATE media_asset SET status = 'failed' WHERE origin = ?"))
-            .bind("https://a/logo.png")
-            .execute(db.pool())
+        async fn give_up(db: &Db, origin: &str) {
+            sqlx::query(db.sql("UPDATE media_asset SET status = 'failed' WHERE origin = ?"))
+                .bind(origin)
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+        async fn failed_works(db: &Db) -> Vec<String> {
+            crate::db::repo::item::search(
+                db,
+                &crate::db::repo::item::Query {
+                    missing: vec!["mediaFailed".parse().expect("a gap")],
+                    include_disabled: true,
+                    include_adult: true,
+                    ..Default::default()
+                },
+            )
             .await
-            .unwrap();
-        let failed = crate::db::repo::item::search(
-            &db,
-            &crate::db::repo::item::Query {
-                missing: vec!["mediaFailed".parse().expect("a gap")],
-                include_disabled: true,
-                include_adult: true,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            failed.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
-            [item.id.as_str()],
-            "its network's logo given up on"
+            .unwrap()
+            .into_iter()
+            .map(|w| w.id)
+            .collect()
+        }
+        async fn ranked_failed(db: &Db, id: &str) -> i64 {
+            let (works, _) = by_work(db, WorkOrder::Failed, 10, 0).await.unwrap();
+            works
+                .iter()
+                .find(|w| w.id == id)
+                .expect("ranked")
+                .totals
+                .failed
+        }
+
+        for shared in [
+            "https://a/logo.png",
+            "https://a/saga.jpg",
+            "https://a/saga-back.jpg",
+        ] {
+            give_up(&db, shared).await;
+        }
+        assert!(
+            failed_works(&db).await.is_empty(),
+            "its network's logo and its saga's pictures given up on"
         );
+        let totals = work_totals(&db, &item.id).await.unwrap();
+        assert_eq!((totals.pending, totals.failed), (2, 0));
+        assert_eq!(ranked_failed(&db, &item.id).await, 0);
+
+        give_up(&db, "https://a/part.png").await;
+        assert_eq!(
+            failed_works(&db).await,
+            [item.id.clone()],
+            "a character's picture given up on"
+        );
+        assert_eq!(work_totals(&db, &item.id).await.unwrap().failed, 1);
+        assert_eq!(ranked_failed(&db, &item.id).await, 1);
     }
 
     /// What a work has a picture as decides the copies made of it; the
