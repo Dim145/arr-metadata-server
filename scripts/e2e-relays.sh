@@ -473,6 +473,44 @@ code=$(tmdb -s -o /dev/null -w '%{http_code}' "$TMDB_DOOR/3/tv/${OWN}?api_key=$K
 [ "$code" != "200" ] || fail "answered here in relay mode"
 ok
 
+# ── AniList, answering the entries held here from the catalogue ───────────
+echo "AniList relay, anilist.relayMode=local-first"
+
+step "local-first: an entry held here, its locked title in it, is answered without AniList"
+curl -fsS -b "$COOKIES" -o /dev/null -X PUT "$BASE/api/v1/settings/server/-" \
+  -H 'content-type: application/json' -d '{"key":"anilist.relayMode","value":"local-first"}'
+asked_reset
+anilist -fsS -X POST "$ANILIST_DOOR/" -H 'content-type: application/json' \
+  -d "{\"query\":\"{ Media(id: ${ANILIST_ID}) { id title { english } status } }\"}" \
+  | py "d = json.load(sys.stdin)['data']['Media']; assert d['id'] == ${ANILIST_ID} and d['title']['english'] == 'Locked Anime Title', d" \
+  || fail "the entry held here was not answered from the catalogue"
+[ "$(asked_count /)" = "0" ] || fail "AniList was asked for an entry held here"
+curl -fsS -b "$COOKIES" "$BASE/api/v1/admin/metrics" | grep -q 'ams_relay_local_total{relay="anilist"} [1-9]' || fail "not counted"
+ok
+
+step "local-first: a page of held entries by their ids, and AniList's genres, without AniList"
+anilist -fsS -X POST "$ANILIST_DOOR/" -H 'content-type: application/json' \
+  -d "{\"query\":\"{ GenreCollection Page { pageInfo { total } media(id_in: [${ANILIST_ID}]) { id } } }\"}" \
+  | py "d = json.load(sys.stdin)['data']; assert d['Page']['media'][0]['id'] == ${ANILIST_ID} and len(d['GenreCollection']) == 19, d" \
+  || fail "the page of entries held here was not answered from the catalogue"
+[ "$(asked_count /)" = "0" ] || fail "AniList was asked for a page of entries held here"
+ok
+
+step "local-first: an entry held nowhere here is AniList's to answer"
+anilist -fsS -o /dev/null -X POST "$ANILIST_DOOR/" -H 'content-type: application/json' \
+  -d '{"query":"{ Media(id: 5) { id } }"}'
+[ "$(asked_count /)" = "1" ] || fail "AniList was not asked for an entry held nowhere here"
+ok
+
+step "relay mode: the entry held here is AniList's to answer again"
+curl -fsS -b "$COOKIES" -o /dev/null -X PUT "$BASE/api/v1/settings/server/-" \
+  -H 'content-type: application/json' -d '{"key":"anilist.relayMode","value":"relay"}'
+asked_reset
+anilist -fsS -o /dev/null -X POST "$ANILIST_DOOR/" -H 'content-type: application/json' \
+  -d "{\"query\":\"{ Media(id: ${ANILIST_ID}) { id title { english } status } }\"}"
+[ "$(asked_count /)" = "1" ] || fail "answered here in relay mode"
+ok
+
 # ── The policies swapped: TheTVDB by address, AniList by key ──────────────
 stop_server
 start_server server-2.log AMS_TVDB_AUTH=allowlist AMS_ANILIST_AUTH=apikey
