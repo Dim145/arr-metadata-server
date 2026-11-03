@@ -369,6 +369,11 @@ jobs:
     if: needs.gate.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # The providers' keys are the secrets of this environment, given to this
+    # job and to the parity check alone rather than to every job of the
+    # repository. Forgejo, which runs this workflow too, has no environments
+    # and reads its own secrets.
+    environment: provider-keys
 
     services:
       # The cache's second tier, which the cache spec reads back; the server is
