@@ -2194,8 +2194,10 @@ export interface paths {
          * @description An upload is taken off the work, and deleted unless something else still
          *     names it — another work's lock, say. A provider's copy is forgotten and
          *     deleted — the work keeps pointing at the provider, and the next refresh
-         *     fetches it again. Only a copy of the work's own: an address its rows or
-         *     its locks hold, or an upload made for it.
+         *     fetches it again; a collection's pictures, the next time TMDB is asked
+         *     about the collection. Only a copy of the work's own: an address it points
+         *     at — its characters', its companies' logos and its collection's pictures
+         *     among them —, one its locks hold, or an upload made for it.
          */
         delete: operations["media_forget"];
         options?: never;

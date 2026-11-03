@@ -43,7 +43,9 @@ may change what the API or the configuration means, and says so here.
   export read the one kept. Companies' logos, collections' pictures,
   characters' pictures and their voices' portraits are kept by the media
   store, as a work's pictures and the cast's photographs are, and the works
-  whose media failed include those whose pictures of these did.
+  whose media failed include those whose pictures of these did. A work's
+  media list (`GET /api/v1/items/{id}/media`) names them beside its own, as
+  its totals count them, and a copy of one may be forgotten from the work.
 - With `tmdb.relayMode = local-first`, a collection the catalogue keeps one of
   the films of is answered here in TMDB's shape — in the language asked, with
   its pictures and its translations — and with `tvdb.relayMode = local-first`,
@@ -153,6 +155,9 @@ may change what the API or the configuration means, and says so here.
   TheTVDB's for a series held here is read as TheTVDB not answering: what
   it gave stays, its numbering with it, the work keeps its TheTVDB id whatever
   TMDB says, and it is refreshed in part, tried again sooner.
+- The French interface elides before a name that begins with a vowel:
+  « Conditions d’AniList », « Affiche d’Inception », « dans le rôle
+  d’Eleven » — no longer « de AniList ».
 
 ## [0.13.0] — 2026-11-02
 
