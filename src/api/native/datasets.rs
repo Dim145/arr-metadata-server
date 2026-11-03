@@ -27,13 +27,15 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(imdb_episodes))
 }
 
-/// The lists in the order the Sources page shows them: IMDb's three, then
-/// the anime identifier list.
-const SHOWN: [&str; 4] = [
+/// The lists in the order the Sources page shows them: IMDb's three, the
+/// anime identifier list, TVmaze's index, then Wikidata's links.
+const SHOWN: [&str; 6] = [
     datasets::IMDB,
     datasets::IMDB_AKAS,
     datasets::IMDB_EPISODES,
     datasets::ANIME,
+    datasets::TVMAZE_INDEX,
+    datasets::WIKIDATA_IDS,
 ];
 
 /// A list downloaded whole, as the Sources page says of it.
@@ -41,7 +43,9 @@ const SHOWN: [&str; 4] = [
 #[serde(rename_all = "camelCase")]
 pub struct Dataset {
     /// `imdb-ratings`, `imdb-akas` — IMDb's titles by region —,
-    /// `imdb-episodes` or `anime-lists`.
+    /// `imdb-episodes`, `anime-lists`, `tvmaze-index` — TVmaze's index of
+    /// every series — or `wikidata-ids` — Wikidata's links between the
+    /// sites' ids.
     pub id: &'static str,
     /// The task that downloads it, on the Jobs page.
     pub task: TaskId,

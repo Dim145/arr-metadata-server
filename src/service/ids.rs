@@ -40,19 +40,48 @@
 //! | Radarr, [`for_client`] | TMDB's id | [`own`] | — | — |
 //! | TMDB's `/3`, [`for_tmdb`] | TMDB's id | [`own`] | TMDB's id | Fankai's id + [`FANKAI_OFFSET`] |
 //! | TheTVDB's `/v4`, [`for_tvdb`] | TheTVDB's id, a film's too | [`own`] | TMDB's id + [`SYNTHETIC_OFFSET`] | Fankai's id + [`FANKAI_OFFSET`] |
+//! | AniList's GraphQL, [`for_anilist`] | AniList's id | [`own`] | — | AniList's id, where it has one |
 //!
 //! In TMDB's dialect a series TheTVDB alone names has no id, and TMDB's
 //! clients are never shown it; where TMDB's dialect gives a series' TheTVDB
 //! id (`external_ids.tvdb_id`), it is the number Sonarr keeps the series
-//! under ([`for_client`]), made up or not. AniList's dialect hands nothing of
-//! its own yet: its relay answers no work itself.
+//! under ([`for_client`]), made up or not.
+//!
+//! In AniList's dialect a work is the AniList entry it is — the one the
+//! anime identifier list says the work is, its first season's for a series
+//! AniList splits — and each of its other seasons and cours is the entry the
+//! list places on it, under AniList's id for that one. A work no AniList id
+//! names is not in that dialect, unless it was entered by hand: then it is
+//! known by the number made of its catalogue id, as in every other dialect.
+//! AniList numbers its entries in the hundreds of thousands, nowhere near
+//! that range, and anime and manga in one sequence, so a number names one
+//! entry whatever it is asked as; MyAnimeList's ids, `idMal`, are never made
+//! up.
+//!
+//! What an entry is made of has ids in AniList's dialect too, each in its own
+//! sequence — characters, the people who voice them, the episodes on its
+//! schedule — and the same rule: AniList's id where the catalogue keeps it,
+//! else a number made of what names the thing here, in the range of the works
+//! entered by hand, which AniList's own sequences are nowhere near:
+//!
+//! | In AniList's dialect | AniList's id kept | Else |
+//! |---|---|---|
+//! | A character, [`anilist_character`] | its `anilist_id` | [`own`] of the character's id here — a character only TheTVDB lists |
+//! | A voice, [`anilist_voice`] | its `anilist_id` | [`own`] of its character, its language and its name |
+//! | An episode on a schedule, [`anilist_airing`] | never kept | [`own`] of the catalogue's id for the episode, the same however the list splits the work |
+//!
+//! A tag's id and a studio's are AniList's alone: never made up, and asked
+//! for where the catalogue keeps none, AniList answers.
 //!
 //! Two works entered by hand before each was drawn a number of its own may
 //! make one ([`own`]). Every dialect hands it to the one entered first alone,
 //! through [`crate::service::addressed`], so that the number leads back to
 //! the work it was handed for, whichever dialect it is asked in.
 
-use crate::domain::{ExternalIds, MediaKind};
+use crate::domain::{
+    ExternalIds, MediaKind,
+    person::{Character, CharacterVoice},
+};
 
 /// Start of the synthetic id range.
 pub const SYNTHETIC_OFFSET: i64 = 100_000_000;
@@ -190,6 +219,68 @@ pub fn for_tvdb(
         MediaKind::Series => for_client(kind, catalogue_id, is_manual, ids),
         MediaKind::Movie => ids.tvdb.or_else(|| is_manual.then(|| own(catalogue_id))),
     }
+}
+
+/// The id a work is known by in AniList's dialect — what the AniList relay
+/// answers it under, and is asked for it by: AniList's own, for the entry
+/// the work is — the first of several, as [`crate::service::anime::choose`]
+/// falls back to, which is the first season far more often than not; else,
+/// for a work entered by hand that AniList does not name, the number made of
+/// its catalogue id ([`own`]). `None` for any other work: AniList's clients
+/// have no way to it.
+///
+/// A series AniList splits is several entries, each of its seasons and
+/// cours under an id of AniList's own: those are the anime identifier
+/// list's to place ([`crate::service::cour`]), not this one's to make.
+pub fn for_anilist(catalogue_id: &str, is_manual: bool, ids: &ExternalIds) -> Option<i64> {
+    ids.anilist
+        .iter()
+        .copied()
+        .filter(|id| *id > 0)
+        .min()
+        .or_else(|| is_manual.then(|| own(catalogue_id)))
+}
+
+/// A character's id in AniList's dialect: AniList's own, else one made of
+/// this server's id for it — of TheTVDB's for its record of the part, or of
+/// its name, while it is not stored yet — the same at every answer.
+pub fn anilist_character(character: &Character) -> i64 {
+    character
+        .anilist_id
+        .filter(|id| *id > 0)
+        .unwrap_or_else(|| {
+            let named = if !character.id.is_empty() {
+                character.id.clone()
+            } else if let Some(tvdb) = character.tvdb_id {
+                format!("tvdb:{tvdb}")
+            } else {
+                format!("name:{}", character.name)
+            };
+            own(&format!("character:{named}"))
+        })
+}
+
+/// A voice's id in AniList's dialect, as one of AniList's staff: AniList's
+/// own, else one made of the character it voices ([`anilist_character`]),
+/// its language and its name.
+pub fn anilist_voice(voice: &CharacterVoice, character: &Character) -> i64 {
+    voice.anilist_id.filter(|id| *id > 0).unwrap_or_else(|| {
+        own(&format!(
+            "voice:{}:{}:{}",
+            anilist_character(character),
+            voice.language,
+            voice.name
+        ))
+    })
+}
+
+/// The id of an episode on an entry's schedule, in AniList's dialect: made of
+/// what names the episode here for good — the catalogue's id for it — so
+/// that it stays when the anime identifier list splits the work anew, and an
+/// episode moves from one entry to another. AniList's own for it is never
+/// kept here.
+pub fn anilist_airing(episode: &str) -> i64 {
+    own(&format!("airing:{episode}"))
 }
 
 /// The id Sonarr keeps a series under from what names it elsewhere:
@@ -429,6 +520,92 @@ mod tests {
         assert_eq!(
             for_tvdb(MediaKind::Series, id, true, &ExternalIds::default()),
             Some(own(id))
+        );
+    }
+
+    #[test]
+    fn anilists_dialect_names_a_work_by_its_entry_else_by_a_number_of_this_servers() {
+        let id = "01a17789-b167-736d-8873-605960d7e943";
+        let anilist = |anilist: Vec<i64>| ExternalIds {
+            anilist,
+            tvdb: Some(424_536),
+            ..Default::default()
+        };
+        // The entry the work is: the first of those it carries.
+        assert_eq!(
+            for_anilist(id, false, &anilist(vec![182_255, 154_587])),
+            Some(154_587)
+        );
+        assert_eq!(
+            for_anilist(id, true, &anilist(vec![154_587])),
+            Some(154_587)
+        );
+        // Entered by hand, AniList naming none of it: the number every
+        // dialect makes of it, whatever else names it.
+        assert_eq!(for_anilist(id, true, &anilist(Vec::new())), Some(own(id)));
+        assert_eq!(
+            for_anilist(id, true, &ExternalIds::default()),
+            Some(own(id))
+        );
+        // A work a source gave, AniList naming none of it: no way to it.
+        assert_eq!(for_anilist(id, false, &anilist(Vec::new())), None);
+        // AniList's numbers are nowhere near this server's own.
+        for real in [1, 21, 154_587, 999_999] {
+            assert!(!is_own(real) && from_synthetic(real).is_none(), "{real}");
+        }
+    }
+
+    #[test]
+    fn what_an_anilist_entry_is_made_of_takes_anilists_ids_else_numbers_that_stay() {
+        let character = |anilist: Option<i64>| Character {
+            id: "01a1c000-0000-7000-8000-000000000001".into(),
+            name: "Frieren".into(),
+            native_name: None,
+            image: None,
+            tvdb_id: Some(7_701),
+            anilist_id: anilist,
+            mal_id: None,
+        };
+        assert_eq!(anilist_character(&character(Some(176_754))), 176_754);
+        // TheTVDB's alone: a number of this server's, the same every time.
+        let made = anilist_character(&character(None));
+        assert!(is_own(made), "{made}");
+        assert_eq!(made, anilist_character(&character(None)));
+        // Not stored yet: by TheTVDB's record, else by name.
+        let unstored = Character {
+            id: String::new(),
+            ..character(None)
+        };
+        assert!(is_own(anilist_character(&unstored)));
+        assert_ne!(anilist_character(&unstored), made);
+
+        let voice = |anilist: Option<i64>, language: &str| CharacterVoice {
+            language: language.into(),
+            name: "Atsumi Tanezaki".into(),
+            native_name: None,
+            image: None,
+            anilist_id: anilist,
+            mal_id: None,
+            sort_order: 0,
+        };
+        assert_eq!(
+            anilist_voice(&voice(Some(95_869), "jpn"), &character(None)),
+            95_869
+        );
+        let japanese = anilist_voice(&voice(None, "jpn"), &character(None));
+        assert!(is_own(japanese));
+        assert_ne!(
+            japanese,
+            anilist_voice(&voice(None, "fra"), &character(None))
+        );
+
+        let episode = "01a1c000-0000-7000-8000-0000000000e1";
+        let airing = anilist_airing(episode);
+        assert!(is_own(airing));
+        assert_eq!(airing, anilist_airing(episode));
+        assert_ne!(
+            airing,
+            anilist_airing("01a1c000-0000-7000-8000-0000000000e2")
         );
     }
 

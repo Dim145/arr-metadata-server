@@ -51,6 +51,7 @@ const TERMS: { id: string; name?: string; url?: string }[] = [
   { id: 'fankai', url: 'https://fankai.fr' },
   { id: 'skyhook' },
   { id: 'radarr' },
+  { id: 'wikidata', url: 'https://www.wikidata.org/wiki/Wikidata:Licensing' },
 ]
 
 type Mark =

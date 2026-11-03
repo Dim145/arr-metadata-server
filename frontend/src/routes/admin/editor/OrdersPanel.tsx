@@ -29,7 +29,7 @@ import { useI18n } from '../../../lib/i18n'
 import { episodeCode } from '../../../lib/media'
 import type { Episode, EpisodeOrder, MediaItem, Orders } from '../../../lib/types'
 
-import { orderName, orderSeasons, placedEpisode } from './orders'
+import { TVDB_LAST, orderName, orderSeasons, placedEpisode } from './orders'
 import { Count, Empty, Facts } from './shared'
 
 /** A place as it is being written: its numbers, and what it holds. */
@@ -188,6 +188,10 @@ export function OrdersPanel({ work, onChanged }: { work: MediaItem; onChanged: (
                     />
                     {!offered.has(order.key) && (order.episodes.length || order.announced) ? (
                       <span className="mt-0.5 block text-xs text-bone-faint italic">{o.notOffered}</span>
+                    ) : null}
+                    {/* Kept by the server, written by nobody: copied to be changed. */}
+                    {order.key === TVDB_LAST ? (
+                      <span className="mt-0.5 block max-w-prose text-xs leading-relaxed text-bone-faint">{o.tvdbLast}</span>
                     ) : null}
                   </span>
                   {/* Named after the order: a list of a dozen orders is a dozen of each button. */}

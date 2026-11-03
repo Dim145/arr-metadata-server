@@ -5,10 +5,12 @@ use futures::future::join_all;
 
 use crate::{
     db::repo,
-    domain::{ExternalSource, MediaItem, MediaKind},
+    domain::{ExternalIds, ExternalSource, MediaItem, MediaKind},
     providers::{self, names, skyhook, tmdb::map as tmdb_map},
     service::{
-        FETCHING, Found, cached_search, gather, held, ids, load, local, merge, or_held, persist,
+        FETCHING, Found,
+        bridge::{self, Site},
+        cached_search, gather, held, ids, load, local, merge, or_held, persist, tvmaze_index,
     },
     state::AppState,
 };
@@ -134,7 +136,16 @@ async fn ask_by_tvdb_id(state: &AppState, tvdb_id: i64) -> Result<Option<MediaIt
                 // Noted here besides at its door: a key TMDB refuses is no
                 // word about the series either.
                 providers::went_unanswered(names::TMDB);
-                None
+                // Which of TMDB's series it is, as Wikidata's links say:
+                // one no series held here goes by.
+                bridge::fetchable(
+                    state,
+                    Site::TvdbSeries,
+                    &tvdb_id.to_string(),
+                    MediaKind::Series,
+                )
+                .await?
+                .tmdb
             }
         }
     } else {
@@ -214,6 +225,14 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
     {
         return Ok(Some(item));
     }
+    // Nothing held under it: one held under another id of the item Wikidata
+    // files it on, which does not carry it.
+    if bridge::enabled(state)
+        && held(state, ExternalSource::Imdb, imdb_id).await?.is_none()
+        && let Some(item) = bridged(state, Site::Imdb, imdb_id).await?
+    {
+        return Ok(Some(item));
+    }
 
     // One fetch per work at a time, as by the other ids; see `FETCHING`.
     let _fetching = FETCHING.lock(&format!("series:imdb:{imdb_id}")).await;
@@ -234,28 +253,72 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
     .await
 }
 
+/// Ask TMDB which series an IMDb id is, and fetch it. TMDB not saying — it
+/// knows no series by that id, it does not answer, or it is not asked, with
+/// no key — the series Wikidata's links file the id beside is fetched by its
+/// TMDB and TheTVDB ids instead, where they know one no series held here
+/// goes by ([`bridge::fetchable`]): nothing else says which series it is.
 async fn fetch_by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
-    if !state.tmdb.is_configured() {
-        return Ok(None);
-    }
-
     resolved(async {
-        let found = match state.tmdb.find("imdb_id", imdb_id).await {
-            Ok(found) => found,
-            Err(e) => {
-                tracing::warn!(imdb_id, error = %e, "TMDB lookup failed");
-                providers::went_unanswered(names::TMDB);
-                return Ok(None);
+        if state.tmdb.is_configured() {
+            match state.tmdb.find("imdb_id", imdb_id).await {
+                Ok(found) => {
+                    if let Some(summary) = found.tv_results.first() {
+                        return ask_from_tmdb(state, summary.id).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(imdb_id, error = %e, "TMDB lookup failed");
+                    providers::went_unanswered(names::TMDB);
+                }
             }
-        };
-        let Some(summary) = found.tv_results.first() else {
-            return Ok(None);
-        };
+        }
 
-        ask_from_tmdb(state, summary.id).await
+        let ids = bridge::fetchable(state, Site::Imdb, imdb_id, MediaKind::Series).await?;
+        if ids.tmdb.is_none() && ids.tvdb.is_none() {
+            return Ok(None);
+        }
+        gather::series(state, ids.tmdb, ids.tvdb).await
     })
     .await
     .with_context(|| format!("imdb:{imdb_id} could not be resolved"))
+}
+
+/// A series by TMDB's id, as Sonarr's `tmdb:` term asks for one: the one
+/// held under it; held under none, one held under another id of the item
+/// Wikidata files it on, which does not carry it; else fetched by it.
+///
+/// Not [`by_tmdb_id`] itself: that is also how the number made of a TMDB
+/// id for a series TheTVDB does not list is resolved, and a series found
+/// through the links would be answered under another.
+async fn by_tmdb_term(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
+    let value = tmdb_id.to_string();
+    if bridge::enabled(state)
+        && held(state, ExternalSource::TmdbTv, &value).await?.is_none()
+        && merge::aliased(state, MediaKind::Series, ExternalSource::TmdbTv, &value)
+            .await?
+            .is_none()
+        && let Some(item) = bridged(state, Site::TmdbTv, &value).await?
+    {
+        return Ok(Some(item));
+    }
+    by_tmdb_id(state, tmdb_id).await
+}
+
+/// A series held here under another id of the item Wikidata files `site`'s
+/// `id` on ([`bridge::held`]), as the id Sonarr keeps it under resolves it:
+/// answered from here, or fetched again when it is due. None when the links
+/// lead to no series held.
+async fn bridged(state: &AppState, site: Site, id: &str) -> Result<Option<MediaItem>> {
+    for series in bridge::held(state, site, id).await? {
+        if series.kind != MediaKind::Series {
+            continue;
+        }
+        if let Some(requested_id) = client_id(&series) {
+            return Box::pin(by_client_id(state, requested_id)).await;
+        }
+    }
+    Ok(None)
 }
 
 /// A Fan-Kai production, by Fankai's id for it.
@@ -361,11 +424,16 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
         // By whatever id Sonarr keeps a series under, as Sonarr itself looks
         // a `tvdb:` term up: one this server made among them.
         ids::TermLookup::Tvdb(id) => {
-            return Ok(by_client_id(state, id).await?.into_iter().collect());
+            let found = by_client_id(state, id).await;
+            return or_indexed(state, found, Indexed::Tvdb(id)).await;
         }
-        ids::TermLookup::Tmdb(id) => return Ok(by_tmdb_id(state, id).await?.into_iter().collect()),
+        ids::TermLookup::Tmdb(id) => {
+            let found = by_tmdb_term(state, id).await;
+            return or_indexed(state, found, Indexed::Tmdb(id)).await;
+        }
         ids::TermLookup::Imdb(id) => {
-            return Ok(by_imdb_id(state, &id).await?.into_iter().collect());
+            let found = by_imdb_id(state, &id).await;
+            return or_indexed(state, found, Indexed::Imdb(&id)).await;
         }
         ids::TermLookup::Mal(id) => {
             return Ok(by_anime_id(state, ExternalSource::Mal, id)
@@ -447,6 +515,20 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
             }
         }
 
+        // TVmaze's index, where nothing has been found and a source that
+        // could have found it did not answer — TheTVDB and Skyhook down, or
+        // TMDB: the series TVmaze lists by that name, under the TheTVDB id
+        // Sonarr adds one by, in place of the 502 below. Listed, never kept.
+        if results.is_empty() && !unanswered.is_empty() && tvmaze_index::is_on(state) {
+            let shows = tvmaze_index::search(state, term, state.search_limit()).await?;
+            results.extend(shows.iter().filter_map(indexed));
+            if results.is_empty() {
+                // What says whether the index wants a search that forgives
+                // a misspelling, as the providers' do.
+                tracing::info!(term, "TVmaze's index lists no series by that name either");
+            }
+        }
+
         // Fankai's productions, after everything else. Not a fallback: a recut
         // is asked for by its name, and its name carries the kind — Kaï, Yabai,
         // Henshū — so it stands beside the anime it was cut from rather than
@@ -481,6 +563,104 @@ pub async fn search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+/// The id a lookup asked by, as TVmaze's index may know the series by it.
+enum Indexed<'a> {
+    Tvdb(i64),
+    Tmdb(i64),
+    Imdb(&'a str),
+}
+
+/// What a lookup by an id came to: the series found, or none; where it could
+/// not be found for want of answers, the series TVmaze's index files under
+/// the id — TheTVDB's, IMDb's, or TVmaze's own that Wikidata's links give
+/// for it — listed, never kept: Sonarr asks for the series again by its
+/// TheTVDB id, which the providers answer once they do. Else that failure,
+/// the 502 Sonarr asks again on.
+async fn or_indexed(
+    state: &AppState,
+    found: Result<Option<MediaItem>>,
+    asked: Indexed<'_>,
+) -> Result<Vec<MediaItem>> {
+    let failure = match found {
+        Ok(found) => return Ok(found.into_iter().collect()),
+        Err(e)
+            if tvmaze_index::is_on(state)
+                && e.downcast_ref::<providers::Unanswered>().is_some() =>
+        {
+            e
+        }
+        Err(e) => return Err(e),
+    };
+    let show = match asked {
+        Indexed::Tvdb(id) => tvmaze_index::by_tvdb(state, id).await?,
+        Indexed::Imdb(id) => match tvmaze_index::by_imdb(state, id).await? {
+            Some(show) => Some(show),
+            None => indexed_by_wikidata(state, Site::Imdb, id).await?,
+        },
+        Indexed::Tmdb(id) => indexed_by_wikidata(state, Site::TmdbTv, &id.to_string()).await?,
+    };
+    match show.as_ref().and_then(indexed) {
+        Some(item) => Ok(vec![item]),
+        None => Err(failure),
+    }
+}
+
+/// The series of TVmaze's index under a TVmaze id Wikidata's links give for
+/// `site`'s `id`.
+async fn indexed_by_wikidata(
+    state: &AppState,
+    site: Site,
+    id: &str,
+) -> Result<Option<tvmaze_index::Show>> {
+    for tvmaze in bridge::others(state, site, id, Site::TvMaze).await? {
+        if let Ok(tvmaze) = tvmaze.parse::<i64>()
+            && let Some(show) = tvmaze_index::by_id(state, tvmaze).await?
+        {
+            return Ok(Some(show));
+        }
+    }
+    Ok(None)
+}
+
+/// A series as TVmaze's index lists it, for Sonarr's list of results where
+/// the providers could not answer: its name, when it aired, its status, its
+/// network and its country, and its ids elsewhere — TheTVDB's above all,
+/// which Sonarr adds a series by: one TVmaze knows none for is not listed.
+fn indexed(show: &tvmaze_index::Show) -> Option<MediaItem> {
+    let tvdb = show.tvdb_id.filter(|id| *id > 0)?;
+    let mut item = MediaItem::empty(MediaKind::Series);
+    item.title = show.name.clone();
+    item.first_aired = show.premiered.clone();
+    item.last_aired = show.ended.clone();
+    item.year = show
+        .premiered
+        .as_deref()
+        .and_then(|date| date.get(..4))
+        .and_then(|year| year.parse().ok());
+    item.status = Some(
+        match show.status.as_deref() {
+            Some("Ended") => "ended",
+            Some("In Development") => "upcoming",
+            _ => "continuing",
+        }
+        .to_string(),
+    );
+    item.network = show.network.clone();
+    item.original_country = show
+        .country
+        .as_deref()
+        .map(crate::providers::lang::iso_3166_2_to_3);
+    item.slug = crate::domain::make_slug(&item.title, item.year);
+    item.external_ids = ExternalIds {
+        tvdb: Some(tvdb),
+        imdb: show.imdb_id.clone(),
+        tvmaze: Some(show.id),
+        tvrage: show.tvrage_id,
+        ..Default::default()
+    };
+    Some(item)
+}
 
 async fn local_search(state: &AppState, term: &str) -> Result<Vec<MediaItem>> {
     // Ranked by how well each answers the term, so that the series held here
@@ -530,6 +710,9 @@ async fn ask_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaIte
         Err(e) => {
             tracing::warn!(tmdb_id, error = %e, "could not resolve the TVDB id");
             providers::went_unanswered(names::TMDB);
+            // Not TheTVDB's id Wikidata's links give: a series known by
+            // TMDB's id alone keeps the number made of it, and its
+            // numbering, which its clients hold (see `service::bridge`).
             None
         }
     };
@@ -822,5 +1005,411 @@ mod tests {
         let found = search(&state, "breaking bad").await.expect("answered");
         let titles: Vec<&str> = found.iter().map(|item| item.title.as_str()).collect();
         assert_eq!(titles, ["Breaking Bad", "Breaking Bad: Original Minisodes"]);
+    }
+
+    /// A series held under TheTVDB's id alone, as held: nothing due.
+    async fn held_under_tvdb(state: &AppState, title: &str, tvdb: i64) -> MediaItem {
+        let mut item = series(None, Some(tvdb));
+        item.id = crate::db::new_id();
+        item.title = title.into();
+        item.slug = crate::domain::make_slug(title, None);
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        let mut episode = repo::child::blank_episode(1, 1);
+        episode.id = crate::db::new_id();
+        episode.is_manual = false;
+        item.episodes = vec![episode];
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        item
+    }
+
+    #[tokio::test]
+    async fn sonarrs_imdb_and_tmdb_terms_find_a_series_held_under_another_id_of_its_item() {
+        use crate::service::bridge::{Site, keep_for_tests};
+
+        let (state, providers) = crate::service::testing::server().await;
+        let held = held_under_tvdb(&state, "Pont de Wikidata, la série P5", 990_721).await;
+        keep_for_tests(
+            &state,
+            &[
+                (Site::Imdb, "tt9907210", 990_721),
+                (Site::TvdbSeries, "990721", 990_721),
+                (Site::TmdbTv, "990722", 990_721),
+            ],
+        )
+        .await;
+
+        for term in ["imdb:tt9907210", "tmdb:990722"] {
+            let found = search(&state, term).await.expect("answered");
+            assert_eq!(
+                found
+                    .iter()
+                    .map(|item| item.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec![held.id.as_str()],
+                "{term}"
+            );
+            assert_eq!(providers.asked(), 0, "{term}: answered from here");
+        }
+
+        // The links switched off: the providers are asked, and none answers.
+        state
+            .settings
+            .set(
+                crate::settings::Scope::Server,
+                "",
+                "wikidata.enabled",
+                "false",
+                None,
+            )
+            .await
+            .expect("switched off");
+        assert!(search(&state, "imdb:tt9907210").await.is_err());
+        assert!(providers.asked() > 0);
+    }
+
+    /// TMDB failing for everything, TheTVDB knowing nothing: what each is
+    /// asked for says which ids the links gave.
+    fn tmdb_down(
+        asked: &crate::api::relay::testing::Asked,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        use axum::http::StatusCode;
+        use serde_json::json;
+
+        if asked.method == "POST" && asked.path == "/v4/login" {
+            return (
+                StatusCode::OK,
+                json!({ "status": "success", "data": { "token": "t" } }),
+            );
+        }
+        if asked.path.starts_with("/3/") {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "success": false, "status_code": 11 }),
+            );
+        }
+        (
+            StatusCode::NOT_FOUND,
+            json!({ "status": "failure", "message": "NotFound" }),
+        )
+    }
+
+    #[tokio::test]
+    async fn tmdb_not_answering_the_providers_are_asked_by_the_ids_wikidatas_links_give() {
+        use crate::{
+            api::relay::testing::{self, StandIn},
+            service::bridge::{Site, keep_for_tests},
+        };
+
+        let stand_in = StandIn::start(tmdb_down).await;
+        let state = testing::server(&stand_in).await;
+        keep_for_tests(
+            &state,
+            &[
+                (Site::Imdb, "tt9907310", 990_731),
+                (Site::TvdbSeries, "990731", 990_731),
+                (Site::TmdbTv, "990732", 990_731),
+                (Site::TvdbSeries, "990741", 990_741),
+                (Site::TmdbTv, "990742", 990_741),
+                (Site::TvdbSeries, "990751", 990_751),
+                (Site::TmdbTv, "990752", 990_751),
+            ],
+        )
+        .await;
+
+        // Nothing answers in the end; what matters is who was asked for what.
+        for term in ["imdb:tt9907310", "tmdb:990742", "tvdb:990751"] {
+            let _ = search(&state, term).await;
+        }
+        // IMDb's id: TheTVDB by the series' id, TMDB by its own.
+        assert!(!stand_in.asked_at("/v4/series/990731/extended").is_empty());
+        assert!(!stand_in.asked_at("/3/tv/990732").is_empty());
+        // TMDB's id, TMDB not saying which of TheTVDB's it is: never by the
+        // one the links give, which would hand a series Sonarr may hold
+        // under TMDB's id another number.
+        assert!(stand_in.asked_at("/v4/series/990741/extended").is_empty());
+        // TheTVDB's id, TMDB not saying which of its own it is.
+        assert!(!stand_in.asked_at("/3/tv/990752").is_empty());
+    }
+
+    /// TMDB knowing no series by any other site's id, and failing for the
+    /// rest; TheTVDB knowing none: what each is asked for says which ids
+    /// were used.
+    fn tmdb_knows_nothing(
+        asked: &crate::api::relay::testing::Asked,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        use axum::http::StatusCode;
+        use serde_json::json;
+
+        if asked.method == "POST" && asked.path == "/v4/login" {
+            return (
+                StatusCode::OK,
+                json!({ "status": "success", "data": { "token": "t" } }),
+            );
+        }
+        if asked.path.starts_with("/3/find/") {
+            return (
+                StatusCode::OK,
+                json!({ "movie_results": [], "person_results": [], "tv_results": [],
+                        "tv_episode_results": [], "tv_season_results": [] }),
+            );
+        }
+        if asked.path.starts_with("/3/") {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "success": false, "status_code": 11 }),
+            );
+        }
+        // TheTVDB's record of the series the links tie to a series held
+        // under TMDB's id alone, naming that TMDB id.
+        if asked.path == "/v4/series/990782/extended" {
+            return (
+                StatusCode::OK,
+                json!({ "status": "success", "data": {
+                    "id": 990_782, "name": "Feuilleton contredit P5",
+                    "status": { "name": "Ended" },
+                    "seasons": [{ "id": 1, "number": 1, "type": { "type": "official" } }],
+                    "remoteIds": [{ "id": "990781", "sourceName": "TheMovieDB.com" }]
+                } }),
+            );
+        }
+        if asked.path.starts_with("/v4/series/990782/episodes/") {
+            return (
+                StatusCode::OK,
+                json!({ "status": "success", "data": { "episodes": [
+                    { "id": 9_907_821, "seasonNumber": 1, "number": 1, "name": "Premier",
+                      "aired": "2014-03-02" }
+                ] }, "links": { "next": null } }),
+            );
+        }
+        (
+            StatusCode::NOT_FOUND,
+            json!({ "status": "failure", "message": "NotFound" }),
+        )
+    }
+
+    /// The user's decision of 3 November: where TMDB knows no series by an
+    /// IMDb id, the links find the one held here — and never change the id
+    /// Sonarr holds it by. A series TMDB alone names keeps the number made
+    /// of TMDB's id, and its numbering, whatever TheTVDB id the links know.
+    #[tokio::test]
+    async fn a_series_tmdb_does_not_know_by_imdb_is_found_held_and_keeps_its_number() {
+        use crate::{
+            api::relay::testing::{self, StandIn},
+            service::{
+                bridge::{Site, keep_for_tests},
+                testing::overdue,
+            },
+        };
+
+        let stand_in = StandIn::start(tmdb_knows_nothing).await;
+        let state = testing::server(&stand_in).await;
+        // Due again, so that finding it asks TMDB, which fails.
+        let tmdb_alone = overdue(
+            &state.db,
+            MediaKind::Series,
+            "Feuilleton de TMDB seul P5",
+            ExternalIds {
+                tmdb: Some(990_761),
+                ..Default::default()
+            },
+            true,
+        )
+        .await;
+        // Held under TMDB's id alone too, and carrying another IMDb id than
+        // the one asked below: the links do not find it, and TheTVDB's
+        // record of the series they tie to it names its TMDB id.
+        let elsewhere = held_under_tvdb(&state, "Feuilleton contredit P5", 990_783).await;
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &MediaItem {
+                    external_ids: ExternalIds {
+                        tmdb: Some(990_781),
+                        imdb: Some("tt9907689".into()),
+                        ..Default::default()
+                    },
+                    ..elsewhere.clone()
+                },
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        keep_for_tests(
+            &state,
+            &[
+                (Site::Imdb, "tt9907610", 990_761),
+                (Site::TmdbTv, "990761", 990_761),
+                (Site::TvdbSeries, "990762", 990_761),
+                (Site::Imdb, "tt9907620", 990_771),
+                (Site::TmdbTv, "990771", 990_771),
+                (Site::TvdbSeries, "990772", 990_771),
+                (Site::Imdb, "tt9907630", 990_781),
+                (Site::TmdbTv, "990781", 990_781),
+                (Site::TvdbSeries, "990782", 990_781),
+            ],
+        )
+        .await;
+        let number = ids::to_synthetic(990_761);
+
+        // Found, under the number made of TMDB's id: TheTVDB never asked by
+        // the id the links give, the series given none.
+        let found = search(&state, "imdb:tt9907610").await.expect("answered");
+        assert_eq!(
+            found.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            [tmdb_alone.id.as_str()]
+        );
+        assert_eq!(client_id(&found[0]), number);
+        let asked_again = by_client_id(&state, number.expect("a number"))
+            .await
+            .expect("answered")
+            .expect("held");
+        assert_eq!(client_id(&asked_again), number);
+        let held = repo::item::get(&state.db, &tmdb_alone.id)
+            .await
+            .expect("read")
+            .expect("held");
+        assert_eq!(held.external_ids.tvdb, None);
+        assert!(stand_in.asked_at("/v4/series/990762/extended").is_empty());
+
+        // Held nowhere: fetched by the ids the links give.
+        let _ = search(&state, "imdb:tt9907620").await;
+        assert!(!stand_in.asked_at("/3/tv/990771").is_empty());
+        assert!(!stand_in.asked_at("/v4/series/990772/extended").is_empty());
+
+        // An item one of whose ids a series held here goes by — the series
+        // TMDB alone names, which carries another IMDb id: by no id at all.
+        // By TheTVDB's, TheTVDB's record names that TMDB id, the fetch would
+        // land in the series and give it TheTVDB's id and numbering.
+        let _ = search(&state, "imdb:tt9907630").await;
+        assert!(stand_in.asked_at("/3/tv/990781").is_empty());
+        assert!(stand_in.asked_at("/v4/series/990782/extended").is_empty());
+        let untouched = repo::item::get(&state.db, &elsewhere.id)
+            .await
+            .expect("read")
+            .expect("held");
+        assert_eq!(untouched.external_ids.tvdb, None);
+        assert_eq!(untouched.external_ids.tmdb, Some(990_781));
+        assert_eq!(
+            client_id(&untouched),
+            ids::to_synthetic(990_781),
+            "still under the number made of TMDB's id"
+        );
+    }
+
+    fn indexed_show(
+        id: i64,
+        name: &str,
+        tvdb: Option<i64>,
+        imdb: Option<&str>,
+        weight: i32,
+    ) -> tvmaze_index::Show {
+        tvmaze_index::Show {
+            id,
+            name: name.into(),
+            status: Some("Ended".into()),
+            premiered: Some("2014-03-02".into()),
+            network: Some("Arte".into()),
+            country: Some("FR".into()),
+            tvdb_id: tvdb,
+            imdb_id: imdb.map(str::to_string),
+            weight: Some(weight),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn sonarrs_search_nobody_answers_is_answered_from_tvmazes_index() {
+        use crate::service::bridge::{Site, keep_for_tests};
+
+        let (state, _) = crate::service::testing::server().await;
+        repo::tvmaze::write(
+            &state.db,
+            &[
+                indexed_show(
+                    990_811,
+                    "Phare de Quillon P5",
+                    Some(990_901),
+                    Some("tt9908110"),
+                    40,
+                ),
+                indexed_show(
+                    990_812,
+                    "Phare de Quillon P5 : les nuits",
+                    Some(990_902),
+                    None,
+                    60,
+                ),
+                // TheTVDB knows it not: nothing Sonarr could add it by.
+                indexed_show(990_813, "Phare de Quillon P5 bis", None, None, 90),
+            ],
+        )
+        .await
+        .expect("written");
+
+        // The index off: the 502.
+        assert!(search(&state, "phare de quillon p5").await.is_err());
+        assert!(search(&state, "tvdb:990901").await.is_err());
+
+        state
+            .settings
+            .set(
+                crate::settings::Scope::Server,
+                "",
+                "tvmaze.index",
+                "true",
+                None,
+            )
+            .await
+            .expect("switched on");
+        let found = search(&state, "phare de quillon p5")
+            .await
+            .expect("answered");
+        assert_eq!(
+            found.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(),
+            ["Phare de Quillon P5", "Phare de Quillon P5 : les nuits"]
+        );
+        assert_eq!(
+            found.iter().map(client_id).collect::<Vec<_>>(),
+            [Some(990_901), Some(990_902)]
+        );
+        assert_eq!(found[0].status.as_deref(), Some("ended"));
+        assert_eq!(found[0].year, Some(2014));
+        assert_eq!(found[0].original_country.as_deref(), Some("fra"));
+        assert_eq!(found[0].external_ids.tvmaze, Some(990_811));
+
+        // By TheTVDB's id, by IMDb's, and by TVmaze's own that Wikidata's
+        // links give for TMDB's.
+        keep_for_tests(
+            &state,
+            &[
+                (Site::TmdbTv, "990820", 990_820),
+                (Site::TvMaze, "990812", 990_820),
+            ],
+        )
+        .await;
+        for (term, tvdb) in [
+            ("tvdb:990901", 990_901),
+            ("imdb:tt9908110", 990_901),
+            ("tmdb:990820", 990_902),
+        ] {
+            let found = search(&state, term).await.expect("answered");
+            assert_eq!(
+                found.iter().map(client_id).collect::<Vec<_>>(),
+                [Some(tvdb)],
+                "{term}"
+            );
+        }
+        // One the index does not know: the failure, as before.
+        assert!(search(&state, "tvdb:990999").await.is_err());
     }
 }

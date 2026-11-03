@@ -60,7 +60,7 @@ export const SERVER: Scope = { scope: 'server', id: '-' }
 export const GROUPS = [
   { id: 'answering', prefixes: ['tmdb'] },
   { id: 'providers', prefixes: ['skyhook', 'radarr', 'sonarr', 'tvdb'] },
-  { id: 'sources', prefixes: ['tvmaze', 'anilist', 'mal', 'imdb', 'fankai'] },
+  { id: 'sources', prefixes: ['tvmaze', 'anilist', 'mal', 'imdb', 'fankai', 'wikidata'] },
   { id: 'refresh', prefixes: ['refresh'] },
   // Kept on the Opening & APIs page, where each is explained with what it
   // governs; never drawn among the rest.
@@ -279,6 +279,8 @@ function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
   const wantsImdb = on('imdb.enabled')
   const wantsTitles = on('imdb.akas')
   const wantsEpisodes = on('imdb.episodes')
+  const wantsIndex = on('tvmaze.index')
+  const wantsLinks = on('wikidata.enabled')
 
   const summary = useQuery({
     queryKey: ['settings'],
@@ -290,7 +292,9 @@ function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
         (wantsAnime && !further?.animeList) ||
         (wantsImdb && !further?.imdbRatings) ||
         (wantsTitles && !further?.imdbTitles) ||
-        (wantsEpisodes && !further?.imdbEpisodes)
+        (wantsEpisodes && !further?.imdbEpisodes) ||
+        (wantsIndex && !further?.tvmazeIndex) ||
+        (wantsLinks && !further?.wikidataIds)
       return waiting ? 5_000 : false
     },
   })
@@ -325,6 +329,18 @@ function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
             {wantsEpisodes ? <ImportNow name="imdb-episodes" /> : null}
           </span>
         </Field>
+        <Field label={t.admin.config.tvmazeIndex}>
+          <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+            <Imported list={further.tvmazeIndex} rows={t.admin.config.tvmazeIndexRows} />
+            {wantsIndex ? <ImportNow name="tvmaze-index" /> : null}
+          </span>
+        </Field>
+        <Field label={t.admin.config.wikidataIds}>
+          <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+            <Imported list={further.wikidataIds} rows={t.admin.config.wikidataIdsRows} />
+            {wantsLinks ? <ImportNow name="wikidata-ids" /> : null}
+          </span>
+        </Field>
         <Field label={t.admin.config.malVia}>
           {further.malVia === 'official' ? (
             <Chip tone="provider">
@@ -354,7 +370,11 @@ function SourcesAtWork({ values }: { values: EffectiveSetting[] }) {
  * Download a list now rather than when the schedule next says — after
  * switching a source on, or to check a list is not stale.
  */
-function ImportNow({ name }: { name: 'anime-lists' | 'imdb-ratings' | 'imdb-akas' | 'imdb-episodes' }) {
+function ImportNow({
+  name,
+}: {
+  name: 'anime-lists' | 'imdb-ratings' | 'imdb-akas' | 'imdb-episodes' | 'tvmaze-index' | 'wikidata-ids'
+}) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
 

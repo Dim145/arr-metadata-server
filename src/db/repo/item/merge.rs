@@ -1073,6 +1073,22 @@ const CHILDREN: &[Child] = &[
         marks: ID,
         kept: true,
     },
+    // A character both works list is the survivor's, and so are its voices
+    // in a dub the survivor's lists; another dub's move over beside them.
+    Child {
+        table: "media_character",
+        key: &["character_id"],
+        same: Some(&["character_id"]),
+        marks: &["character_id", "role", "sort_order"],
+        kept: true,
+    },
+    Child {
+        table: "media_character_voice",
+        key: &["character_id", "language", "name"],
+        same: Some(&["character_id", "language", "name"]),
+        marks: &["character_id", "language", "name", "sort_order"],
+        kept: true,
+    },
     Child {
         table: "media_numbering",
         key: &[],
@@ -1986,6 +2002,8 @@ const PUT_BACK: &[&str] = &[
     "media_company",
     "media_keyword",
     "media_video",
+    "media_character",
+    "media_character_voice",
     "media_numbering",
     "media_order",
     "media_order_episode",

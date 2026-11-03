@@ -148,9 +148,10 @@ pub enum Missing {
     /// the same to-do list counts it.
     Duplicates,
     /// A picture, a photograph or a theme of the work's — its own, its
-    /// seasons', its episodes', its cast's, a related work's — that the
-    /// media store gave up fetching: what the media page lists as failed,
-    /// found from the works' side, so a poster can be chosen again.
+    /// seasons', its episodes', its cast's, a related work's, its
+    /// characters' and their voices', its companies' logos, its collection's
+    /// — that the media store gave up fetching: what the media page lists as
+    /// failed, found from the works' side, so a poster can be chosen again.
     MediaFailed,
 }
 
@@ -168,7 +169,21 @@ const MEDIA_FAILED: &str = r"media_item.id IN (
                  UNION SELECT r.media_id FROM media_relation r
                    JOIN media_asset a ON a.origin = r.image WHERE a.status = 'failed'
                  UNION SELECT m.id FROM media_item m
-                   JOIN media_asset a ON a.origin = m.theme_music WHERE a.status = 'failed')";
+                   JOIN media_asset a ON a.origin = m.theme_music WHERE a.status = 'failed'
+                 UNION SELECT l.media_id FROM media_character l
+                   JOIN character h ON h.id = l.character_id
+                   JOIN media_asset a ON a.origin = h.image WHERE a.status = 'failed'
+                 UNION SELECT v.media_id FROM media_character_voice v
+                   JOIN media_asset a ON a.origin = v.image WHERE a.status = 'failed'
+                 UNION SELECT l.media_id FROM media_company l
+                   JOIN company k ON k.id = l.company_id
+                   JOIN media_asset a ON a.origin = k.logo WHERE a.status = 'failed'
+                 UNION SELECT m.id FROM media_item m
+                   JOIN collection s ON s.tmdb_id = m.collection_tmdb_id
+                   JOIN media_asset a ON a.origin = s.poster WHERE a.status = 'failed'
+                 UNION SELECT m.id FROM media_item m
+                   JOIN collection s ON s.tmdb_id = m.collection_tmdb_id
+                   JOIN media_asset a ON a.origin = s.backdrop WHERE a.status = 'failed')";
 
 /// A work in a pair of duplicates proposed, whose other work the reader may
 /// be shown — of its own still, and not for adults when adult works are
@@ -429,8 +444,10 @@ async fn ranked(
         }
     }
 
-    // The works found, as the rest of the query narrows them.
+    // The works found, as the rest of the query narrows them, and the
+    // popularity worked out here of those TMDB gives none.
     let mut found: Vec<MediaItem> = Vec::new();
+    let mut local: HashMap<String, f64> = HashMap::new();
     if !pool.is_empty() {
         let others = Query {
             term: None,
@@ -438,7 +455,7 @@ async fn ranked(
             ..q.clone()
         };
         let mut sql = format!(
-            "SELECT {ITEM_COLUMNS} FROM media_item WHERE id IN ({})",
+            "SELECT {ITEM_COLUMNS}, local_popularity FROM media_item WHERE id IN ({})",
             vec!["?"; pool.len()].join(", ")
         );
         let mut args = AnyArguments::default();
@@ -450,19 +467,25 @@ async fn ranked(
             .fetch_all(db.pool())
             .await?;
         for row in &rows {
-            found.push(map_item(row)?);
+            let item = map_item(row)?;
+            if let Some(figure) = row.opt_real("local_popularity")? {
+                local.insert(item.id.clone(), figure);
+            }
+            found.push(item);
         }
     }
 
     // Each work by the best of its names. The title a work is shown under
     // counts for a little more than its other names, and what it is known by
-    // is its row's, not the copy the index holds.
+    // is its row's, not the copy the index holds: TMDB's popularity, else the
+    // one worked out here, as the lists sort it.
     let by_id: HashMap<String, (Option<i32>, Option<f64>, String)> = found
         .iter()
         .map(|item| {
+            let known = item.popularity.or_else(|| local.get(&item.id).copied());
             (
                 item.id.clone(),
-                (item.year, item.popularity, crate::search::norm(&item.title)),
+                (item.year, known, crate::search::norm(&item.title)),
             )
         })
         .collect();
@@ -515,7 +538,10 @@ async fn ranked(
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
             }
         }
-        sql.push_str(" ORDER BY (popularity + 0) DESC NULLS LAST, title ASC LIMIT ? OFFSET ?");
+        sql.push_str(
+            " ORDER BY (COALESCE(popularity, local_popularity) + 0) DESC NULLS LAST, title ASC
+              LIMIT ? OFFSET ?",
+        );
         args.add((limit - page.len()) as i64)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         args.add(offset.saturating_sub(ranked_count) as i64)
@@ -633,12 +659,17 @@ pub(super) fn from_clause(_db: &Db, _q: &Query) -> &'static str {
 
 /// The order every list is in.
 ///
-/// For a text search, by an expression rather than the column: `popularity + 0`
-/// sorts the same way, and no index can produce it. Otherwise PostgreSQL walks
-/// `ix_media_item_popular` in order, betting that enough rows match early to
-/// stop after thirty-six — a bet that loses badly for a term matching nothing,
-/// 38 ms becoming 59 at fifty thousand works. With nothing to walk it reads
-/// what the term matched and sorts it, which is what a text search costs anyway.
+/// By popularity, a work's is TMDB's figure, or the one worked out here where
+/// TMDB gives it none (`service::popularity`): the expression that
+/// `ix_media_item_browse_known` and `ix_media_item_known` index (migration
+/// 0050), walked in order as the column's own two indexes were.
+///
+/// For a text search, by an expression that sorts the same way and no index
+/// can produce: `… + 0`. Otherwise PostgreSQL walks `ix_media_item_known` in
+/// order, betting that enough rows match early to stop after thirty-six — a
+/// bet that loses badly for a term matching nothing, 38 ms becoming 59 at
+/// fifty thousand works. With nothing to walk it reads what the term matched
+/// and sorts it, which is what a text search costs anyway.
 ///
 /// Anything but popularity is sorted rather than walked: nothing is indexed
 /// by score or date, and for a catalogue's worth of rows that costs little.
@@ -655,10 +686,13 @@ fn order_clause(q: &Query) -> String {
 /// gives — before the title that settles a tie.
 fn sort_key(q: &Query) -> (&'static str, ValueKind) {
     match q.sort {
-        Sort::Popularity | Sort::Relevance if searches_text(q) => {
-            ("(popularity + 0)", ValueKind::Number)
+        Sort::Popularity | Sort::Relevance if searches_text(q) => (
+            "(COALESCE(popularity, local_popularity) + 0)",
+            ValueKind::Number,
+        ),
+        Sort::Popularity | Sort::Relevance => {
+            ("COALESCE(popularity, local_popularity)", ValueKind::Number)
         }
-        Sort::Popularity | Sort::Relevance => ("popularity", ValueKind::Number),
         Sort::Rating => ("listed_score", ValueKind::Number),
         Sort::Release => ("listed_release", ValueKind::Text),
         Sort::Title => ("listed_title", ValueKind::Text),
@@ -1694,12 +1728,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_list_is_read_in_index_order_and_a_text_search_from_the_search_index() {
-        // The whole point of migration 0007, pinned: a page of one kind comes
-        // straight off `ix_media_item_browse` with no sort, a page of every kind
-        // off `ix_media_item_popular` — and a text search reads neither, since
-        // walking either for it measured four times slower on a term that
-        // matched nothing: it reads the works the search index names, by
-        // their key.
+        // The whole point of migration 0007, pinned, with the popularity
+        // worked out here standing in for TMDB's (0050): a page of one kind
+        // comes straight off `ix_media_item_browse_known` with no sort, a page
+        // of every kind off `ix_media_item_known` — and a text search reads
+        // neither, since walking either for it measured four times slower on
+        // a term that matched nothing: it reads the works the search index
+        // names, by their key.
         //
         // SQLite's, whatever engine the other tests run on: the plan is read
         // with its own `EXPLAIN QUERY PLAN`, and means nothing to PostgreSQL's.
@@ -1714,7 +1749,10 @@ mod tests {
             },
         )
         .await;
-        assert!(one_kind.contains("ix_media_item_browse"), "{one_kind}");
+        assert!(
+            one_kind.contains("ix_media_item_browse_known"),
+            "{one_kind}"
+        );
         assert!(
             !one_kind.contains("TEMP B-TREE"),
             "sorted anyway: {one_kind}"
@@ -1729,7 +1767,11 @@ mod tests {
             },
         )
         .await;
-        assert!(every_kind.contains("ix_media_item_popular"), "{every_kind}");
+        assert!(every_kind.contains("ix_media_item_known"), "{every_kind}");
+        assert!(
+            !every_kind.contains("TEMP B-TREE"),
+            "sorted anyway: {every_kind}"
+        );
 
         let text = plan(
             &db,
@@ -1745,7 +1787,9 @@ mod tests {
             "a text search did not start from the search index: {text}"
         );
         assert!(
-            !text.contains("ix_media_item_browse") && !text.contains("ix_media_item_popular"),
+            !text.contains("ix_media_item_browse")
+                && !text.contains("ix_media_item_popular")
+                && !text.contains("ix_media_item_known"),
             "a text search walked an index of the list: {text}"
         );
 

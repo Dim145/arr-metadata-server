@@ -1,0 +1,170 @@
+{
+ "data": {
+  "Media": {
+   "characters": {
+    "pageInfo": {
+     "total": 500,
+     "perPage": 2,
+     "currentPage": 1,
+     "lastPage": 250,
+     "hasNextPage": true
+    },
+    "edges": [
+     {
+      "id": 147808,
+      "role": "MAIN",
+      "name": null,
+      "node": {
+       "id": 121514,
+       "name": {
+        "first": "Mitsuha",
+        "middle": null,
+        "last": "Miyamizu",
+        "full": "Mitsuha Miyamizu",
+        "native": "宮水三葉",
+        "alternative": [],
+        "alternativeSpoiler": [],
+        "userPreferred": "Mitsuha Miyamizu"
+       },
+       "image": {
+        "large": "https://s4.anilist.co/file/anilistcdn/character/large/b121514-MGI7JRluscpz.png",
+        "medium": "https://s4.anilist.co/file/anilistcdn/character/medium/b121514-MGI7JRluscpz.png"
+       },
+       "siteUrl": "https://anilist.co/character/121514",
+       "gender": "Female",
+       "age": "17",
+       "description": "**Height:** 163 cm ~!**Age after timeskip:**…",
+       "dateOfBirth": {
+        "year": null,
+        "month": 12,
+        "day": 1
+       },
+       "bloodType": null,
+       "favourites": 4568
+      },
+      "voiceActors": [
+       {
+        "id": 121515,
+        "name": {
+         "first": "Mone",
+         "middle": null,
+         "last": "Kamishiraishi",
+         "full": "Mone Kamishiraishi",
+         "native": "上白石萌音",
+         "alternative": [],
+         "userPreferred": "Mone Kamishiraishi"
+        },
+        "languageV2": "Japanese",
+        "image": {
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n121515-RA4atoxdBxD1.jpg",
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n121515-RA4atoxdBxD1.jpg"
+        },
+        "siteUrl": "https://anilist.co/staff/121515",
+        "primaryOccupations": [
+         "Voice Actor",
+         "Vocalist"
+        ],
+        "gender": "Female"
+       }
+      ],
+      "voiceActorRoles": [
+       {
+        "roleNotes": null,
+        "dubGroup": null,
+        "voiceActor": {
+         "id": 121515
+        }
+       }
+      ],
+      "all": [
+       {
+        "id": 121515,
+        "languageV2": "Japanese"
+       }
+      ]
+     },
+     {
+      "id": 147809,
+      "role": "MAIN",
+      "name": null,
+      "node": {
+       "id": 121516,
+       "name": {
+        "first": "Taki",
+        "middle": null,
+        "last": "Tachibana",
+        "full": "Taki Tachibana",
+        "native": "立花瀧",
+        "alternative": [],
+        "alternativeSpoiler": [],
+        "userPreferred": "Taki Tachibana"
+       },
+       "image": {
+        "large": "https://s4.anilist.co/file/anilistcdn/character/large/b121516-kuPVJLNsH5uE.png",
+        "medium": "https://s4.anilist.co/file/anilistcdn/character/medium/b121516-kuPVJLNsH5uE.png"
+       },
+       "siteUrl": "https://anilist.co/character/121516",
+       "gender": "Male",
+       "age": "14-17",
+       "description": "~!**Age after timeskip:** 22-23!~ He lives…",
+       "dateOfBirth": {
+        "year": null,
+        "month": 12,
+        "day": 1
+       },
+       "bloodType": null,
+       "favourites": 2884
+      },
+      "voiceActors": [
+       {
+        "id": 95947,
+        "name": {
+         "first": "Ryuunosuke",
+         "middle": null,
+         "last": "Kamiki",
+         "full": "Ryuunosuke Kamiki",
+         "native": "神木隆之介",
+         "alternative": [],
+         "userPreferred": "Ryuunosuke Kamiki"
+        },
+        "languageV2": "Japanese",
+        "image": {
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95947-tFFSGE4ErP8B.png",
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n95947-tFFSGE4ErP8B.png"
+        },
+        "siteUrl": "https://anilist.co/staff/95947",
+        "primaryOccupations": [
+         "Voice Actor"
+        ],
+        "gender": "Male"
+       }
+      ],
+      "voiceActorRoles": [
+       {
+        "roleNotes": null,
+        "dubGroup": null,
+        "voiceActor": {
+         "id": 95947
+        }
+       }
+      ],
+      "all": [
+       {
+        "id": 95947,
+        "languageV2": "Japanese"
+       }
+      ]
+     }
+    ],
+    "nodes": [
+     {
+      "id": 121514
+     },
+     {
+      "id": 121516
+     }
+    ]
+   }
+  }
+ }
+}

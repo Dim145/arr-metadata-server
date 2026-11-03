@@ -108,6 +108,9 @@ flate2 = "1.1.10"
 moka = { version = "0.12.16", features = ["future"] }
 slug = "0.1.6"
 urlencoding = "2.1.3"
+# AniList's GraphQL, read for the relay's own answers (src/graphql): the
+# documents only; combine and thiserror 1 are in the tree already.
+graphql-parser = "0.4.1"
 dotenvy = "0.15.7"
 mime_guess = "2.0.5"
 rust-embed = { version = "8.12.0", features = ["mime-guess"] }

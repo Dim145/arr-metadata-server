@@ -23,7 +23,7 @@ use crate::{
     db::{Db, RowExt, from_bool, new_id, now},
     domain::{
         EpisodeOrder, OrderKind, OrderRecord, PlacedEpisode,
-        orders::{TMDB_AIRED, TMDB_AIRED_LABEL},
+        orders::{TMDB_AIRED, TMDB_AIRED_LABEL, TVDB_LAST, TVDB_LAST_LABEL, TvdbDropped},
     },
     merge::provenance::Provenance,
 };
@@ -236,7 +236,9 @@ fn rank(order: &EpisodeOrder) -> (usize, usize, String) {
 /// Replace the orders a source keeps for a work with these, whole: an order
 /// it no longer gives is gone, one it still gives keeps its row and whether
 /// it is frozen, and its places are written again. What is kept of the other
-/// sources, and what was made here, is left alone.
+/// sources, and what was made here, is left alone — and so is the numbering
+/// TheTVDB last gave a series it no longer knows ([`TVDB_LAST`]), which
+/// TheTVDB, answering for the series it merged it into, does not list.
 pub async fn replace_source(
     db: &Db,
     media_id: &str,
@@ -246,11 +248,13 @@ pub async fn replace_source(
     let mut tx = db.begin_write().await?;
     let at = now();
 
-    let held = sqlx::query(
-        db.sql("SELECT id, key, is_frozen FROM media_order WHERE media_id = ? AND source = ?"),
-    )
+    let held = sqlx::query(db.sql(
+        "SELECT id, key, is_frozen FROM media_order
+          WHERE media_id = ? AND source = ? AND key <> ?",
+    ))
     .bind(media_id)
     .bind(source)
+    .bind(TVDB_LAST)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -273,7 +277,7 @@ pub async fn replace_source(
             .await?;
     }
 
-    for order in orders {
+    for order in orders.iter().filter(|order| order.key != TVDB_LAST) {
         let existing = held
             .iter()
             .find(|row| row.text("key").is_ok_and(|key| key == order.key));
@@ -678,19 +682,43 @@ async fn write_places(
 /// Who numbers a series while TheTVDB does not answer for it: how many
 /// refreshes in a row it has not, a day apart at the least, the last of them
 /// counted when; and since when TMDB numbers the series in its place.
+///
+/// And whether TheTVDB still knows the series: how many refreshes in a row,
+/// a day apart at the least, it answered that it has no such series, the
+/// last of them counted when; and, once it no longer knows it, since when
+/// and why its numbering is kept as it was served then ([`TVDB_LAST`]), and
+/// the series TheTVDB merged it into, when it did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Numbering {
     pub silent: i32,
     pub silent_at: Option<String>,
     pub since: Option<String>,
+    pub gone: i32,
+    pub gone_at: Option<String>,
+    pub dropped: Option<String>,
+    pub dropped_why: Option<TvdbDropped>,
+    pub merged_into: Option<i64>,
+}
+
+impl Numbering {
+    /// TheTVDB's silence forgotten: what TheTVDB answering again leaves.
+    pub fn without_silence(&self) -> Self {
+        Self {
+            silent: 0,
+            silent_at: None,
+            since: None,
+            ..self.clone()
+        }
+    }
 }
 
 /// What is kept of a work's numbering: nothing, for one TheTVDB has always
 /// answered for.
 pub async fn numbering(db: &Db, media_id: &str) -> Result<Numbering> {
-    let row = sqlx::query(
-        db.sql("SELECT silent, silent_at, since FROM media_numbering WHERE media_id = ?"),
-    )
+    let row = sqlx::query(db.sql(
+        "SELECT silent, silent_at, since, gone, gone_at, dropped, dropped_why, merged_into
+           FROM media_numbering WHERE media_id = ?",
+    ))
     .bind(media_id)
     .fetch_optional(db.pool())
     .await?;
@@ -699,6 +727,15 @@ pub async fn numbering(db: &Db, media_id: &str) -> Result<Numbering> {
             silent: row.int("silent")?,
             silent_at: row.opt_text("silent_at")?,
             since: row.opt_text("since")?,
+            gone: row.int("gone")?,
+            gone_at: row.opt_text("gone_at")?,
+            dropped: row.opt_text("dropped")?,
+            // A reason this server does not know, written by a later one:
+            // dropped all the same, for no reason it can say.
+            dropped_why: row
+                .opt_text("dropped_why")?
+                .and_then(|why| why.parse().ok()),
+            merged_into: row.opt_big("merged_into")?,
         },
         None => Numbering::default(),
     })
@@ -707,30 +744,202 @@ pub async fn numbering(db: &Db, media_id: &str) -> Result<Numbering> {
 /// Keep what a refresh made of a work's numbering. One with nothing to say
 /// — TheTVDB answering, TMDB not numbering — is not kept at all.
 pub async fn set_numbering(db: &Db, media_id: &str, numbering: &Numbering) -> Result<()> {
+    let mut tx = db.begin_write().await?;
+    set_numbering_in(db, &mut tx, media_id, numbering).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`set_numbering`], in a write of the caller's.
+async fn set_numbering_in(
+    db: &Db,
+    tx: &mut Transaction<'static, Any>,
+    media_id: &str,
+    numbering: &Numbering,
+) -> Result<()> {
     if *numbering == Numbering::default() {
         sqlx::query(db.sql("DELETE FROM media_numbering WHERE media_id = ?"))
             .bind(media_id)
-            .execute(db.pool())
+            .execute(&mut **tx)
             .await?;
         return Ok(());
     }
     sqlx::query(db.sql(
-        "INSERT INTO media_numbering (media_id, silent, silent_at, since, updated_at)
-         VALUES (?, ?, ?, ?, ?)
+        "INSERT INTO media_numbering
+             (media_id, silent, silent_at, since, gone, gone_at, dropped, dropped_why,
+              merged_into, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (media_id) DO UPDATE SET
              silent = excluded.silent,
              silent_at = excluded.silent_at,
              since = excluded.since,
+             gone = excluded.gone,
+             gone_at = excluded.gone_at,
+             dropped = excluded.dropped,
+             dropped_why = excluded.dropped_why,
+             merged_into = excluded.merged_into,
              updated_at = excluded.updated_at",
     ))
     .bind(media_id)
     .bind(numbering.silent)
     .bind(&numbering.silent_at)
     .bind(&numbering.since)
+    .bind(numbering.gone)
+    .bind(&numbering.gone_at)
+    .bind(&numbering.dropped)
+    .bind(numbering.dropped_why.map(TvdbDropped::as_str))
+    .bind(numbering.merged_into)
     .bind(now())
-    .execute(db.pool())
+    .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+/// The work that takes the TheTVDB id `into` TheTVDB merged series into,
+/// where no work holds it yet: of the works whose numbering says TheTVDB
+/// merged them into it, the one whose numbering was kept first — a work of
+/// its own, not one merged here into another. None when there is none.
+pub async fn merge_heir(db: &Db, into: i64) -> Result<Option<String>> {
+    let row = sqlx::query(db.sql(
+        "SELECT n.media_id
+           FROM media_numbering n
+           JOIN media_item i ON i.id = n.media_id
+          WHERE n.merged_into = ? AND i.merged_into IS NULL
+          ORDER BY CASE WHEN n.dropped IS NULL THEN 1 ELSE 0 END, n.dropped, n.media_id
+          LIMIT 1",
+    ))
+    .bind(into)
+    .fetch_optional(db.pool())
+    .await?;
+    row.map(|row| row.text("media_id"))
+        .transpose()
+        .map_err(Into::into)
+}
+
+/// The work held under TheTVDB id `tvdb_id` that TheTVDB merged into another
+/// series, and that series' id: what a refresh of it asks TheTVDB by from
+/// then on — the work's own TheTVDB id once it took it, whether its
+/// numbering is still kept as it was served before or was given back.
+/// None for any other.
+pub async fn merged_into(db: &Db, tvdb_id: i64) -> Result<Option<(String, i64)>> {
+    let row = sqlx::query(db.sql(
+        "SELECT n.media_id, n.merged_into
+           FROM media_external_id x
+           JOIN media_numbering n ON n.media_id = x.media_id
+          WHERE x.source = 'tvdb_series' AND x.value = ? AND n.merged_into IS NOT NULL",
+    ))
+    .bind(tvdb_id.to_string())
+    .fetch_optional(db.pool())
+    .await?;
+    row.map(|row| Ok((row.text("media_id")?, row.big("merged_into")?)))
+        .transpose()
+}
+
+/// Write a work's numbering as TheTVDB last gave it ([`TVDB_LAST`]), whole:
+/// its places, as of now. Frozen as the aired numbering when `freeze` says
+/// — every other order thawed in the same write — and otherwise left frozen
+/// or not as it was.
+pub async fn write_last(
+    db: &Db,
+    media_id: &str,
+    places: &[PlacedEpisode],
+    freeze: bool,
+) -> Result<()> {
+    let mut tx = db.begin_write().await?;
+    write_last_in(db, &mut tx, media_id, places, freeze).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Keep a work's numbering as it was served ([`TVDB_LAST`]): its places,
+/// frozen as the aired numbering, any other order thawed — and what is kept
+/// of who numbers the work (`numbering`), in the same write: a series is
+/// never numbered so with nothing saying why, nor said to be with nothing
+/// kept.
+pub async fn keep_last(
+    db: &Db,
+    media_id: &str,
+    places: &[PlacedEpisode],
+    numbering: &Numbering,
+) -> Result<()> {
+    let mut tx = db.begin_write().await?;
+    write_last_in(db, &mut tx, media_id, places, true).await?;
+    set_numbering_in(db, &mut tx, media_id, numbering).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The order [`TVDB_LAST`] written whole, as of now, in a write of the
+/// caller's: made the first time, and frozen as the aired numbering when
+/// `freeze` says — every other order thawed — else left frozen or not.
+async fn write_last_in(
+    db: &Db,
+    tx: &mut Transaction<'static, Any>,
+    media_id: &str,
+    places: &[PlacedEpisode],
+    freeze: bool,
+) -> Result<()> {
+    let at = now();
+    if freeze {
+        sqlx::query(
+            db.sql("UPDATE media_order SET is_frozen = 0 WHERE media_id = ? AND is_frozen = 1"),
+        )
+        .bind(media_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    let id = match order_id(db, tx, media_id, TVDB_LAST).await? {
+        Some(id) => {
+            sqlx::query(db.sql(
+                "UPDATE media_order SET kind = ?, source = ?, label = ?, read_at = ?, updated_at = ?
+                  WHERE id = ?",
+            ))
+            .bind(OrderKind::Aired.as_str())
+            .bind(crate::providers::names::TVDB)
+            .bind(TVDB_LAST_LABEL)
+            .bind(&at)
+            .bind(&at)
+            .bind(&id)
+            .execute(&mut **tx)
+            .await?;
+            if freeze {
+                sqlx::query(db.sql("UPDATE media_order SET is_frozen = 1 WHERE id = ?"))
+                    .bind(&id)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+            id
+        }
+        None => {
+            let id = new_id();
+            let order = EpisodeOrder {
+                key: TVDB_LAST.to_string(),
+                kind: OrderKind::Aired,
+                source: crate::providers::names::TVDB.to_string(),
+                source_ref: None,
+                label: TVDB_LAST_LABEL.to_string(),
+                is_default: false,
+                is_frozen: freeze,
+                announced: None,
+                updated_at: at.clone(),
+                episodes: Vec::new(),
+            };
+            insert_header(db, tx, &id, media_id, &order, Some(&at), &at).await?;
+            id
+        }
+    };
+    write_places(db, tx, &id, places).await
+}
+
+/// Forget a work's numbering as TheTVDB last gave it: TheTVDB numbers the
+/// series again. Whether there was one.
+pub async fn forget_last(db: &Db, media_id: &str) -> Result<bool> {
+    let done = sqlx::query(db.sql("DELETE FROM media_order WHERE media_id = ? AND key = ?"))
+        .bind(media_id)
+        .bind(TVDB_LAST)
+        .execute(db.pool())
+        .await?;
+    Ok(done.rows_affected() > 0)
 }
 
 #[cfg(test)]
@@ -1201,6 +1410,7 @@ mod tests {
             silent: 3,
             silent_at: Some("2026-10-19T00:00:00.000Z".into()),
             since: Some("2026-10-19T00:00:00.000Z".into()),
+            ..Numbering::default()
         };
         set_numbering(&db, &work.id, &held).await.unwrap();
         assert_eq!(numbering(&db, &work.id).await.unwrap(), held);
@@ -1210,6 +1420,145 @@ mod tests {
         assert_eq!(
             numbering(&db, &work.id).await.unwrap(),
             Numbering::default()
+        );
+    }
+
+    /// TheTVDB no longer knowing a series is kept beside its silence: how
+    /// often it said so, since when the numbering is kept, why, and the
+    /// series it merged it into — found by the TheTVDB id the work is held
+    /// under, for a refresh to ask by the one TheTVDB kept.
+    #[tokio::test]
+    async fn a_series_thetvdb_no_longer_knows_is_kept_so_and_found_by_its_id() {
+        let db = db().await;
+        let mut work = MediaItem::empty(MediaKind::Series);
+        work.title = "Merged Away".into();
+        work.slug = "merged-away-p4".into();
+        work.external_ids.tvdb = Some(990_401);
+        item::upsert(
+            &db,
+            ItemWrite {
+                item: &work,
+                replace_children: false,
+            },
+        )
+        .await
+        .expect("stored");
+
+        let held = Numbering {
+            gone: 2,
+            gone_at: Some("2026-11-01T00:00:00.000Z".into()),
+            dropped: Some("2026-11-02T00:00:00.000Z".into()),
+            dropped_why: Some(TvdbDropped::Merged),
+            merged_into: Some(990_402),
+            ..Numbering::default()
+        };
+        set_numbering(&db, &work.id, &held).await.unwrap();
+        assert_eq!(numbering(&db, &work.id).await.unwrap(), held);
+        assert_eq!(
+            merged_into(&db, 990_401).await.unwrap(),
+            Some((work.id.clone(), 990_402))
+        );
+        assert_eq!(merged_into(&db, 990_402).await.unwrap(), None);
+
+        // Its numbering as TheTVDB last gave it, kept with what says why in
+        // one write: made frozen, another order thawed; written again as it
+        // was; forgotten — and TheTVDB's own orders never touch it.
+        create(
+            &db,
+            &work.id,
+            &tvdb("ams-mine", "Mine", vec![placed(1, 1, 1)]),
+        )
+        .await
+        .unwrap();
+        assert!(freeze(&db, &work.id, Some("ams-mine")).await.unwrap());
+        let places = vec![placed(1, 1, 1), placed(2, 1, 2)];
+        let dropped = Numbering {
+            gone: 3,
+            ..held.clone()
+        };
+        keep_last(&db, &work.id, &places, &dropped).await.unwrap();
+        assert_eq!(numbering(&db, &work.id).await.unwrap(), dropped);
+        replace_source(&db, &work.id, "tvdb", &[]).await.unwrap();
+        let kept = get(&db, &work.id, TVDB_LAST).await.unwrap().expect("kept");
+        assert!(kept.is_frozen);
+        assert_eq!(kept.source, "tvdb");
+        assert_eq!(kept.episodes.len(), 2);
+        assert_eq!(
+            frozen(&db, &work.id).await.unwrap().as_deref(),
+            Some(TVDB_LAST)
+        );
+        write_last(&db, &work.id, &places[..1], false)
+            .await
+            .unwrap();
+        let kept = get(&db, &work.id, TVDB_LAST).await.unwrap().expect("kept");
+        assert!(kept.is_frozen, "frozen still");
+        assert_eq!(kept.episodes.len(), 1);
+        // Kept again while thawed by somebody: frozen again.
+        assert!(freeze(&db, &work.id, None).await.unwrap());
+        keep_last(&db, &work.id, &places, &dropped).await.unwrap();
+        assert_eq!(
+            frozen(&db, &work.id).await.unwrap().as_deref(),
+            Some(TVDB_LAST)
+        );
+        assert!(forget_last(&db, &work.id).await.unwrap());
+        assert_eq!(get(&db, &work.id, TVDB_LAST).await.unwrap(), None);
+        assert!(!forget_last(&db, &work.id).await.unwrap());
+    }
+
+    /// Of the works TheTVDB merged into one id, which takes it: the one
+    /// whose numbering was kept first, and never one merged here into
+    /// another; none for an id nothing was merged into.
+    #[tokio::test]
+    async fn the_work_that_takes_the_id_thetvdb_merged_into_is_the_first_dropped() {
+        let db = db().await;
+        let stored = |title: &str, slug: &str, tvdb: i64| {
+            let mut work = MediaItem::empty(MediaKind::Series);
+            work.title = title.into();
+            work.slug = slug.into();
+            work.external_ids.tvdb = Some(tvdb);
+            work
+        };
+        let first = stored("Heir First P4", "heir-first-p4", 990_411);
+        let second = stored("Heir Second P4", "heir-second-p4", 990_412);
+        for work in [&first, &second] {
+            item::upsert(
+                &db,
+                ItemWrite {
+                    item: work,
+                    replace_children: false,
+                },
+            )
+            .await
+            .expect("stored");
+        }
+        let merged = |dropped: &str| Numbering {
+            dropped: Some(dropped.into()),
+            dropped_why: Some(TvdbDropped::Merged),
+            merged_into: Some(990_419),
+            ..Numbering::default()
+        };
+        set_numbering(&db, &second.id, &merged("2026-11-02T00:00:00.000Z"))
+            .await
+            .unwrap();
+        set_numbering(&db, &first.id, &merged("2026-11-01T00:00:00.000Z"))
+            .await
+            .unwrap();
+        assert_eq!(
+            merge_heir(&db, 990_419).await.unwrap().as_deref(),
+            Some(first.id.as_str())
+        );
+        assert_eq!(merge_heir(&db, 990_418).await.unwrap(), None);
+
+        // The first merged here into another since: the second takes it.
+        sqlx::query(db.sql("UPDATE media_item SET merged_into = ? WHERE id = ?"))
+            .bind(&second.id)
+            .bind(&first.id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            merge_heir(&db, 990_419).await.unwrap().as_deref(),
+            Some(second.id.as_str())
         );
     }
 }

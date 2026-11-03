@@ -1,0 +1,518 @@
+{
+ "data": {
+  "jellyfin": {
+   "id": 21,
+   "title": {
+    "romaji": "ONE PIECE",
+    "english": "ONE PIECE",
+    "native": "ONE PIECE",
+    "userPreferred": "ONE PIECE"
+   },
+   "startDate": {
+    "year": 1999,
+    "month": 10,
+    "day": 20
+   },
+   "endDate": {
+    "year": null,
+    "month": null,
+    "day": null
+   },
+   "coverImage": {
+    "medium": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/small/bx21-ELSYx3yMPcKM.jpg",
+    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21-ELSYx3yMPcKM.jpg",
+    "extraLarge": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21-ELSYx3yMPcKM.jpg"
+   },
+   "bannerImage": "https://s4.anilist.co/file/anilistcdn/media/anime/banner/21-wf37VakJmZqs.jpg",
+   "format": "TV",
+   "type": "ANIME",
+   "status": "RELEASING",
+   "episodes": null,
+   "chapters": null,
+   "volumes": null,
+   "season": "FALL",
+   "seasonYear": 1999,
+   "description": "Gold Roger was known as the…",
+   "averageScore": 87,
+   "meanScore": 87,
+   "genres": [
+    "Action",
+    "Adventure",
+    "Comedy"
+   ],
+   "synonyms": [
+    "ワンピース",
+    "海贼王",
+    "וואן פיס"
+   ],
+   "duration": 24,
+   "tags": [
+    {
+     "id": 201,
+     "name": "Pirates",
+     "rank": 98,
+     "category": "Cast-Traits",
+     "isMediaSpoiler": false
+    },
+    {
+     "id": 1310,
+     "name": "Travel",
+     "rank": 94,
+     "category": "Theme-Other",
+     "isMediaSpoiler": false
+    },
+    {
+     "id": 56,
+     "name": "Shounen",
+     "rank": 93,
+     "category": "Demographic",
+     "isMediaSpoiler": false
+    }
+   ],
+   "nextAiringEpisode": {
+    "airingAt": 1798985760,
+    "timeUntilAiring": 5331042,
+    "episode": 1181
+   },
+   "studios": {
+    "edges": [
+     {
+      "node": {
+       "id": 18,
+       "name": "Toei Animation",
+       "isAnimationStudio": true
+      },
+      "isMain": true
+     },
+     {
+      "node": {
+       "id": 102,
+       "name": "Funimation",
+       "isAnimationStudio": false
+      },
+      "isMain": false
+     },
+     {
+      "node": {
+       "id": 169,
+       "name": "Fuji TV",
+       "isAnimationStudio": false
+      },
+      "isMain": false
+     }
+    ]
+   },
+   "characters": {
+    "edges": [
+     {
+      "node": {
+       "id": 40,
+       "name": {
+        "first": "Luffy",
+        "last": "Monkey",
+        "full": "Luffy Monkey"
+       },
+       "image": {
+        "medium": "https://s4.anilist.co/file/anilistcdn/character/medium/b40-MNypXsxSRb1R.png",
+        "large": "https://s4.anilist.co/file/anilistcdn/character/large/b40-MNypXsxSRb1R.png"
+       }
+      },
+      "role": "MAIN",
+      "voiceActors": [
+       {
+        "id": 95075,
+        "name": {
+         "first": "Mayumi",
+         "last": "Tanaka",
+         "full": "Mayumi Tanaka",
+         "native": "田中真弓"
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n95075-1qD4TeW1ON92.png",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95075-1qD4TeW1ON92.png"
+        },
+        "language": "Japanese"
+       },
+       {
+        "id": 95472,
+        "name": {
+         "first": "Colleen",
+         "last": "Clinkenbeard",
+         "full": "Colleen Clinkenbeard",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n95472-fznpewUW95vm.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95472-fznpewUW95vm.jpg"
+        },
+        "language": "English"
+       },
+       {
+        "id": 96163,
+        "name": {
+         "first": "Renato",
+         "last": "Novara",
+         "full": "Renato Novara",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n96163-YaGjTo1XM8qd.png",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n96163-YaGjTo1XM8qd.png"
+        },
+        "language": "Italian"
+       }
+      ]
+     },
+     {
+      "node": {
+       "id": 62,
+       "name": {
+        "first": "Zoro",
+        "last": "Roronoa",
+        "full": "Zoro Roronoa"
+       },
+       "image": {
+        "medium": "https://s4.anilist.co/file/anilistcdn/character/medium/b62-S7oAeA9WInjV.png",
+        "large": "https://s4.anilist.co/file/anilistcdn/character/large/b62-S7oAeA9WInjV.png"
+       }
+      },
+      "role": "MAIN",
+      "voiceActors": [
+       {
+        "id": 95123,
+        "name": {
+         "first": "Kazuya",
+         "last": "Nakai",
+         "full": "Kazuya Nakai",
+         "native": "中井和哉"
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n95123-54LrTiD9kGwY.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95123-54LrTiD9kGwY.jpg"
+        },
+        "language": "Japanese"
+       },
+       {
+        "id": 95253,
+        "name": {
+         "first": "Christopher",
+         "last": "Sabat",
+         "full": "Christopher Sabat",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n95253-Z7Yqog73M7E8.png",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95253-Z7Yqog73M7E8.png"
+        },
+        "language": "English"
+       },
+       {
+        "id": 95851,
+        "name": {
+         "first": "Cynthia",
+         "last": "Cranz",
+         "full": "Cynthia Cranz",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/851.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/851.jpg"
+        },
+        "language": "English"
+       }
+      ]
+     },
+     {
+      "node": {
+       "id": 305,
+       "name": {
+        "first": "Sanji",
+        "last": "",
+        "full": "Sanji"
+       },
+       "image": {
+        "medium": "https://s4.anilist.co/file/anilistcdn/character/medium/b305-6lisPmHtCnLT.png",
+        "large": "https://s4.anilist.co/file/anilistcdn/character/large/b305-6lisPmHtCnLT.png"
+       }
+      },
+      "role": "MAIN",
+      "voiceActors": [
+       {
+        "id": 95125,
+        "name": {
+         "first": "Hiroaki",
+         "last": "Hirata",
+         "full": "Hiroaki Hirata",
+         "native": "平田広明"
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n95125-NeFFiJupoDVj.png",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95125-NeFFiJupoDVj.png"
+        },
+        "language": "Japanese"
+       },
+       {
+        "id": 95128,
+        "name": {
+         "first": "Ikue",
+         "last": "Ootani",
+         "full": "Ikue Ootani",
+         "native": "大谷育江"
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n95128-9YWpE1d2U8Sj.png",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95128-9YWpE1d2U8Sj.png"
+        },
+        "language": "Japanese"
+       },
+       {
+        "id": 95312,
+        "name": {
+         "first": "Eric",
+         "last": "Vale",
+         "full": "Eric Vale",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n95312-lixmVhwE8AXE.png",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95312-lixmVhwE8AXE.png"
+        },
+        "language": "English"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "yamtrack": {
+   "id": 21,
+   "idMal": 21,
+   "siteUrl": "https://anilist.co/anime/21",
+   "title": {
+    "romaji": "ONE PIECE",
+    "english": "ONE PIECE",
+    "native": "ONE PIECE"
+   },
+   "coverImage": {
+    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21-ELSYx3yMPcKM.jpg"
+   },
+   "description": "Gold Roger was known as the…",
+   "format": "TV",
+   "status": "RELEASING",
+   "startDate": {
+    "year": 1999,
+    "month": 10,
+    "day": 20
+   },
+   "endDate": {
+    "year": null,
+    "month": null,
+    "day": null
+   },
+   "season": "FALL",
+   "seasonYear": 1999,
+   "episodes": null,
+   "duration": 24,
+   "chapters": null,
+   "source": "MANGA",
+   "genres": [
+    "Action",
+    "Adventure",
+    "Comedy"
+   ],
+   "averageScore": 87,
+   "stats": {
+    "scoreDistribution": [
+     {
+      "score": 10,
+      "amount": 3631
+     },
+     {
+      "score": 20,
+      "amount": 970
+     },
+     {
+      "score": 30,
+      "amount": 1603
+     }
+    ]
+   },
+   "studios": {
+    "nodes": [
+     {
+      "name": "Toei Animation"
+     }
+    ]
+   },
+   "nextAiringEpisode": {
+    "episode": 1181,
+    "airingAt": 1798985760
+   },
+   "relations": {
+    "edges": [
+     {
+      "relationType": "SIDE_STORY",
+      "node": {
+       "id": 466,
+       "type": "ANIME"
+      }
+     },
+     {
+      "relationType": "SIDE_STORY",
+      "node": {
+       "id": 1094,
+       "type": "ANIME"
+      }
+     },
+     {
+      "relationType": "SIDE_STORY",
+      "node": {
+       "id": 1237,
+       "type": "ANIME"
+      }
+     }
+    ]
+   },
+   "recommendations": {
+    "nodes": [
+     {
+      "mediaRecommendation": {
+       "id": 5114
+      }
+     },
+     {
+      "mediaRecommendation": {
+       "id": 20
+      }
+     },
+     {
+      "mediaRecommendation": {
+       "id": 11061
+      }
+     }
+    ]
+   }
+  },
+  "taiga": {
+   "id": 21,
+   "title": {
+    "romaji": "ONE PIECE",
+    "english": "ONE PIECE",
+    "native": "ONE PIECE"
+   },
+   "format": "TV",
+   "status": "RELEASING",
+   "description": "Gold Roger was known as the…",
+   "startDate": {
+    "year": 1999,
+    "month": 10,
+    "day": 20
+   },
+   "endDate": {
+    "year": null,
+    "month": null,
+    "day": null
+   },
+   "episodes": null,
+   "duration": 24,
+   "countryOfOrigin": "JP",
+   "trailer": null,
+   "updatedAt": 1793653203,
+   "coverImage": {
+    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21-ELSYx3yMPcKM.jpg"
+   },
+   "genres": [
+    "Action",
+    "Adventure",
+    "Comedy"
+   ],
+   "synonyms": [
+    "ワンピース",
+    "海贼王",
+    "וואן פיס"
+   ],
+   "averageScore": 87,
+   "popularity": 765579,
+   "tags": [
+    {
+     "name": "Pirates",
+     "rank": 98
+    },
+    {
+     "name": "Travel",
+     "rank": 94
+    },
+    {
+     "name": "Shounen",
+     "rank": 93
+    }
+   ],
+   "studios": {
+    "nodes": [
+     {
+      "name": "Toei Animation"
+     },
+     {
+      "name": "Funimation"
+     },
+     {
+      "name": "Fuji TV"
+     }
+    ]
+   },
+   "nextAiringEpisode": {
+    "airingAt": 1798985760,
+    "episode": 1181
+   }
+  },
+  "kometa": {
+   "id": 21,
+   "title": {
+    "romaji": "ONE PIECE",
+    "english": "ONE PIECE"
+   }
+  },
+  "kometaRelations": {
+   "id": 21,
+   "relations": {
+    "edges": [
+     {
+      "node": {
+       "id": 466,
+       "type": "ANIME"
+      },
+      "relationType": "SIDE_STORY"
+     },
+     {
+      "node": {
+       "id": 1094,
+       "type": "ANIME"
+      },
+      "relationType": "SIDE_STORY"
+     },
+     {
+      "node": {
+       "id": 1237,
+       "type": "ANIME"
+      },
+      "relationType": "SIDE_STORY"
+     }
+    ],
+    "nodes": [
+     {
+      "id": 466,
+      "type": "ANIME"
+     },
+     {
+      "id": 1094,
+      "type": "ANIME"
+     },
+     {
+      "id": 1237,
+      "type": "ANIME"
+     }
+    ]
+   }
+  }
+ }
+}

@@ -1020,11 +1020,19 @@ fn formats(item: &MediaItem) -> Vec<String> {
 }
 
 /// Who numbers the episodes: whoever numbers the aired order, as the orders
-/// say — TMDB for a series it numbers while TheTVDB does not answer for it —
-/// and, where they say nothing, where the id Sonarr holds the series under
-/// comes from: TheTVDB, or this server's own ranges for a work TheTVDB does
-/// not list — the catalogue itself, `local`, for one entered by hand.
+/// say — TMDB for a series it numbers while TheTVDB does not answer for it,
+/// TheTVDB for one it no longer knows, sent the numbering it last gave,
+/// frozen — and, where they say nothing, where the id Sonarr holds the
+/// series under comes from: TheTVDB, or this server's own ranges for a work
+/// TheTVDB does not list — the catalogue itself, `local`, for one entered by
+/// hand.
 fn metadata_source(client_id: i64, orders: &[EpisodeOrder]) -> &'static str {
+    if orders
+        .iter()
+        .any(|order| order.is_frozen && order.key == orders::TVDB_LAST)
+    {
+        return "tvdb";
+    }
     match orders::aired(orders).map(|order| order.source.as_str()) {
         Some("tvdb") => return "tvdb",
         Some("tmdb") => return "tmdb",
@@ -1770,6 +1778,16 @@ mod tests {
         assert_eq!(
             from_item(&it, &asked(&own, &tmdb, OFFICIAL)).metadata_source,
             "tmdb"
+        );
+        // TheTVDB no longer knows it: Sonarr is sent the numbering TheTVDB
+        // last gave, frozen, whoever numbers the work meanwhile.
+        let mut last = order(orders::TVDB_LAST, "TheTVDB (as last given)", Vec::new());
+        last.kind = OrderKind::Aired;
+        last.is_frozen = true;
+        let dropped = vec![aired_order("tmdb"), last];
+        assert_eq!(
+            from_item(&it, &asked(&own, &dropped, OFFICIAL)).metadata_source,
+            "tvdb"
         );
     }
 

@@ -622,7 +622,7 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
         .context("failed to write image")?;
     }
 
-    write_credits(db, tx, item, &kept, &created).await?;
+    let played_by = write_credits(db, tx, item, &kept, &created).await?;
 
     for relation in &item.relations {
         sqlx::query(db.sql(
@@ -723,11 +723,12 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
     // Wholly the providers', like the ratings: replaced, never merged.
     crate::db::repo::release::replace(db, tx, &item.id, &item.releases).await?;
 
-    // The seasons' texts in other languages, the companies, TMDB's keywords
-    // and the videos: written again when the refresh gives some. None means
-    // nobody said — TMDB not asked, or not answering — and what is held of
-    // them stands, as an empty list stands for the rest in
-    // `service::keep_what_nobody_answered`.
+    // The seasons' texts in other languages, the companies, TMDB's keywords,
+    // the videos and the characters: written again when the refresh gives
+    // some. None means nobody said — TMDB not asked, or not answering — and
+    // what is held of them stands, as an empty list stands for the rest in
+    // `service::keep_what_nobody_answered`. A character held is played by
+    // the person it was, whose credits were just written again.
     crate::db::repo::translation::replace_seasons(db, tx, &item.id, &item.seasons).await?;
     if !item.companies.is_empty() {
         crate::db::repo::company::replace(db, tx, &item.id, &item.companies).await?;
@@ -737,6 +738,9 @@ async fn replace_children(db: &Db, tx: &mut Transaction<'_, Any>, item: &MediaIt
     }
     if !item.videos.is_empty() {
         crate::db::repo::video::replace(db, tx, &item.id, &item.videos).await?;
+    }
+    if !item.characters.is_empty() {
+        crate::db::repo::character::replace(db, tx, &item.id, &item.characters, &played_by).await?;
     }
 
     Ok(())
@@ -756,17 +760,32 @@ pub struct Filled {
     /// The department and the job of each credit of the crew, by TMDB's id
     /// for the credit.
     pub jobs: Vec<(String, String, String)>,
+    /// The characters, each played by a credit of the work as it is held.
+    pub characters: Vec<crate::domain::person::CharacterCredit>,
+    /// The person each of those credits is filed under, by the credit's id.
+    pub played_by: std::collections::HashMap<String, String>,
 }
 
 /// Write into a work's rows what `filled` holds, in one transaction: its
-/// companies, keywords and videos in place of those it has, when there are
-/// any; the language and what is said of each of TMDB's pictures it holds,
-/// a language it holds standing; the department and job of each credit of
-/// its crew TMDB's id names. Nothing else of the work is touched.
+/// companies, keywords, videos and characters in place of those it has,
+/// when there are any; the language and what is said of each of TMDB's
+/// pictures it holds, a language it holds standing; the department and job
+/// of each credit of its crew TMDB's id names. Nothing else of the work is
+/// touched.
 pub async fn fill_in(db: &Db, media_id: &str, filled: &Filled) -> Result<()> {
     let mut tx = db.begin_write().await?;
     if !filled.companies.is_empty() {
         crate::db::repo::company::replace(db, &mut tx, media_id, &filled.companies).await?;
+    }
+    if !filled.characters.is_empty() {
+        crate::db::repo::character::replace(
+            db,
+            &mut tx,
+            media_id,
+            &filled.characters,
+            &filled.played_by,
+        )
+        .await?;
     }
     if !filled.keywords.is_empty() {
         crate::db::repo::keyword::replace(db, &mut tx, media_id, &filled.keywords).await?;
@@ -846,13 +865,15 @@ const CREDITS_PER_INSERT: usize = 50;
 
 /// Write the credits the sources gave — the work's own, then its episodes',
 /// each on the episode of the work it is of — each filed under its person.
+/// The person each of the work's own is filed under, by the credit's id:
+/// whom its characters are played by.
 async fn write_credits(
     db: &Db,
     tx: &mut Transaction<'_, Any>,
     item: &MediaItem,
     kept: &crate::db::repo::person::Kept,
     created: &str,
-) -> Result<()> {
+) -> Result<std::collections::HashMap<String, String>> {
     use crate::db::repo::person::{self, Linkable};
 
     let mut credits: Vec<(&Credit, Option<(i32, i32)>)> = item
@@ -867,7 +888,7 @@ async fn write_credits(
             .map(|(credit, place)| (credit, Some(place))),
     );
     if credits.is_empty() {
-        return Ok(());
+        return Ok(Default::default());
     }
 
     let linkables: Vec<Linkable<'_>> = credits
@@ -875,6 +896,12 @@ async fn write_credits(
         .map(|(credit, place)| Linkable::of(credit, *place, item.people.of(credit)))
         .collect();
     let people = person::resolve(db, tx, kept, &linkables).await?;
+    let played_by = credits
+        .iter()
+        .zip(&people)
+        .filter(|((credit, place), _)| place.is_none() && !credit.id.is_empty())
+        .filter_map(|((credit, _), person)| Some((credit.id.clone(), person.clone()?)))
+        .collect();
 
     let rows: Vec<_> = credits.iter().zip(people).collect();
     for chunk in rows.chunks(CREDITS_PER_INSERT) {
@@ -914,7 +941,7 @@ async fn write_credits(
             .await
             .context("failed to write credits")?;
     }
-    Ok(())
+    Ok(played_by)
 }
 
 /// Bind one more value to a statement being built.
@@ -1776,6 +1803,7 @@ mod tests {
                     "Acting".into(),
                     "Actor".into(),
                 )],
+                ..Filled::default()
             },
         )
         .await

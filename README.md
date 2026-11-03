@@ -151,6 +151,6 @@ switched on, [TVmaze](https://www.tvmaze.com), [AniList](https://anilist.co),
 [Tenrai](https://api.tenrai.org/documentation), a mirror written to Jikan's schema (a Jikan of
 your own last, the public one having closed), IMDb's datasets, [Fankai](https://fankai.fr)
 and its community's wiki; the [Fribb anime-lists](https://github.com/Fribb/anime-lists) map
-anime between them. Each provider's terms apply to what is fetched and kept, and every public
-page credits the sources that are on. This product uses the TMDB API but is not endorsed or
-certified by TMDB.
+anime between them, and [Wikidata](https://www.wikidata.org) ties the sites' ids together. Each
+provider's terms apply to what is fetched and kept, and every public page credits the sources
+that are on. This product uses the TMDB API but is not endorsed or certified by TMDB.

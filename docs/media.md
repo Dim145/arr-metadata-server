@@ -9,8 +9,11 @@ S3 — Garage, MinIO, RustFS, Ceph — with `AMS_S3_ENDPOINT`, `AMS_S3_REGION`,
 default: nothing is kept until it is asked for.
 
 - **What is kept.** The work's posters, backdrops, banners and logos, its
-  seasons', its episodes' stills, its cast's photographs and a Fan-Kai's
-  theme music. Never a trailer or a video. The cast's photographs and the
+  seasons', its episodes' stills, its cast's photographs, its characters'
+  pictures and their voices' portraits, the logos of the networks and
+  companies credited on it, and a Fan-Kai's theme music; the poster and
+  background of each TMDB collection kept. Never a trailer or a video. The
+  cast's photographs — the characters' and the voices' with them — and the
   themes are each a switch on **Administration › Media**, where the store's
   figures, the failures and the tasks are.
 - **When.** As a work is stored — a refresh, a sync, an import — its media

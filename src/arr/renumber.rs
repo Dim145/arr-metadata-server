@@ -15,6 +15,11 @@
 //! what a refresh or a sync keeps when the source that numbers the series did
 //! not answer (`merge::provenance::protect_numbering`): no alert is raised for
 //! the numbering of a provider that was only standing in.
+//!
+//! Nor is one raised while an order is frozen as the series' aired numbering
+//! — by a person, or as TheTVDB last gave a series it no longer knows: that
+//! order is what the clients are sent, and the series' own episodes moving
+//! moves nothing they are sent.
 
 use std::collections::HashMap;
 
@@ -124,9 +129,20 @@ pub fn describe(title: &str, moved: &[Move]) -> String {
     )
 }
 
-/// Say in the trail that a series' episodes moved, when they did.
+/// Say in the trail that a series' episodes moved, when they did and the
+/// clients are sent them so: not while an order is frozen as its aired
+/// numbering, which they are sent instead.
 pub async fn tell(state: &AppState, item: &MediaItem, moved: &[Move]) {
     if moved.is_empty() || item.kind != MediaKind::Series {
+        return;
+    }
+    if let Ok(Some(frozen)) = crate::db::repo::order::frozen(&state.db, &item.id).await {
+        tracing::debug!(
+            id = %item.id,
+            order = %frozen,
+            moved = moved.len(),
+            "episodes moved under an order frozen as the aired numbering: nothing to tell"
+        );
         return;
     }
     tracing::info!(
@@ -155,6 +171,59 @@ mod tests {
         episode.tvdb_id = Some(tvdb);
         episode.is_manual = false;
         episode
+    }
+
+    async fn told(state: &AppState, id: &str) -> usize {
+        crate::db::repo::audit::list(
+            &state.db,
+            &crate::db::repo::audit::Query {
+                action: Some("item.renumbered".into()),
+                target: Some(id.into()),
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("the trail")
+        .len()
+    }
+
+    #[tokio::test]
+    async fn episodes_moved_under_an_order_frozen_as_the_aired_numbering_are_not_told() {
+        let state = crate::api::native::testing::server().await;
+        let mut work = MediaItem::empty(MediaKind::Series);
+        work.title = "Moved Under Frost".into();
+        work.slug = "moved-under-frost-renumber".into();
+        crate::db::repo::item::upsert(
+            &state.db,
+            crate::db::repo::item::ItemWrite {
+                item: &work,
+                replace_children: false,
+            },
+        )
+        .await
+        .expect("stored");
+        let moved = moves(
+            &[episode(1, 3, Some(3), 103)],
+            &[episode(2, 1, Some(3), 103)],
+        );
+        assert_eq!(moved.len(), 1);
+
+        // TheTVDB no longer knows the series: the numbering it last gave,
+        // frozen, is what the clients are sent; the series' own episodes
+        // moving is not theirs to hear of.
+        crate::db::repo::order::write_last(&state.db, &work.id, &[], true)
+            .await
+            .expect("kept");
+        tell(&state, &work, &moved).await;
+        assert_eq!(told(&state, &work.id).await, 0);
+
+        // Thawed, the series' own episodes are what they are sent again.
+        crate::db::repo::order::freeze(&state.db, &work.id, None)
+            .await
+            .expect("thawed");
+        tell(&state, &work, &moved).await;
+        assert_eq!(told(&state, &work.id).await, 1);
     }
 
     #[test]

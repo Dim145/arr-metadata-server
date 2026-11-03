@@ -15,7 +15,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -122,13 +121,14 @@ impl Named {
     }
 }
 
-/// What the collection a film belongs to is called, in the catalogue's
-/// language: the catalogue holds TMDB's number for it and TMDB's record is the
-/// collections page's to read, which keeps it a day. `asked` is what an
-/// export has asked already, so that a hundred films of one saga are one
-/// question. Nothing for a film in none, and for one whose collection TMDB
-/// cannot be asked about — no key, or no answer — which is a document without
-/// a `<set>`, not one that fails.
+/// What the collection a film belongs to is called, and what it is about, in
+/// the catalogue's language: the collection as the catalogue keeps it — or
+/// TMDB's record of it, asked once and kept from then on, where it never
+/// was (see [`service::collection`]). `asked` is what an export has asked
+/// already, so that a hundred films of one saga are one question. Nothing
+/// for a film in none, and for one whose collection is not kept and TMDB
+/// cannot be asked about — no key, or no answer — which is a document
+/// without a `<set>`, not one that fails.
 async fn collection_of(
     state: &AppState,
     item: &MediaItem,
@@ -141,20 +141,27 @@ async fn collection_of(
         return known.clone();
     }
 
-    let language = service::language::tmdb_locale(None, &state.language(None, None));
-    let record = super::recommend::named(state, id, &language).await;
-    let text = |field: &str| {
-        record
-            .as_ref()
-            .and_then(|record| record.get(field))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(str::to_string)
+    let language = service::collection::language_of(&service::language::tmdb_locale(
+        None,
+        &state.language(None, None),
+    ));
+    let kept = match service::collection::get(state, id).await {
+        Ok(kept) => kept,
+        Err(e) => {
+            tracing::warn!(
+                tmdb_id = id,
+                error = format_args!("{e:#}"),
+                "could not read a collection"
+            );
+            None
+        }
     };
-    let named = text("name").map(|name| Named {
-        name,
-        overview: text("overview"),
+    let named = kept.as_ref().map(|collection| {
+        let (name, overview) = collection.texts_in(&language);
+        Named {
+            name: name.to_string(),
+            overview: overview.map(str::to_string),
+        }
     });
 
     asked.insert(id, named.clone());

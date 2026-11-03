@@ -86,6 +86,7 @@ pub(super) fn map_item(row: &sqlx::any::AnyRow) -> Result<MediaItem> {
         relations: Vec::new(),
         releases: Vec::new(),
         people: Default::default(),
+        characters: Vec::new(),
         companies: Vec::new(),
         keyword_entities: Vec::new(),
         videos: Vec::new(),
@@ -366,12 +367,13 @@ pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
         load_translations(db, &item.id),
         load_relations(db, &item.id),
     )?;
-    let (releases, companies, keyword_entities, videos, mut season_texts) = tokio::try_join!(
+    let (releases, companies, keyword_entities, videos, mut season_texts, characters) = tokio::try_join!(
         crate::db::repo::release::load(db, &item.id),
         crate::db::repo::company::of_work(db, &item.id),
         crate::db::repo::keyword::of_work(db, &item.id),
         crate::db::repo::video::of_work(db, &item.id),
         crate::db::repo::translation::for_seasons(db, &item.id),
+        crate::db::repo::character::of_work(db, &item.id),
     )?;
     item.releases = releases;
     item.companies = companies;
@@ -396,6 +398,7 @@ pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
     }
 
     let (credits, people) = credits;
+    item.characters = played_by(characters, &credits, &people);
     item.seasons = seasons;
     item.episodes = episodes;
     item.images = item_images;
@@ -407,6 +410,39 @@ pub async fn load_children(db: &Db, item: &mut MediaItem) -> Result<()> {
     item.relations = relations;
 
     Ok(())
+}
+
+/// A work's characters, each given the credit of the work that plays it: the
+/// credit of the person it is played by — an actor's, else a guest's, else
+/// any — as the credits are now.
+fn played_by(
+    characters: Vec<(crate::domain::person::CharacterCredit, Option<String>)>,
+    credits: &[Credit],
+    people: &People,
+) -> Vec<crate::domain::person::CharacterCredit> {
+    let rank = |kind: CreditType| match kind {
+        CreditType::Actor => 0,
+        CreditType::Guest => 1,
+        _ => 2,
+    };
+    characters
+        .into_iter()
+        .map(|(mut character, person)| {
+            character.credit_id = person.and_then(|person| {
+                credits
+                    .iter()
+                    .filter(|c| {
+                        people
+                            .of(c)
+                            .and_then(|p| p.person_id.as_deref())
+                            .is_some_and(|id| id == person)
+                    })
+                    .min_by_key(|c| (rank(c.credit_type), c.sort_order))
+                    .map(|c| c.id.clone())
+            });
+            character
+        })
+        .collect()
 }
 
 async fn load_seasons(db: &Db, media_id: &str) -> Result<Vec<Season>> {
@@ -673,6 +709,13 @@ fn map_relation(row: &sqlx::any::AnyRow) -> Result<Relation> {
         work_id: row.opt_text("work_id")?,
         sort_order: row.int("sort_order")?,
     })
+}
+
+/// A work's own credits, each with the person it is filed under, and no
+/// other child of it: whom a pass over its answers kept finds its characters
+/// played by (`jobs::refresh::replay_snapshots`).
+pub async fn cast(db: &Db, media_id: &str) -> Result<(Vec<Credit>, People)> {
+    load_credits(db, media_id).await
 }
 
 /// The work's own credits — its episodes' are not its cast, and are read

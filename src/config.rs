@@ -100,6 +100,7 @@ pub struct Config {
     pub fankai: Fankai,
     pub fankai_wiki: FankaiWiki,
     pub anime_mapping: AnimeMapping,
+    pub wikidata: Wikidata,
     /// Which provider wins when two disagree, most trusted first: the first
     /// value of `sources.priority`, which is what the merge reads.
     pub provider_priority: Vec<String>,
@@ -470,6 +471,13 @@ pub struct Imdb {
 #[derive(Clone, Debug)]
 pub struct AnimeMapping {
     pub url: String,
+}
+
+/// Wikidata's query service, which the links between the sites' ids are read
+/// from (`wikidata.enabled`). No key.
+#[derive(Clone, Debug)]
+pub struct Wikidata {
+    pub endpoint: String,
 }
 
 #[derive(Clone)]
@@ -869,6 +877,12 @@ impl Config {
                 url: var_or(
                     &["AMS_ANIME_MAPPING_URL"],
                     "https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json",
+                ),
+            },
+            wikidata: Wikidata {
+                endpoint: var_or(
+                    &["AMS_WIKIDATA_ENDPOINT"],
+                    "https://query.wikidata.org/sparql",
                 ),
             },
             provider_priority: {

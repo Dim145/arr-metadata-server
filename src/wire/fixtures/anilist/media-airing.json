@@ -1,0 +1,514 @@
+{
+ "data": {
+  "Media": {
+   "id": 21,
+   "idMal": 21,
+   "title": {
+    "romaji": "ONE PIECE",
+    "english": "ONE PIECE",
+    "native": "ONE PIECE",
+    "userPreferred": "ONE PIECE"
+   },
+   "type": "ANIME",
+   "format": "TV",
+   "status": "RELEASING",
+   "statusV2": "RELEASING",
+   "description": "Gold Roger was known as the…",
+   "descriptionHtml": "<p>Gold Roger was known as the…</p>",
+   "startDate": {
+    "year": 1999,
+    "month": 10,
+    "day": 20
+   },
+   "endDate": {
+    "year": null,
+    "month": null,
+    "day": null
+   },
+   "season": "FALL",
+   "seasonYear": 1999,
+   "seasonInt": 994,
+   "episodes": null,
+   "duration": 24,
+   "chapters": null,
+   "volumes": null,
+   "countryOfOrigin": "JP",
+   "isLicensed": true,
+   "source": "MANGA",
+   "sourceV3": "MANGA",
+   "hashtag": "#ONEPIECE",
+   "trailer": null,
+   "updatedAt": 1793653203,
+   "coverImage": {
+    "extraLarge": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21-ELSYx3yMPcKM.jpg",
+    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21-ELSYx3yMPcKM.jpg",
+    "medium": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/small/bx21-ELSYx3yMPcKM.jpg",
+    "color": "#e49335"
+   },
+   "bannerImage": "https://s4.anilist.co/file/anilistcdn/media/anime/banner/21-wf37VakJmZqs.jpg",
+   "genres": [
+    "Action",
+    "Adventure",
+    "Comedy"
+   ],
+   "synonyms": [
+    "ワンピース",
+    "海贼王",
+    "וואן פיס"
+   ],
+   "averageScore": 87,
+   "weightedScore": 87,
+   "meanScore": 87,
+   "popularity": 765579,
+   "isLocked": false,
+   "trending": 253,
+   "favourites": 110484,
+   "tags": [
+    {
+     "id": 201,
+     "name": "Pirates",
+     "description": "Prominently features sea-faring adventurers branded as…",
+     "category": "Cast-Traits",
+     "rank": 98,
+     "isGeneralSpoiler": false,
+     "isMediaSpoiler": false,
+     "isAdult": false,
+     "userId": null
+    },
+    {
+     "id": 1310,
+     "name": "Travel",
+     "description": "Centers around character(s) moving between places…",
+     "category": "Theme-Other",
+     "rank": 94,
+     "isGeneralSpoiler": false,
+     "isMediaSpoiler": false,
+     "isAdult": false,
+     "userId": 857856
+    },
+    {
+     "id": 56,
+     "name": "Shounen",
+     "description": "Target demographic is teenage and young…",
+     "category": "Demographic",
+     "rank": 93,
+     "isGeneralSpoiler": false,
+     "isMediaSpoiler": false,
+     "isAdult": false,
+     "userId": null
+    }
+   ],
+   "relations": {
+    "edges": [
+     {
+      "id": 42,
+      "relationType": "SIDE_STORY",
+      "relationTypeV2": "SIDE_STORY",
+      "relationTypeV3": "SIDE_STORY",
+      "isMainStudio": false,
+      "node": {
+       "id": 466,
+       "idMal": 466,
+       "type": "ANIME",
+       "format": "OVA",
+       "status": "FINISHED",
+       "title": {
+        "romaji": "ONE PIECE: Taose! Kaizoku Ganzack",
+        "english": "One Piece: Defeat the Pirate Ganzack!",
+        "native": "ONE PIECE 倒せ!海賊ギャンザック",
+        "userPreferred": "ONE PIECE: Taose! Kaizoku Ganzack"
+       },
+       "coverImage": {
+        "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/nx466-bVP54I7dCB2F.jpg"
+       },
+       "startDate": {
+        "year": 1998,
+        "month": 7,
+        "day": 26
+       },
+       "isAdult": false
+      }
+     },
+     {
+      "id": 43,
+      "relationType": "SIDE_STORY",
+      "relationTypeV2": "SIDE_STORY",
+      "relationTypeV3": "SIDE_STORY",
+      "isMainStudio": false,
+      "node": {
+       "id": 1094,
+       "idMal": 1094,
+       "type": "ANIME",
+       "format": "SPECIAL",
+       "status": "FINISHED",
+       "title": {
+        "romaji": "ONE PIECE TV Special: Umi no Heso no Daibouken-hen",
+        "english": "One Piece: Umi no Heso no Daibouken-hen",
+        "native": "ONE PIECE TVスペシャル 海のヘソの大冒険篇",
+        "userPreferred": "ONE PIECE TV Special: Umi no Heso no Daibouken-hen"
+       },
+       "coverImage": {
+        "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx1094-H3YFJ1TR0ZZi.jpg"
+       },
+       "startDate": {
+        "year": 2000,
+        "month": 12,
+        "day": 20
+       },
+       "isAdult": false
+      }
+     },
+     {
+      "id": 44,
+      "relationType": "SIDE_STORY",
+      "relationTypeV2": "SIDE_STORY",
+      "relationTypeV3": "SIDE_STORY",
+      "isMainStudio": false,
+      "node": {
+       "id": 1237,
+       "idMal": 1237,
+       "type": "ANIME",
+       "format": "SPECIAL",
+       "status": "FINISHED",
+       "title": {
+        "romaji": "ONE PIECE: Oounabara ni Hirake! Dekkai Dekkai Chichi no Yume!",
+        "english": "One Piece Special: Open Upon the Great Sea! A Father's Huge, HUGE Dream!",
+        "native": "ONE PIECE: 大海原にひらけ! でっかいでっカイ父の夢",
+        "userPreferred": "ONE PIECE: Oounabara ni Hirake! Dekkai Dekkai Chichi no Yume!"
+       },
+       "coverImage": {
+        "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/1237.jpg"
+       },
+       "startDate": {
+        "year": 2003,
+        "month": 4,
+        "day": 6
+       },
+       "isAdult": false
+      }
+     }
+    ],
+    "nodes": [
+     {
+      "id": 466,
+      "type": "ANIME"
+     },
+     {
+      "id": 1094,
+      "type": "ANIME"
+     },
+     {
+      "id": 1237,
+      "type": "ANIME"
+     }
+    ],
+    "pageInfo": {
+     "total": null,
+     "perPage": null,
+     "currentPage": null,
+     "lastPage": null,
+     "hasNextPage": false
+    }
+   },
+   "studios": {
+    "edges": [
+     {
+      "id": 37,
+      "isMain": true,
+      "node": {
+       "id": 18,
+       "name": "Toei Animation",
+       "isAnimationStudio": true,
+       "siteUrl": "https://anilist.co/studio/18"
+      }
+     }
+    ],
+    "nodes": [
+     {
+      "id": 18,
+      "name": "Toei Animation"
+     }
+    ],
+    "pageInfo": {
+     "total": null
+    }
+   },
+   "mainStudios": {
+    "nodes": [
+     {
+      "id": 18,
+      "name": "Toei Animation",
+      "isAnimationStudio": true
+     }
+    ]
+   },
+   "isAdult": false,
+   "nextAiringEpisode": {
+    "id": 421363,
+    "airingAt": 1798985760,
+    "timeUntilAiring": 5331095,
+    "episode": 1181,
+    "mediaId": 21
+   },
+   "airingSchedule": {
+    "nodes": [
+     {
+      "id": 421305,
+      "airingAt": 1743854400,
+      "timeUntilAiring": -49800265,
+      "episode": 1123,
+      "mediaId": 21
+     },
+     {
+      "id": 421306,
+      "airingAt": 1743948960,
+      "timeUntilAiring": -49705705,
+      "episode": 1124,
+      "mediaId": 21
+     },
+     {
+      "id": 421307,
+      "airingAt": 1744553760,
+      "timeUntilAiring": -49100905,
+      "episode": 1125,
+      "mediaId": 21
+     }
+    ],
+    "edges": [
+     {
+      "id": null,
+      "node": {
+       "episode": 1123
+      }
+     },
+     {
+      "id": null,
+      "node": {
+       "episode": 1124
+      }
+     },
+     {
+      "id": null,
+      "node": {
+       "episode": 1125
+      }
+     }
+    ],
+    "pageInfo": {
+     "total": 500,
+     "perPage": 3,
+     "currentPage": 1,
+     "lastPage": 166,
+     "hasNextPage": true
+    }
+   },
+   "upcoming": {
+    "nodes": [
+     {
+      "airingAt": 1798985760,
+      "episode": 1181
+     },
+     {
+      "airingAt": 1799590560,
+      "episode": 1182
+     },
+     {
+      "airingAt": 1800195360,
+      "episode": 1183
+     }
+    ],
+    "pageInfo": {
+     "hasNextPage": true
+    }
+   },
+   "stats": {
+    "scoreDistribution": [
+     {
+      "score": 10,
+      "amount": 3631
+     },
+     {
+      "score": 20,
+      "amount": 970
+     },
+     {
+      "score": 30,
+      "amount": 1603
+     }
+    ],
+    "statusDistribution": [
+     {
+      "status": "CURRENT",
+      "amount": 486065
+     },
+     {
+      "status": "PLANNING",
+      "amount": 93228
+     },
+     {
+      "status": "COMPLETED",
+      "amount": 44165
+     }
+    ]
+   },
+   "siteUrl": "https://anilist.co/anime/21",
+   "externalLinks": [
+    {
+     "id": 534,
+     "url": "http://www.crunchyroll.com/one-piece",
+     "site": "Crunchyroll",
+     "type": "STREAMING"
+    },
+    {
+     "id": 967,
+     "url": "https://one-piece.com/",
+     "site": "Official Site",
+     "type": "INFO"
+    },
+    {
+     "id": 1711,
+     "url": "http://www.hulu.com/one-piece",
+     "site": "Hulu",
+     "type": "STREAMING"
+    }
+   ],
+   "streamingEpisodes": [
+    {
+     "title": "Episode 130 - Scent of Danger!…",
+     "thumbnail": "https://img1.ak.crunchyroll.com/i/spire4-tmb/d80b3fbce742e6deb4d2caf37d08ca6e1395451246_full.jpg",
+     "url": "http://www.crunchyroll.com/watch/G8WUNGWKG/scent-of-danger-the-seventh-member-is-nico-robin",
+     "site": "Crunchyroll"
+    },
+    {
+     "title": "Episode 129 - It All Started…",
+     "thumbnail": "https://img1.ak.crunchyroll.com/i/spire4-tmb/7952451fa68d1dabaac8ad83488c4eaf1395451132_full.jpg",
+     "url": "http://www.crunchyroll.com/watch/GPWUKZ53G/it-all-started-on-that-day-vivi-tells-the-story-of-her-adventure",
+     "site": "Crunchyroll"
+    },
+    {
+     "title": "Episode 128 - The Pirates' Banquet…",
+     "thumbnail": "https://img1.ak.crunchyroll.com/i/spire2-tmb/c4e3a81d230bf89f3e88dd654978d83c1395451834_full.jpg",
+     "url": "http://www.crunchyroll.com/watch/G31UXW35G/the-pirates-banquet-and-operation-escape-from-alabasta",
+     "site": "Crunchyroll"
+    }
+   ],
+   "rankings": [
+    {
+     "id": 24,
+     "rank": 24,
+     "type": "RATED",
+     "format": "TV",
+     "year": null,
+     "season": null,
+     "allTime": true,
+     "context": "highest rated all time"
+    },
+    {
+     "id": 508,
+     "rank": 8,
+     "type": "POPULAR",
+     "format": "TV",
+     "year": null,
+     "season": null,
+     "allTime": true,
+     "context": "most popular all time"
+    },
+    {
+     "id": 1614,
+     "rank": 1,
+     "type": "RATED",
+     "format": "TV",
+     "year": 1999,
+     "season": null,
+     "allTime": false,
+     "context": "highest rated"
+    }
+   ],
+   "recommendations": {
+    "nodes": [
+     {
+      "id": 33,
+      "rating": 120,
+      "mediaRecommendation": {
+       "id": 5114
+      }
+     },
+     {
+      "id": 1897,
+      "rating": 1030,
+      "mediaRecommendation": {
+       "id": 20
+      }
+     }
+    ],
+    "pageInfo": {
+     "total": 500
+    }
+   },
+   "characters": {
+    "edges": [
+     {
+      "id": 9680,
+      "role": "MAIN",
+      "node": {
+       "id": 40,
+       "name": {
+        "full": "Luffy Monkey"
+       }
+      }
+     },
+     {
+      "id": 15676,
+      "role": "MAIN",
+      "node": {
+       "id": 61,
+       "name": {
+        "full": "Robin Nico"
+       }
+      }
+     }
+    ],
+    "pageInfo": {
+     "total": 500
+    }
+   },
+   "staff": {
+    "edges": [
+     {
+      "id": 369,
+      "role": "Theme Song Performance (English; OP1, OP3, ED11)",
+      "node": {
+       "id": 95043,
+       "name": {
+        "full": "Vic Mignogna"
+       }
+      }
+     },
+     {
+      "id": 1220,
+      "role": "ADR Director (English)",
+      "node": {
+       "id": 95202,
+       "name": {
+        "full": "Mike McFarland"
+       }
+      }
+     }
+    ]
+   },
+   "trends": {
+    "nodes": [
+     {
+      "date": 1521471600,
+      "trending": 12
+     },
+     {
+      "date": 1417359600,
+      "trending": 53
+     }
+    ]
+   },
+   "__typename": "Media"
+  }
+ }
+}

@@ -16,8 +16,9 @@ The server refuses to start in `multi` mode without the three, and says
 which is missing. With them, the instances agree on a **leader** through a
 lease on the cache server — renewed every five seconds, lost within
 fifteen when the leader goes, taken by another within five more — and the leader
-alone runs the schedules: the refresh sweep, the dataset imports, the
-listing, the media sweep, the certificate's renewal. Every instance answers
+alone runs the schedules: the refresh sweep, the dataset imports and the
+popularity worked out from them, the listing, the media sweep, the
+certificate's renewal. Every instance answers
 requests, fetches the media in line (each medium claimed by one worker),
 and can run a task by hand: a task is held on the cache server while it
 runs, so two instances never run the same. What one instance changes, the

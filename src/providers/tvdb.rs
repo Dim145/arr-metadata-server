@@ -25,7 +25,8 @@ use crate::{
     domain::{
         Company, CompanyCredit, CompanyRole, CountryRelease, CoverType, Credit, CreditType,
         Episode, EpisodeOrder, ExternalIds, Image, MediaItem, MediaKind, OrderKind, OrderRecord,
-        PlacedEpisode, Season, Translation, make_slug, person::PersonRef,
+        PlacedEpisode, Season, Translation, make_slug,
+        person::{Character, CharacterCredit, CharacterRole, PersonRef},
     },
 };
 
@@ -283,9 +284,10 @@ impl TvdbClient {
             .context("TheTVDB returned a series this server could not interpret")?;
 
         let mut item = to_item(&envelope.data, &self.language);
-        let (credits, known) = characters(&envelope.data, cast);
-        item.credits = credits;
-        item.people.by_credit = known;
+        let cast = characters(&envelope.data, cast);
+        item.credits = cast.credits;
+        item.people.by_credit = cast.known;
+        item.characters = cast.characters;
         Ok(Some((raw, item)))
     }
 
@@ -543,7 +545,7 @@ impl TvdbClient {
     /// TheTVDB did not answer. Here besides at its door: a sign-in that
     /// failed within the minute is refused without a request, and a body
     /// that could not be read is no word about the series either.
-    async fn get(&self, path: &str) -> Result<Option<Value>> {
+    pub(crate) async fn get(&self, path: &str) -> Result<Option<Value>> {
         let got = self.fetch(path).await;
         if got.is_err() {
             crate::providers::went_unanswered(crate::providers::names::TVDB);
@@ -783,6 +785,9 @@ struct SeriesExtended {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CharacterRecord {
+    /// TheTVDB's id for its record of the part: what `characters/{id}`
+    /// answers by.
+    id: Option<i64>,
     /// The part: `Skyler White`.
     name: Option<String>,
     people_id: Option<i64>,
@@ -799,6 +804,9 @@ struct CharacterRecord {
     image: Option<String>,
     /// Where TheTVDB puts it among the others; 0 where it puts it nowhere.
     sort: Option<i64>,
+    /// Whether TheTVDB features the part on the series' page: one of its
+    /// leads.
+    is_featured: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1156,11 +1164,25 @@ pub fn cast_limit(settings: &crate::settings::Store) -> usize {
         })
 }
 
+/// The series' cast and its characters, as TheTVDB lists them.
+struct Cast {
+    credits: Vec<Credit>,
+    /// TheTVDB's id of each person, by the credit's id.
+    known: BTreeMap<String, PersonRef>,
+    /// Each part, a character of its own, by the credit that plays it.
+    characters: Vec<CharacterCredit>,
+}
+
 /// The series' cast, as TheTVDB lists its characters: the first `limit` in
 /// TheTVDB's order — those it puts nowhere after — each person once, the
 /// parts of one who plays several put together, with TheTVDB's id of each
 /// person. Not a guest of one episode, whom the series' cast leaves out.
-fn characters(series: &SeriesExtended, limit: usize) -> (Vec<Credit>, BTreeMap<String, PersonRef>) {
+///
+/// Each part is a character besides, by TheTVDB's id for its record: its
+/// name, its picture, one of the leads where TheTVDB features it and one
+/// beside them otherwise, played by its person's credit — the parts of a
+/// person past the cap left out with the person.
+fn characters(series: &SeriesExtended, limit: usize) -> Cast {
     let mut parts: Vec<(usize, &CharacterRecord)> = series
         .characters
         .iter()
@@ -1180,6 +1202,36 @@ fn characters(series: &SeriesExtended, limit: usize) -> (Vec<Credit>, BTreeMap<S
     let mut credits: Vec<Credit> = Vec::new();
     let mut known: BTreeMap<String, PersonRef> = BTreeMap::new();
     let mut people: Vec<(Option<i64>, String)> = Vec::new();
+    let mut played: Vec<CharacterCredit> = Vec::new();
+    // A part, as a character, played by `credit`: once, though TheTVDB
+    // lists one record twice.
+    let mut cast_as = |part: &CharacterRecord, credit: &Credit| {
+        let (Some(name), Some(id)) = (non_empty(part.name.as_deref()), part.id) else {
+            return;
+        };
+        if played.iter().any(|c| c.character.tvdb_id == Some(id)) {
+            return;
+        }
+        played.push(CharacterCredit {
+            character: Character {
+                id: String::new(),
+                name,
+                native_name: None,
+                image: non_empty(part.image.as_deref()).map(|i| absolute(&i)),
+                tvdb_id: Some(id),
+                anilist_id: None,
+                mal_id: None,
+            },
+            role: Some(match part.is_featured {
+                Some(true) => CharacterRole::Main,
+                _ => CharacterRole::Supporting,
+            }),
+            sort_order: i32::try_from(played.len()).unwrap_or(i32::MAX),
+            credit_id: Some(credit.id.clone()),
+            voices: Vec::new(),
+            source: Some(crate::providers::names::TVDB.to_string()),
+        });
+    };
     for (_, part) in parts {
         let name = part.person_name.as_deref().unwrap_or_default().trim();
         let character = non_empty(part.name.as_deref());
@@ -1191,6 +1243,7 @@ fn characters(series: &SeriesExtended, limit: usize) -> (Vec<Credit>, BTreeMap<S
             });
         if let Some(at) = held {
             // Another part of somebody already listed: on their one credit.
+            cast_as(part, &credits[at]);
             if let Some(character) = character {
                 let credit = &mut credits[at];
                 credit.character_name = Some(match credit.character_name.take() {
@@ -1231,10 +1284,35 @@ fn characters(series: &SeriesExtended, limit: usize) -> (Vec<Credit>, BTreeMap<S
                 },
             );
         }
+        cast_as(part, &credit);
         people.push((part.people_id, name.to_string()));
         credits.push(credit);
     }
-    (credits, known)
+    Cast {
+        credits,
+        known,
+        characters: played,
+    }
+}
+
+/// The series' cast and its characters, read off TheTVDB's answer as it is
+/// kept — the envelope and all — as [`characters`] reads them off a fresh
+/// one, the first `limit`. None from a document that is not a series'.
+pub fn characters_of(
+    raw: &Value,
+    limit: usize,
+) -> (
+    Vec<Credit>,
+    BTreeMap<String, PersonRef>,
+    Vec<CharacterCredit>,
+) {
+    let data = raw.get("data").unwrap_or(raw);
+    serde_json::from_value::<SeriesExtended>(data.clone())
+        .map(|series| {
+            let cast = characters(&series, limit);
+            (cast.credits, cast.known, cast.characters)
+        })
+        .unwrap_or_default()
 }
 
 /// The series' companies as entities, each by TheTVDB's id, in what it did:
@@ -2082,24 +2160,32 @@ mod tests {
             "id": 81189,
             "name": "Breaking Bad",
             "characters": [
-                { "name": "Skyler White", "peopleId": 269404, "personName": "Anna Gunn", "type": 3,
-                  "sort": 2, "personImgURL": "https://artworks.thetvdb.com/p/anna.jpg",
+                { "id": 64178859, "name": "Skyler White", "peopleId": 269404,
+                  "personName": "Anna Gunn", "type": 3, "sort": 2, "isFeatured": true,
+                  "personImgURL": "https://artworks.thetvdb.com/p/anna.jpg",
                   "image": "/banners/actors/75476.jpg" },
-                { "name": "Walter White", "peopleId": 17419, "personName": "Bryan Cranston",
-                  "type": 3, "sort": 1, "image": "/banners/actors/walt.jpg" },
-                { "name": "Heisenberg", "peopleId": 17419, "personName": "Bryan Cranston",
-                  "type": 3, "sort": 4 },
-                { "name": "Somebody Unsorted", "peopleId": 5, "personName": "Late Comer",
-                  "type": 3, "sort": 0 },
-                { "name": "A Guest", "peopleId": 6, "personName": "Guest Of One", "type": 4, "sort": 3 },
-                { "name": "In One Episode", "peopleId": 7, "personName": "Episode Only", "type": 3,
-                  "sort": 3, "episodeId": 349232 },
-                { "name": "Nobody", "peopleId": 8, "personName": " ", "type": 3, "sort": 5 }
+                { "id": 64178858, "name": "Walter White", "peopleId": 17419,
+                  "personName": "Bryan Cranston", "type": 3, "sort": 1, "isFeatured": true,
+                  "image": "/banners/actors/walt.jpg" },
+                { "id": 64178870, "name": "Heisenberg", "peopleId": 17419,
+                  "personName": "Bryan Cranston", "type": 3, "sort": 4 },
+                { "id": 64178871, "name": "Somebody Unsorted", "peopleId": 5,
+                  "personName": "Late Comer", "type": 3, "sort": 0, "isFeatured": false },
+                { "id": 64178872, "name": "A Guest", "peopleId": 6, "personName": "Guest Of One",
+                  "type": 4, "sort": 3 },
+                { "id": 64178873, "name": "In One Episode", "peopleId": 7,
+                  "personName": "Episode Only", "type": 3, "sort": 3, "episodeId": 349232 },
+                { "id": 64178874, "name": "Nobody", "peopleId": 8, "personName": " ", "type": 3,
+                  "sort": 5 }
             ]
         }))
         .expect("a series");
 
-        let (cast, known) = characters(&series, DEFAULT_CAST);
+        let Cast {
+            credits: cast,
+            known,
+            characters: parts,
+        } = characters(&series, DEFAULT_CAST);
         let read: Vec<(&str, Option<&str>, i32)> = cast
             .iter()
             .map(|c| {
@@ -2133,8 +2219,73 @@ mod tests {
         assert_eq!(known[&cast[0].id].tvdb_id, Some(17419));
         assert_eq!(known[&cast[1].id].tvdb_id, Some(269404));
 
-        let (cut, _) = characters(&series, 2);
-        assert_eq!(cut.len(), 2, "the cap is the setting's");
+        // Each part a character of its own, by TheTVDB's record of it,
+        // played by its person's one credit.
+        // Its name, TheTVDB's id, its role, the credit that plays it.
+        type Played<'a> = (&'a str, Option<i64>, Option<CharacterRole>, Option<&'a str>);
+        let played: Vec<Played<'_>> = parts
+            .iter()
+            .map(|c| {
+                (
+                    c.character.name.as_str(),
+                    c.character.tvdb_id,
+                    c.role,
+                    c.credit_id.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            played,
+            [
+                (
+                    "Walter White",
+                    Some(64178858),
+                    Some(CharacterRole::Main),
+                    Some(cast[0].id.as_str())
+                ),
+                (
+                    "Skyler White",
+                    Some(64178859),
+                    Some(CharacterRole::Main),
+                    Some(cast[1].id.as_str())
+                ),
+                (
+                    "Heisenberg",
+                    Some(64178870),
+                    Some(CharacterRole::Supporting),
+                    Some(cast[0].id.as_str())
+                ),
+                (
+                    "Somebody Unsorted",
+                    Some(64178871),
+                    Some(CharacterRole::Supporting),
+                    Some(cast[2].id.as_str())
+                ),
+            ],
+            "TheTVDB's order; a featured part a lead, the others beside them"
+        );
+        assert_eq!(
+            parts[1].character.image.as_deref(),
+            Some("https://artworks.thetvdb.com/banners/actors/75476.jpg"),
+            "the part's picture, not the person's portrait"
+        );
+        assert!(
+            parts
+                .iter()
+                .enumerate()
+                .all(|(at, c)| c.sort_order == at as i32 && c.source.as_deref() == Some("tvdb"))
+        );
+
+        let cut = characters(&series, 2);
+        assert_eq!(cut.credits.len(), 2, "the cap is the setting's");
+        assert_eq!(
+            cut.characters
+                .iter()
+                .map(|c| c.character.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Walter White", "Skyler White", "Heisenberg"],
+            "the parts of a person past the cap go with the person"
+        );
     }
 
     #[test]

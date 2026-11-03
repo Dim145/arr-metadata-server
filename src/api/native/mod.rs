@@ -11,6 +11,7 @@ pub mod auth;
 pub mod backup;
 pub mod browse;
 pub mod cache;
+pub mod characters;
 pub mod children;
 pub mod clients;
 pub mod datasets;
@@ -88,6 +89,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(browse::router())
         .merge(editorial::router())
         .merge(people::router())
+        .merge(characters::router())
         .merge(search::router())
         .merge(feeds::router())
         .merge(lists::router())

@@ -26,6 +26,15 @@
 //! fetches take: the same few at once, and the same pause after a 429,
 //! answered with a 429 that says when to come back when nothing kept can
 //! stand in.
+//!
+//! Where an administrator chose so (`anilist.relayMode = local-first`), a
+//! query about entries this server holds — `Media` by AniList's id, or an
+//! anime's MyAnimeList id, a work of the catalogue or one of its seasons or
+//! cours — is answered here, in AniList's shape, without AniList ([`here`]):
+//! read as GraphQL reads it ([`crate::graphql`]), written from the catalogue,
+//! its corrections and what AniList and MyAnimeList last said of the entry
+//! ([`crate::wire::anilist`]). Anything else, and anything only AniList can
+//! answer, goes to AniList whole, as above.
 
 use std::collections::HashMap;
 
@@ -43,10 +52,10 @@ use utoipa_axum::router::OpenApiRouter;
 
 use crate::{
     api::relay,
-    auth::secrets,
+    auth::{Identity, secrets},
     cache,
     db::repo,
-    domain::{CoverType, ExternalSource, MediaItem, MediaKind},
+    domain::{CoverType, ExternalSource, MediaItem},
     error::{AppError, AppResult},
     service::{
         self,
@@ -183,7 +192,8 @@ fn loop_refused() -> AppError {
     post, path = "/", tag = TAG,
     operation_id = "anilist_relay",
     responses(
-        (status = 200, description = "AniList's answer, with the fields locked here written into each entry that is a work of this catalogue. Reached by the name graphql.anilist.co on the clients' door; a GET with the query in the address is relayed too. When AniList fails — no answer, 429, 5xx, or 403 — its last answer to the same query stands in, with Age, a day old at the most; never for a query about somebody"),
+        (status = 200, description = "AniList's answer, with the fields locked here written into each entry that is a work of this catalogue. Reached by the name graphql.anilist.co on the clients' door; a GET with the query in the address is relayed too. When AniList fails — no answer, 429, 5xx, or 403 — its last answer to the same query stands in, with Age, a day old at the most; never for a query about somebody. With anilist.relayMode set to local-first, a query about entries this server holds — Media by AniList's id, or an anime's MyAnimeList id — is answered here in AniList's shape, without AniList"),
+        (status = 400, description = "With anilist.relayMode set to local-first, a query about entries held here that asks for what AniList's schema does not have, refused here as AniList refuses it"),
         (status = 403, description = "The caller's address is not in the allowlist"),
         (status = 429, description = "AniList's rate limit, handed back with its headers; or AniList's door here, shut after one, with the seconds left in Retry-After, when nothing kept stands in"),
         (status = 503, description = "The relay is off"),
@@ -212,6 +222,31 @@ pub async fn relay(State(state): State<AppState>, request: Request) -> AppResult
         .filter(|token| !secrets::is_issued_here(token))
         .filter(|_| !relay::authorization_carries_key_issued_here(&parts.headers))
         .and_then(|_| parts.headers.get(header::AUTHORIZATION).cloned());
+
+    // The works this server holds, answered by this server itself in
+    // AniList's shape where an administrator chose so (`anilist.relayMode =
+    // local-first`): AniList is not asked. Never a query signed with
+    // somebody's own token, which is theirs to ask AniList; and anything
+    // else — a work held nowhere here, a document that asks for more than
+    // an entry held here — goes on to AniList whole.
+    if theirs.is_none() && relay::local_first(&state, relay::Service::Anilist) {
+        // Shown what is for adults as Sonarr and Radarr are, by the policy
+        // of the key or the address rule it came with.
+        let adult = parts.extensions.get::<Identity>().map_or_else(
+            || state.adult_for_arr(None, None),
+            |identity| state.adult_for_arr(identity.client_id(), identity.peer_id()),
+        );
+        match here::answer(&state, &parts, &body, adult).await {
+            Ok(Some(answer)) => return Ok(answer),
+            Ok(None) => {}
+            // What could not be read here is AniList's to answer: never an
+            // entry written short of it.
+            Err(e) => tracing::warn!(
+                error = format_args!("{e:#}"),
+                "could not answer an AniList query here; relaying it"
+            ),
+        }
+    }
 
     // What AniList answered, kept for a query anybody may ask: one asked in
     // somebody's name, one that changes something, or one about somebody,
@@ -353,8 +388,10 @@ fn tokens(document: &str) -> Vec<Token<'_>> {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
+            // To the end of its line, as the parser reads it: a carriage
+            // return ends one too.
             b'#' => {
-                while i < bytes.len() && bytes[i] != b'\n' {
+                while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'\r' {
                     i += 1;
                 }
             }
@@ -362,6 +399,10 @@ fn tokens(document: &str) -> Vec<Token<'_>> {
                 if bytes[i..].starts_with(b"\"\"\"") {
                     i += 3;
                     while i + 3 <= bytes.len() && &bytes[i..i + 3] != b"\"\"\"" {
+                        // `\"""` is text of the block, not its end.
+                        if bytes[i..].starts_with(b"\\\"\"\"") {
+                            i += 1;
+                        }
                         i += 1;
                     }
                     i = (i + 3).min(bytes.len());
@@ -993,52 +1034,18 @@ fn write_airing(object: &mut Map<String, Value>, item: &MediaItem, cour: &Cour, 
         };
     }
 
-    let film = item.kind == MediaKind::Movie;
-    if relay::is_locked(item, "status") {
-        let said = match (item.status.as_deref(), film) {
-            (Some("ended"), false) | (Some("released" | "inCinemas"), true) => {
-                Some(Status::Finished)
-            }
-            (Some("upcoming"), false) | (Some("announced" | "tba"), true) => {
-                Some(Status::NotYetReleased)
-            }
-            (Some("continuing"), false) if cour.whole => Some(Status::Releasing),
-            _ => None,
-        };
-        if let Some(said) = said {
-            status = Some(said);
-            if said == Status::Finished {
-                next = Some(None);
-            }
+    let locked = crate::wire::anilist::locked_airing(item, cour);
+    if let Some(said) = locked.status {
+        status = Some(said);
+        if said == Status::Finished {
+            next = Some(None);
         }
     }
-    let day_of = |date: &Option<String>| {
-        date.as_deref()
-            .and_then(|d| d.trim().get(..10))
-            .filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok())
-            .map(String::from)
-    };
-    if film {
-        if relay::is_locked(item, "inCinemas")
-            && let Some(day) = day_of(&item.in_cinemas)
-        {
-            start = Some(day.clone());
-            end = Some(day);
-        }
-    } else {
-        if relay::is_locked(item, "firstAired")
-            && cour.opens_work
-            && let Some(day) = day_of(&item.first_aired)
-        {
-            start = Some(day);
-        }
-        if relay::is_locked(item, "lastAired")
-            && cour.ends_work
-            && item.status.as_deref() == Some("ended")
-            && let Some(day) = day_of(&item.last_aired)
-        {
-            end = Some(day);
-        }
+    if locked.start.is_some() {
+        start = locked.start;
+    }
+    if locked.end.is_some() {
+        end = locked.end;
     }
 
     let mut changed = false;
@@ -1118,6 +1125,828 @@ fn write_date(object: &mut Map<String, Value>, key: &str, day: &str) -> bool {
     changed
 }
 
+/// AniList's clients answered from the catalogue, where an administrator
+/// chose so (`anilist.relayMode = local-first`).
+///
+/// A document is answered here when every field it asks at its root rests
+/// on entries held here, and everything it asks of each can be written as
+/// AniList would write it ([`crate::wire::anilist`]):
+///
+/// - `Media`, by AniList's id or, for an anime, by MyAnimeList's;
+/// - `Page` listing entries named by their ids (`id_in`, `idMal_in`),
+///   narrowed and sorted as AniList would ([`Listing`]), or the schedules of
+///   such entries (`airingSchedules` by `mediaId_in`, [`Scheduling`]);
+/// - `GenreCollection`, AniList's nineteen genres.
+///
+/// An entry held here is a work of the catalogue, switched on and shown to
+/// everybody where it is for adults, or one of its seasons or cours as the
+/// anime identifier list places it; a work entered by hand is held under the
+/// number its catalogue id makes ([`ids::for_anilist`]); one the catalogue
+/// does not tie to an id AniList's clients ask by, but Wikidata does, under
+/// that id, where nothing makes it ambiguous ([`by_bridge`]). Anything else
+/// goes to AniList whole, as the relay sends it: an entry held nowhere here,
+/// one among others that are not, a text searched for, a page of AniList's
+/// whole catalogue, a mutation, anything about an account or somebody,
+/// anything AniList alone can say, and a document AniList would refuse — its
+/// words are AniList's to say.
+mod here {
+    use std::collections::{HashMap, HashSet};
+
+    use axum::{
+        body::Bytes,
+        http::{HeaderValue, StatusCode, header, request::Parts},
+        response::{IntoResponse, Response},
+    };
+    use chrono::{DateTime, Utc};
+    use serde_json::{Map, Value, json};
+
+    use crate::{
+        db::repo,
+        domain::{ExternalSource, MediaItem, MediaKind},
+        error::AppResult,
+        graphql::{
+            self, Arguments, Failure, Field, OperationKind, Prepared, Projection, Request, Resolved,
+        },
+        providers::mal,
+        service::{
+            self,
+            bridge::{self, Site},
+            cour::{self, Airing, Cour},
+            ids, language,
+        },
+        state::AppState,
+        wire::anilist::{self as shape, English, Entry, Listed, Listing, Scheduling, Written},
+    };
+
+    /// The most entries one document is answered here for: a page's worth.
+    /// AniList's clients ask a few at a time; a document that asks for more
+    /// is AniList's to weigh.
+    const MOST_ENTRIES: usize = 50;
+
+    /// The longest request answered here, document and variables: what
+    /// AniList's clients send runs to a few kilobytes. A longer one is
+    /// AniList's to read.
+    const MOST_READ: usize = 64 * 1024;
+
+    /// What a document names that only an account answers, beside what
+    /// is somebody's ([`super::PERSONAL`]): the viewer's own states of an
+    /// entry, and what AniList's moderators keep.
+    const ACCOUNT: &[&str] = &[
+        "isFavourite",
+        "isFavouriteBlocked",
+        "isRecommendationBlocked",
+        "isReviewBlocked",
+        "mediaListEntry",
+        "modNotes",
+        "autoCreateForumThread",
+        "onList",
+    ];
+
+    /// An entry asked: by AniList's id, or MyAnimeList's — or both, which
+    /// must name the same entry.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct Asked {
+        anilist: Option<i64>,
+        mal: Option<i64>,
+    }
+
+    impl Asked {
+        fn anilist(id: i64) -> Self {
+            Self {
+                anilist: Some(id),
+                mal: None,
+            }
+        }
+
+        fn mal(id: i64) -> Self {
+            Self {
+                anilist: None,
+                mal: Some(id),
+            }
+        }
+    }
+
+    /// The entry a root `Media` field asks for, when it asks in a way
+    /// answered here: by `id` or `idMal`, and `type` at the most, an anime's.
+    /// MyAnimeList numbers its anime and its manga apart, so its id names an
+    /// anime only beside `type: ANIME`.
+    fn asked(arguments: &Arguments) -> Option<Asked> {
+        arguments.only(&["id", "idMal", "type"]).ok()?;
+        let kind = arguments.name("type").ok()?;
+        if kind.is_some_and(|kind| kind != "ANIME") {
+            return None;
+        }
+        let asked = Asked {
+            anilist: arguments.int("id").ok()?,
+            mal: arguments.int("idMal").ok()?,
+        };
+        if asked.anilist.is_none() && asked.mal.is_none() {
+            return None;
+        }
+        if asked.mal.is_some() && kind.is_none() {
+            return None;
+        }
+        Some(asked)
+    }
+
+    /// What a field at the root asks.
+    enum Root {
+        TypeName,
+        Genres,
+        Media(Asked),
+        Page(Box<PageAsked>),
+    }
+
+    /// A page asked: which, how many a page holds, and what it lists.
+    struct PageAsked {
+        page: i64,
+        per_page: i64,
+        lists: Lists,
+    }
+
+    enum Lists {
+        Media(Box<Listing>),
+        Schedules(Box<Scheduling>),
+    }
+
+    impl PageAsked {
+        /// Read off a root `Page` field: `pageInfo` and one field that lists,
+        /// `media` or `airingSchedules`, as answered here.
+        fn of<'p, 'a>(prepared: &'p Prepared<'a>, field: &Field<'p, 'a>) -> Option<Self> {
+            let (page, per_page) = shape::page_of_page(&field.arguments).ok()?;
+            let mut lists = None;
+            for asked in prepared.collect("Page", &field.selections).ok()? {
+                match asked.name {
+                    "pageInfo" | "__typename" => {}
+                    "media" if lists.is_none() => {
+                        lists = Some(Lists::Media(Box::new(Listing::of(&asked.arguments)?)));
+                    }
+                    "airingSchedules" if lists.is_none() => {
+                        lists = Some(Lists::Schedules(Box::new(Scheduling::of(
+                            &asked.arguments,
+                        )?)));
+                    }
+                    _ => return None,
+                }
+            }
+            let asked = Self {
+                page,
+                per_page,
+                lists: lists?,
+            };
+            // Drawn from more entries than one answer holds: AniList's.
+            (asked.named() <= MOST_ENTRIES).then_some(asked)
+        }
+
+        /// How many ids it names its entries by, the same one twice
+        /// included.
+        fn named(&self) -> usize {
+            match &self.lists {
+                Lists::Media(listing) => listing.anilist.len().max(listing.mal.len()),
+                Lists::Schedules(scheduling) => scheduling.media.len(),
+            }
+        }
+
+        /// The entries it is drawn from.
+        fn entries(&self) -> Vec<Asked> {
+            match &self.lists {
+                Lists::Media(listing) if !listing.anilist.is_empty() => listing
+                    .anilist
+                    .iter()
+                    .copied()
+                    .map(Asked::anilist)
+                    .collect(),
+                Lists::Media(listing) => listing.mal.iter().copied().map(Asked::mal).collect(),
+                Lists::Schedules(scheduling) => scheduling
+                    .media
+                    .iter()
+                    .copied()
+                    .map(Asked::anilist)
+                    .collect(),
+            }
+        }
+    }
+
+    /// The answer this server gives itself, or none for AniList to give.
+    pub async fn answer(
+        state: &AppState,
+        parts: &Parts,
+        body: &Bytes,
+        adult: bool,
+    ) -> AppResult<Option<Response>> {
+        if body.len() > MOST_READ || parts.uri.query().is_some_and(|q| q.len() > MOST_READ) {
+            return Ok(None);
+        }
+        let request = if body.is_empty() {
+            parts.uri.query().and_then(Request::from_query)
+        } else {
+            Request::from_body(body)
+        };
+        let Some(request) = request else {
+            return Ok(None);
+        };
+        if super::is_personal(&request.query)
+            || super::names(&request.query)
+                .iter()
+                .any(|(_, name)| ACCOUNT.contains(name))
+        {
+            return Ok(None);
+        }
+        let Ok(prepared) = Prepared::new(
+            &request.query,
+            &request.variables,
+            request.operation_name.as_deref(),
+        ) else {
+            return Ok(None);
+        };
+        if prepared.kind() != OperationKind::Query {
+            return Ok(None);
+        }
+        let Ok(fields) = prepared.root_fields() else {
+            return Ok(None);
+        };
+
+        // What each field at the root asks, and every entry they name.
+        let mut roots = Vec::with_capacity(fields.len());
+        let mut wanted: Vec<Asked> = Vec::new();
+        let mut seen: HashSet<Asked> = HashSet::new();
+        for field in &fields {
+            let root = match field.name {
+                "__typename" => Root::TypeName,
+                "GenreCollection" if field.arguments.names_given().next().is_none() => Root::Genres,
+                "Media" => match asked(&field.arguments) {
+                    Some(entry) => Root::Media(entry),
+                    None => return Ok(None),
+                },
+                "Page" => match PageAsked::of(&prepared, field) {
+                    Some(page) => Root::Page(Box::new(page)),
+                    None => return Ok(None),
+                },
+                _ => return Ok(None),
+            };
+            let named = match &root {
+                Root::Media(entry) => vec![*entry],
+                Root::Page(page) => page.entries(),
+                Root::TypeName | Root::Genres => Vec::new(),
+            };
+            for entry in named {
+                if seen.insert(entry) {
+                    wanted.push(entry);
+                }
+            }
+            if wanted.len() > MOST_ENTRIES {
+                return Ok(None);
+            }
+            roots.push(root);
+        }
+        if roots.iter().all(|root| matches!(root, Root::TypeName)) {
+            return Ok(None);
+        }
+        let now = Utc::now();
+        let mut held = Held {
+            adult,
+            ..Held::default()
+        };
+        // Every entry found before any work is read: one held nowhere here
+        // sends the document to AniList at the cost of a lookup or two.
+        if !held.locate(state, &wanted).await? {
+            return Ok(None);
+        }
+        for entry in &wanted {
+            if held.find(state, *entry, now).await?.is_none() {
+                return Ok(None);
+            }
+        }
+
+        let entries: Vec<Entry<'_>> = (0..held.found.len())
+            .map(|at| held.entry(at, now.timestamp()))
+            .collect();
+        let written: Vec<Written<'_>> = entries.iter().map(Written::of).collect();
+        let place = |entry: &Asked| held.by_asked.get(entry).copied().flatten();
+        let projection = Projection::new(&prepared);
+        let mut data = Map::new();
+        for (field, root) in fields.iter().zip(&roots) {
+            let resolved = match root {
+                Root::TypeName => {
+                    data.insert(field.key.to_string(), Value::String("Query".into()));
+                    continue;
+                }
+                Root::Genres => Resolved::Value(json!(shape::GENRES)),
+                Root::Media(entry) => match place(entry) {
+                    Some(at) => Resolved::object(shape::media(&written[at])),
+                    None => return Ok(None),
+                },
+                Root::Page(page) => {
+                    // Each entry once, as the ids name them.
+                    let mut drawn: Vec<usize> = Vec::new();
+                    let mut placed: HashSet<usize> = HashSet::new();
+                    for entry in page.entries() {
+                        match place(&entry) {
+                            Some(at) => {
+                                if placed.insert(at) {
+                                    drawn.push(at);
+                                }
+                            }
+                            None => return Ok(None),
+                        }
+                    }
+                    match &page.lists {
+                        Lists::Media(listing) => {
+                            let mut listed: Vec<&Written<'_>> = Vec::new();
+                            for at in drawn {
+                                match listing.keeps(&written[at]) {
+                                    Some(true) => listed.push(&written[at]),
+                                    Some(false) => {}
+                                    None => return Ok(None),
+                                }
+                            }
+                            listing.order(&mut listed);
+                            let total = listed.len();
+                            Resolved::object(shape::page(
+                                total,
+                                page.page,
+                                page.per_page,
+                                Listed::Media(listed),
+                            ))
+                        }
+                        Lists::Schedules(scheduling) => {
+                            // Two episodes under one id would be one to a
+                            // client, whichever of them the page shows.
+                            if !shape::distinct(
+                                drawn.iter().flat_map(|&at| entries[at].schedule.iter()),
+                            ) {
+                                return Ok(None);
+                            }
+                            let mut airings: Vec<(&Written<'_>, Airing)> = drawn
+                                .into_iter()
+                                .flat_map(|at| scheduling.of_entry(&written[at]))
+                                .collect();
+                            scheduling.order(&mut airings);
+                            let total = airings.len();
+                            Resolved::object(shape::page(
+                                total,
+                                page.page,
+                                page.per_page,
+                                Listed::Schedules(airings),
+                            ))
+                        }
+                    }
+                }
+            };
+            match projection.complete(field, resolved) {
+                Ok(value) => {
+                    data.insert(field.key.to_string(), value);
+                }
+                // Refused as AniList refuses it: the document asks what
+                // AniList's schema does not have.
+                Err(Failure::Invalid(error)) => {
+                    let errors = [error];
+                    return Ok(Some(respond(
+                        graphql::status(&errors),
+                        &graphql::body(&errors, None),
+                    )));
+                }
+                Err(Failure::Unanswerable) => return Ok(None),
+            }
+        }
+        Ok(Some(respond(200, &json!({ "data": data }))))
+    }
+
+    /// An answer written here: AniList's type of answer, with no age — it is
+    /// this server's own. Counted apart, and said in the log.
+    fn respond(status: u16, document: &Value) -> Response {
+        crate::metrics::relay_local("anilist");
+        tracing::debug!(status, "answered here in AniList's shape");
+        let body = serde_json::to_vec(document).unwrap_or_default();
+        let status = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
+        let mut response = (status, body).into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        response
+    }
+
+    /// A work held here, read once for every entry of it an answer names.
+    struct Work {
+        item: MediaItem,
+        /// The entries the anime identifier list splits it into.
+        cours: Vec<Cour>,
+        /// AniList's own document of the work's entry, as kept.
+        anilist: Option<Value>,
+        /// What MyAnimeList answered for it at its last refresh.
+        described: Vec<mal::Described>,
+        /// The entries its sources named beside it.
+        named: Vec<repo::anime::Named>,
+        english: English,
+    }
+
+    /// An entry held here: AniList's id it is answered under, which work it
+    /// is of, where the list places it, and what it is written from beside
+    /// the work.
+    struct Found {
+        id: i64,
+        work: usize,
+        cour: Cour,
+        schedule: Vec<Airing>,
+        mal: Option<mal::Described>,
+        named: Option<String>,
+    }
+
+    /// What one answer holds of the catalogue: each work it reads once, each
+    /// entry it asks once.
+    #[derive(Default)]
+    struct Held {
+        /// Whether the client may be shown what is for adults.
+        adult: bool,
+        works: Vec<Work>,
+        by_media: HashMap<String, usize>,
+        found: Vec<Found>,
+        /// The entry each one asked is, or none where it is not held here.
+        by_asked: HashMap<Asked, Option<usize>>,
+        /// Where each one asked was found, before its work is read.
+        places: HashMap<Asked, Place>,
+        /// The works entered by hand, by the number each was handed: read
+        /// once for a kind.
+        own: HashMap<MediaKind, HashMap<i64, String>>,
+    }
+
+    /// Where an entry asked was found: a work entered by hand, under a
+    /// number of its own, or the work an id of AniList's or MyAnimeList's
+    /// leads to.
+    #[derive(Clone, Debug)]
+    enum Place {
+        Own(i64),
+        Work(String, Through),
+    }
+
+    /// Where the work an id names was found: on the work itself, through the
+    /// anime identifier list, or through Wikidata alone.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Through {
+        Catalogue,
+        Bridge,
+    }
+
+    impl Held {
+        fn entry(&self, at: usize, now: i64) -> Entry<'_> {
+            let found = &self.found[at];
+            let work = &self.works[found.work];
+            Entry {
+                id: found.id,
+                item: &work.item,
+                cour: &found.cour,
+                schedule: &found.schedule,
+                anilist: work.anilist.as_ref(),
+                mal: found.mal.as_ref(),
+                named: found.named.as_deref(),
+                english: work.english.clone(),
+                now,
+                adult: self.adult,
+            }
+        }
+
+        /// Where each entry of `wanted` is held, read before any work is:
+        /// false as soon as one is held nowhere here. The ids the
+        /// catalogue's works carry are read in one go, a source at a time.
+        async fn locate(&mut self, state: &AppState, wanted: &[Asked]) -> AppResult<bool> {
+            let carried = |numbers: Vec<i64>, source: ExternalSource| async move {
+                if numbers.is_empty() {
+                    return anyhow::Ok(HashMap::new());
+                }
+                let values: Vec<String> = numbers.iter().map(i64::to_string).collect();
+                repo::item::held_external_ids(&state.db, source, &values).await
+            };
+            let on_anilist = carried(
+                wanted
+                    .iter()
+                    .filter_map(|asked| asked.anilist)
+                    .filter(|id| !ids::is_own(*id))
+                    .collect(),
+                ExternalSource::AniList,
+            )
+            .await?;
+            let on_mal = carried(
+                wanted
+                    .iter()
+                    .filter(|asked| asked.anilist.is_none())
+                    .filter_map(|asked| asked.mal)
+                    .collect(),
+                ExternalSource::Mal,
+            )
+            .await?;
+            for asked in wanted {
+                let place = match (asked.anilist, asked.mal) {
+                    (Some(number), _) if ids::is_own(number) => {
+                        let mut held = false;
+                        for kind in [MediaKind::Series, MediaKind::Movie] {
+                            held |= self.holders(state, kind).await?.contains_key(&number);
+                        }
+                        held.then_some(Place::Own(number))
+                    }
+                    (Some(id), _) => match on_anilist.get(&id.to_string()) {
+                        Some(media) => Some(Place::Work(media.clone(), Through::Catalogue)),
+                        None => elsewhere(state, Site::AniList, ExternalSource::AniList, id)
+                            .await?
+                            .map(|(media, through)| Place::Work(media, through)),
+                    },
+                    (None, Some(id)) => match on_mal.get(&id.to_string()) {
+                        Some(media) => Some(Place::Work(media.clone(), Through::Catalogue)),
+                        None => elsewhere(state, Site::Mal, ExternalSource::Mal, id)
+                            .await?
+                            .map(|(media, through)| Place::Work(media, through)),
+                    },
+                    (None, None) => None,
+                };
+                let Some(place) = place else {
+                    return Ok(false);
+                };
+                self.places.insert(*asked, place);
+            }
+            Ok(true)
+        }
+
+        /// The works of `kind` entered by hand, by the number each was
+        /// handed: read once.
+        async fn holders(
+            &mut self,
+            state: &AppState,
+            kind: MediaKind,
+        ) -> AppResult<&HashMap<i64, String>> {
+            use std::collections::hash_map::Entry as Slot;
+
+            Ok(match self.own.entry(kind) {
+                Slot::Occupied(read) => read.into_mut(),
+                Slot::Vacant(unread) => unread.insert(service::own_holders(state, kind).await?),
+            })
+        }
+
+        /// The work entered by hand a number made of a catalogue id leads
+        /// to: the one entered first, as in every dialect — a series' or a
+        /// film's, AniList numbering both in one sequence.
+        async fn by_own_number(
+            &mut self,
+            state: &AppState,
+            number: i64,
+        ) -> AppResult<Option<MediaItem>> {
+            let mut found: Option<MediaItem> = None;
+            for kind in [MediaKind::Series, MediaKind::Movie] {
+                let Some(id) = self.holders(state, kind).await?.get(&number).cloned() else {
+                    continue;
+                };
+                let Some(item) = service::load(state, &id).await?.filter(|i| i.kind == kind) else {
+                    continue;
+                };
+                let earlier = found.as_ref().is_none_or(|other| {
+                    (item.created_at.as_str(), item.id.as_str())
+                        < (other.created_at.as_str(), other.id.as_str())
+                });
+                if earlier {
+                    found = Some(item);
+                }
+            }
+            Ok(found)
+        }
+
+        /// The entry asked, where it is held here.
+        async fn find(
+            &mut self,
+            state: &AppState,
+            asked: Asked,
+            now: DateTime<Utc>,
+        ) -> AppResult<Option<usize>> {
+            if let Some(known) = self.by_asked.get(&asked) {
+                return Ok(*known);
+            }
+            let found = self.look(state, asked, now).await?;
+            self.by_asked.insert(asked, found);
+            Ok(found)
+        }
+
+        async fn look(
+            &mut self,
+            state: &AppState,
+            asked: Asked,
+            now: DateTime<Utc>,
+        ) -> AppResult<Option<usize>> {
+            let own_number = asked.anilist.filter(|id| ids::is_own(*id));
+            // Found by `locate`, or not held here.
+            let (work, through) = match self.places.remove(&asked) {
+                Some(Place::Own(number)) => match self.by_own_number(state, number).await? {
+                    Some(item) => (self.keep(state, item, now).await?, Through::Catalogue),
+                    None => return Ok(None),
+                },
+                Some(Place::Work(media, through)) => {
+                    (self.work(state, &media, now).await?, through)
+                }
+                None => return Ok(None),
+            };
+            let Some(work) = work else {
+                return Ok(None);
+            };
+            let item = &self.works[work].item;
+            let only = |ids: &[i64]| match ids {
+                [one] => Some(*one),
+                _ => None,
+            };
+
+            let cour = if let Some(number) = own_number {
+                // The whole work, under the number every dialect hands it.
+                if ids::for_anilist(&item.id, item.is_manual, &item.external_ids) != Some(number)
+                    || asked.mal.is_some()
+                {
+                    return Ok(None);
+                }
+                cour::of_unlisted(item, Some(number), None, now)
+            } else if let Some(cour) = self.works[work].cours.iter().find(|cour| {
+                cour.span.is_some()
+                    && cour.anilist.is_some()
+                    && asked.anilist.is_none_or(|id| cour.anilist == Some(id))
+                    && asked.mal.is_none_or(|id| cour.mal == Some(id))
+            }) {
+                // Where the list places it.
+                cour.clone()
+            } else if !self.works[work].cours.is_empty() {
+                // The list splits the work, and not under this id.
+                return Ok(None);
+            } else if through == Through::Bridge {
+                // Not split, tied to the id by Wikidata alone: the whole
+                // work, where it carries no id of AniList's or MyAnimeList's
+                // that would say otherwise.
+                let ids = &item.external_ids;
+                if !ids.anilist.is_empty() || !ids.mal.is_empty() {
+                    return Ok(None);
+                }
+                let anilist = match (asked.anilist, asked.mal) {
+                    (Some(anilist), _) => Some(anilist),
+                    (None, Some(mal)) => {
+                        bridge::other_number(state, Site::Mal, &mal.to_string(), Site::AniList)
+                            .await?
+                    }
+                    (None, None) => None,
+                };
+                if anilist.is_none() {
+                    return Ok(None);
+                }
+                cour::of_unlisted(item, anilist, asked.mal, now)
+            } else {
+                // Not split: the work is the one entry its only ids name.
+                let (anilist, mal) = (
+                    only(&item.external_ids.anilist),
+                    only(&item.external_ids.mal),
+                );
+                let names = |asked: Option<i64>, own: Option<i64>| {
+                    asked.is_none_or(|asked| own == Some(asked))
+                };
+                if anilist.is_none() || !names(asked.anilist, anilist) || !names(asked.mal, mal) {
+                    return Ok(None);
+                }
+                cour::of_unlisted(item, anilist, mal, now)
+            };
+            let Some(id) = cour.anilist else {
+                return Ok(None);
+            };
+
+            let schedule = cour::schedule(item, &cour);
+            let mal = match cour.mal {
+                Some(mal_id) => cour::described_among(
+                    state,
+                    std::slice::from_ref(&cour),
+                    &self.works[work].described,
+                )
+                .await
+                .remove(&mal_id),
+                None => None,
+            };
+            let named = cour::kept_title(&self.works[work].named, &cour);
+            self.found.push(Found {
+                id,
+                work,
+                cour,
+                schedule,
+                mal,
+                named,
+            });
+            Ok(Some(self.found.len() - 1))
+        }
+
+        /// The work held under `media_id`, read once: none where it is not
+        /// one AniList's clients are answered about here.
+        async fn work(
+            &mut self,
+            state: &AppState,
+            media_id: &str,
+            now: DateTime<Utc>,
+        ) -> AppResult<Option<usize>> {
+            if let Some(at) = self.by_media.get(media_id) {
+                return Ok(Some(*at));
+            }
+            match service::load(state, media_id).await? {
+                Some(item) => self.keep(state, item, now).await,
+                None => Ok(None),
+            }
+        }
+
+        /// Keep a work read, with what its entries are written from: none
+        /// where it is switched off, or for adults where the client is not
+        /// shown them. What cannot be read fails the answer — AniList's to
+        /// give then — rather than leave an entry short of it.
+        async fn keep(
+            &mut self,
+            state: &AppState,
+            mut item: MediaItem,
+            now: DateTime<Utc>,
+        ) -> AppResult<Option<usize>> {
+            if let Some(at) = self.by_media.get(&item.id) {
+                return Ok(Some(*at));
+            }
+            if !item.is_enabled || (item.is_adult && !self.adult) {
+                return Ok(None);
+            }
+            state.media.for_clients(&mut item);
+            let cours = cour::try_of_work(state, &item, now).await?;
+            let kept = repo::snapshot::texts(&state.db, &item.id, &["anilist", "mal"]).await?;
+            let anilist = kept
+                .iter()
+                .filter(|(provider, _)| provider == "anilist")
+                .find_map(|(_, text)| {
+                    let mut raw: Value = serde_json::from_str(text).ok()?;
+                    Some(raw.pointer_mut("/data/Media")?.take()).filter(Value::is_object)
+                });
+            let described = cour::kept_described(
+                kept.iter()
+                    .filter(|(provider, _)| provider == "mal")
+                    .map(|(_, text)| text.as_str()),
+            );
+            let named = repo::anime::named_beside(&state.db, &item.id).await?;
+            let english = shape::english(&item, &language::stored(state));
+            let at = self.works.len();
+            self.by_media.insert(item.id.clone(), at);
+            self.works.push(Work {
+                item,
+                cours,
+                anilist,
+                described,
+                named,
+                english,
+            });
+            Ok(Some(at))
+        }
+    }
+
+    /// The work an AniList or a MyAnimeList id no work carries names here,
+    /// by its catalogue id: the series the anime identifier list files it
+    /// under; else the one work Wikidata ties it to ([`by_bridge`]).
+    async fn elsewhere(
+        state: &AppState,
+        site: Site,
+        source: ExternalSource,
+        id: i64,
+    ) -> AppResult<Option<(String, Through)>> {
+        let value = id.to_string();
+        let series = match source {
+            ExternalSource::AniList => repo::anime::tvdb_for_anilist(&state.db, id).await?,
+            _ => repo::anime::tvdb_for_mal(&state.db, id).await?,
+        };
+        if let Some(tvdb) = series
+            && let Some(found) = repo::item::find_id_by_external(
+                &state.db,
+                ExternalSource::TvdbSeries,
+                &tvdb.to_string(),
+            )
+            .await?
+        {
+            return Ok(Some((found, Through::Catalogue)));
+        }
+        Ok(by_bridge(state, site, &value)
+            .await?
+            .map(|found| (found, Through::Bridge)))
+    }
+
+    /// The one work held here that Wikidata ties an id of `site`'s to,
+    /// through another id of the work's: none while the links are switched
+    /// off, and none where they could mean more than one entry — an item of
+    /// Wikidata's naming several of `site`'s ids, a series' seasons each
+    /// one, or several works.
+    async fn by_bridge(state: &AppState, site: Site, id: &str) -> AppResult<Option<String>> {
+        if !bridge::enabled(state) {
+            return Ok(None);
+        }
+        let read = async {
+            let items = bridge::linked(state, site, id).await?;
+            if items.is_empty() || items.iter().any(|item| item.of(site).count() != 1) {
+                return anyhow::Ok(None);
+            }
+            let works = bridge::held(state, site, id).await?;
+            Ok(match works.as_slice() {
+                [work] => Some(work.id.clone()),
+                _ => None,
+            })
+        };
+        Ok(read.await?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1129,6 +1958,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::domain::MediaKind;
     use serde_json::json;
 
     #[test]
@@ -2432,5 +3262,783 @@ mod tests {
         assert_eq!(second["nextAiringEpisode"]["id"], json!(1), "AniList's own");
         assert_eq!(second["isAdult"], json!(true));
         assert_eq!(second["synonyms"], json!(["Kept"]));
+    }
+
+    // ─── answered here, where an administrator chose so ─────────────────────
+
+    /// What AniList answers anything it is asked, here: the stand-in counts.
+    const ANILISTS: &str = r#"{"data":{"Media":{"id":1,"title":{"romaji":"AniList's"}}}}"#;
+
+    /// A work held here, AniList's one entry for it `anilist` — MyAnimeList's
+    /// `mal` — six weekly episodes from twenty days ago, the fourth tomorrow,
+    /// and AniList's own document of it as the work's last refresh kept it.
+    async fn hold(state: &AppState, title: &str, anilist: i64, mal: i64) -> MediaItem {
+        use chrono::{TimeDelta, Utc};
+
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.id = crate::db::new_id();
+        item.title = title.into();
+        item.slug = crate::domain::make_slug(&item.title, None);
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        item.status = Some("continuing".into());
+        item.overview = Some(format!("{title}, as the catalogue tells it."));
+        item.external_ids.anilist = vec![anilist];
+        item.external_ids.mal = vec![mal];
+        let first = Utc::now() - TimeDelta::days(20);
+        item.episodes = (0..6)
+            .map(|n| {
+                let day = first + TimeDelta::days(7 * n);
+                let mut episode =
+                    crate::db::repo::child::blank_episode(1, i32::try_from(n + 1).unwrap());
+                episode.is_manual = false;
+                episode.air_date = Some(day.format("%Y-%m-%d").to_string());
+                episode.air_date_utc = Some(day.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+                episode
+            })
+            .collect();
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        let kept = json!({ "data": { "Media": {
+            "id": anilist, "idMal": mal, "format": "TV",
+            "title": { "romaji": format!("{title} (romaji)"), "english": null, "native": "原題" },
+            "synonyms": [], "description": "AniList's own words.", "genres": ["Drama"],
+            "tags": [{ "name": "Isekai", "rank": 90, "isMediaSpoiler": false, "isGeneralSpoiler": false }],
+            "studios": { "nodes": [{ "name": "Madhouse" }] },
+            "isAdult": false, "coverImage": { "extraLarge": "https://s4.anilist.co/x.jpg" },
+            "startDate": { "year": 2026 }, "relations": { "edges": [] }
+        }}});
+        repo::snapshot::put(&state.db, &item.id, "anilist", &kept.to_string(), None)
+            .await
+            .unwrap();
+        item
+    }
+
+    /// What this server answers a client that posts `query` with
+    /// `variables`, signed with somebody's own AniList token when there is
+    /// one.
+    async fn asked(
+        state: &AppState,
+        query: &str,
+        variables: Value,
+        token: Option<&str>,
+    ) -> Response {
+        let mut request = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/")
+            .header(header::HOST, "graphql.anilist.co")
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(token) = token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let body = serde_json::to_vec(&json!({ "query": query, "variables": variables })).unwrap();
+        match relay(
+            State(state.clone()),
+            request.body(Body::from(body)).unwrap(),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => error.into_response(),
+        }
+    }
+
+    /// How many answers the AniList relay wrote itself, so far, in this
+    /// process.
+    fn answered_here() -> u64 {
+        crate::metrics::render(&[])
+            .lines()
+            .find_map(|line| line.strip_prefix("ams_relay_local_total{relay=\"anilist\"} "))
+            .and_then(|count| count.trim().parse().ok())
+            .unwrap_or(0)
+    }
+
+    async fn json_of(response: Response) -> Value {
+        serde_json::from_str(&text(response).await).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_work_held_here_is_answered_without_anilist_where_an_administrator_chose_so() {
+        let (at, asked_anilist) = stand_in(vec![reply("200 OK", ANILISTS)]).await;
+        let state = server(&at).await;
+        hold(
+            &state,
+            "A work the AniList relay answers",
+            9_910_001,
+            9_910_501,
+        )
+        .await;
+        let query = "query ($id: Int) { Media(id: $id, type: ANIME) { id idMal \
+                     title { romaji english userPreferred } status episodes \
+                     nextAiringEpisode { episode } studios(isMain: true) { nodes { name } } } }";
+
+        // Relayed, as ever, until an administrator chooses otherwise.
+        let relayed = asked(&state, query, json!({ "id": 9_910_001 }), None).await;
+        assert_eq!(text(relayed).await, ANILISTS);
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 1);
+
+        crate::api::relay::testing::choose(&state, "anilist.relayMode", "local-first").await;
+        let before = answered_here();
+        let answer = asked(&state, query, json!({ "id": 9_910_001 }), None).await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        assert_eq!(
+            answer.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        assert!(answer.headers().get(header::AGE).is_none());
+        assert_eq!(
+            json_of(answer).await,
+            json!({ "data": { "Media": {
+                "id": 9_910_001, "idMal": 9_910_501,
+                "title": {
+                    "romaji": "A work the AniList relay answers (romaji)",
+                    "english": "A work the AniList relay answers",
+                    "userPreferred": "A work the AniList relay answers (romaji)"
+                },
+                "status": "RELEASING", "episodes": null,
+                "nextAiringEpisode": { "episode": 4 },
+                "studios": { "nodes": [{ "name": "Madhouse" }] }
+            }}})
+        );
+        assert!(answered_here() > before, "counted apart");
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 1, "AniList not asked");
+
+        // By MyAnimeList's id, for an anime; in the address, as a GET;
+        // twice under two names, with `__typename` beside.
+        let by_mal = asked(
+            &state,
+            "query ($mal: Int) { first: Media(idMal: $mal, type: ANIME) { id } \
+             second: Media(id: 9910001) { ...Named } __typename } \
+             fragment Named on Media { title { english } }",
+            json!({ "mal": 9_910_501 }),
+            None,
+        )
+        .await;
+        assert_eq!(
+            json_of(by_mal).await,
+            json!({ "data": {
+                "first": { "id": 9_910_001 },
+                "second": { "title": { "english": "A work the AniList relay answers" } },
+                "__typename": "Query"
+            }})
+        );
+        let get = axum::http::Request::builder()
+            .method(Method::GET)
+            .uri("/?query=%7B%20Media(id%3A%209910001)%20%7B%20id%20%7D%20%7D")
+            .header(header::HOST, "graphql.anilist.co")
+            .body(Body::empty())
+            .unwrap();
+        let get = relay(State(state.clone()), get).await.unwrap();
+        assert_eq!(
+            json_of(get).await,
+            json!({ "data": { "Media": { "id": 9_910_001 } } })
+        );
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn anything_but_entries_held_here_goes_to_anilist_whole() {
+        let (at, asked_anilist) = stand_in(vec![reply("200 OK", ANILISTS)]).await;
+        let state = server(&at).await;
+        crate::api::relay::testing::choose(&state, "anilist.relayMode", "local-first").await;
+        hold(&state, "A work held beside others", 9_910_011, 9_910_511).await;
+        let mut adult = hold(&state, "An adult work held here", 9_910_012, 9_910_512).await;
+        adult.is_adult = true;
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &adult,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut sent = 0;
+        for (query, variables, token) in [
+            // Held nowhere here.
+            ("{ Media(id: 9910019) { id } }", json!({}), None),
+            // One held, one not: AniList for the whole.
+            (
+                "{ a: Media(id: 9910011) { id } b: Media(id: 9910019) { id } }",
+                json!({}),
+                None,
+            ),
+            // A page of AniList's catalogue, a list of its tags.
+            ("{ Page { media(season: FALL) { id } } }", json!({}), None),
+            ("{ MediaTagCollection { name } }", json!({}), None),
+            // Changing something, or about somebody.
+            (
+                "mutation { SaveMediaListEntry(mediaId: 9910011) { id } }",
+                json!({}),
+                None,
+            ),
+            (
+                "{ Media(id: 9910011) { id } Viewer { id } }",
+                json!({}),
+                None,
+            ),
+            ("{ Media(id: 9910011) { id isFavourite } }", json!({}), None),
+            (
+                "{ Media(id: 9910011) { id mediaListEntry { status } } }",
+                json!({}),
+                None,
+            ),
+            // Signed with somebody's own token: theirs.
+            (
+                "{ Media(id: 9910011) { id } }",
+                json!({}),
+                Some("their-anilist-token"),
+            ),
+            // What AniList alone can say: its tags' ids.
+            (
+                "{ Media(id: 9910011) { tags { id name } } }",
+                json!({}),
+                None,
+            ),
+            // Asked in a way not answered here.
+            (
+                "{ Media(id: 9910011, type: MANGA) { id } }",
+                json!({}),
+                None,
+            ),
+            ("{ Media(idMal: 9910511) { id } }", json!({}), None),
+            (
+                "{ Media(id: 9910011, search: \"x\") { id } }",
+                json!({}),
+                None,
+            ),
+            (
+                "query ($id: Int!) { Media(id: $id) { id } }",
+                json!({}),
+                None,
+            ),
+            // A document AniList would not read.
+            ("{ Media(id: 9910011) { id }", json!({}), None),
+            // For adults, where this server hides them.
+            ("{ Media(id: 9910012) { id } }", json!({}), None),
+        ] {
+            let answer = asked(&state, query, variables, token).await;
+            sent += 1;
+            assert_eq!(text(answer).await, ANILISTS, "{query}");
+            assert_eq!(asked_anilist.load(Ordering::SeqCst), sent, "{query}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_field_anilists_schema_does_not_have_is_refused_here_in_its_words() {
+        let (at, asked_anilist) = stand_in(vec![reply("200 OK", ANILISTS)]).await;
+        let state = server(&at).await;
+        crate::api::relay::testing::choose(&state, "anilist.relayMode", "local-first").await;
+        hold(
+            &state,
+            "A work asked for a field AniList lacks",
+            9_910_021,
+            9_910_521,
+        )
+        .await;
+
+        let refused = asked(
+            &state,
+            "query {\n  Media(id: 9910021) {\n    idd\n  }\n}",
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        // AniList's own words and place for it, on 2 November 2026, less
+        // its suggestion.
+        assert_eq!(
+            json_of(refused).await,
+            json!({
+                "errors": [{
+                    "message": "Cannot query field \"idd\" on type \"Media\".",
+                    "status": 400,
+                    "locations": [{ "line": 3, "column": 5 }]
+                }],
+                "data": null
+            })
+        );
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn each_cour_of_a_split_series_is_answered_as_the_list_places_it() {
+        use chrono::{TimeDelta, Utc};
+
+        let (at, asked_anilist) = stand_in(vec![reply("200 OK", ANILISTS)]).await;
+        let state = server(&at).await;
+        crate::api::relay::testing::choose(&state, "anilist.relayMode", "local-first").await;
+        let now = Utc::now();
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.id = crate::db::new_id();
+        item.title = "A cour-split series answered here".into();
+        item.slug = crate::domain::make_slug(&item.title, None);
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        item.status = Some("continuing".into());
+        item.external_ids.tvdb = Some(9_910_031);
+        item.external_ids.anilist = vec![9_910_032];
+        // Twelve weekly: the first half last spring, the second from twenty
+        // days ago, its fourth tomorrow.
+        item.episodes = (1..=12)
+            .map(|n: i64| {
+                let day = if n <= 6 {
+                    now - TimeDelta::days(200 - 7 * n)
+                } else {
+                    now - TimeDelta::days(69 - 7 * n)
+                };
+                let mut episode =
+                    crate::db::repo::child::blank_episode(1, i32::try_from(n).unwrap());
+                episode.is_manual = false;
+                episode.air_date = Some(day.format("%Y-%m-%d").to_string());
+                episode.air_date_utc = Some(day.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+                episode
+            })
+            .collect();
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+        repo::anime::replace_all(
+            &state.db,
+            &[9_910_032, 9_910_033].map(|anilist| repo::anime::Entry {
+                anilist_id: Some(anilist),
+                mal_id: Some(anilist + 500),
+                tvdb_id: Some(9_910_031),
+                tvdb_season: Some(1),
+                tvdb_offset: (anilist == 9_910_033).then_some(6),
+                kind: Some("TV".into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+
+        // The second cour: not on the work, placed by the list.
+        let answer = asked(
+            &state,
+            "{ Media(id: 9910033) { id idMal status episodes startDate { year month day } \
+             nextAiringEpisode { episode } } }",
+            json!({}),
+            None,
+        )
+        .await;
+        let media = json_of(answer).await["data"]["Media"].clone();
+        let started = now - TimeDelta::days(20);
+        use chrono::Datelike as _;
+        assert_eq!(
+            media,
+            json!({
+                "id": 9_910_033, "idMal": 9_910_533, "status": "RELEASING", "episodes": null,
+                "startDate": { "year": started.year(), "month": started.month(), "day": started.day() },
+                "nextAiringEpisode": { "episode": 4 }
+            })
+        );
+        // The first: finished, its six.
+        let first = asked(
+            &state,
+            "{ Media(id: 9910032) { status episodes } }",
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(
+            json_of(first).await["data"]["Media"],
+            json!({ "status": "FINISHED", "episodes": 6 })
+        );
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_work_entered_by_hand_is_answered_under_the_number_every_dialect_hands_it() {
+        let (at, asked_anilist) = stand_in(vec![reply("200 OK", ANILISTS)]).await;
+        let state = server(&at).await;
+        crate::api::relay::testing::choose(&state, "anilist.relayMode", "local-first").await;
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.id = crate::db::new_id();
+        item.is_manual = true;
+        item.title = "A series entered by hand for AniList's clients".into();
+        item.slug = crate::domain::make_slug(&item.title, None);
+        item.created_at = crate::db::now();
+        item.updated_at = crate::db::now();
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+        let number = service::ids::for_anilist(&item.id, true, &item.external_ids).unwrap();
+        assert!(service::ids::is_own(number));
+
+        let answer = asked(
+            &state,
+            "query ($id: Int) { Media(id: $id) { id title { userPreferred } siteUrl } }",
+            json!({ "id": number }),
+            None,
+        )
+        .await;
+        assert_eq!(
+            json_of(answer).await["data"]["Media"],
+            json!({
+                "id": number,
+                "title": { "userPreferred": "A series entered by hand for AniList's clients" },
+                // A number of this server's: no page of AniList's.
+                "siteUrl": null
+            })
+        );
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_page_of_entries_held_here_and_their_schedules_are_answered_without_anilist() {
+        let (at, asked_anilist) = stand_in(vec![reply("200 OK", ANILISTS)]).await;
+        let state = server(&at).await;
+        crate::api::relay::testing::choose(&state, "anilist.relayMode", "local-first").await;
+        hold(&state, "A first work a page lists", 9_910_051, 9_910_551).await;
+        hold(&state, "A second work a page lists", 9_910_052, 9_910_552).await;
+
+        // Seanime's way: entries by their ids, a page of them.
+        let page = asked(
+            &state,
+            "query ($ids: [Int]) { Page(perPage: 1) { pageInfo { total perPage currentPage \
+             lastPage hasNextPage } media(id_in: $ids, type: ANIME, sort: [ID_DESC]) { id \
+             title { english } } } }",
+            json!({ "ids": [9_910_051, 9_910_052] }),
+            None,
+        )
+        .await;
+        assert_eq!(page.status(), StatusCode::OK);
+        assert_eq!(
+            json_of(page).await,
+            json!({ "data": { "Page": {
+                "pageInfo": { "total": 2, "perPage": 1, "currentPage": 1, "lastPage": 2, "hasNextPage": true },
+                "media": [{ "id": 9_910_052, "title": { "english": "A second work a page lists" } }]
+            }}})
+        );
+
+        // Their schedules: the episodes to come, in the order they air.
+        let schedules = asked(
+            &state,
+            "{ Page { airingSchedules(mediaId_in: [9910051, 9910052], notYetAired: true, \
+             sort: [TIME]) { mediaId episode media { id } } } }",
+            json!({}),
+            None,
+        )
+        .await;
+        let listed = json_of(schedules).await["data"]["Page"]["airingSchedules"].clone();
+        let listed = listed.as_array().unwrap();
+        assert_eq!(listed.len(), 6, "three each");
+        assert_eq!(listed[0]["episode"], json!(4));
+        assert_eq!(listed[0]["media"]["id"], listed[0]["mediaId"]);
+
+        // AniList's genres, alone or beside an entry.
+        let genres = asked(
+            &state,
+            "{ GenreCollection Media(id: 9910051) { genres } }",
+            json!({}),
+            None,
+        )
+        .await;
+        let genres = json_of(genres).await;
+        assert_eq!(
+            genres["data"]["GenreCollection"].as_array().unwrap().len(),
+            19
+        );
+        assert_eq!(genres["data"]["Media"]["genres"], json!(["Drama"]));
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 0, "AniList not asked");
+
+        // A page drawing on an entry held nowhere here, a text searched for,
+        // AniList's whole catalogue, or a schedule of everything airing:
+        // AniList's.
+        let mut sent = 0;
+        for query in [
+            "{ Page { media(id_in: [9910051, 9910059]) { id } } }",
+            "{ Page { media(search: \"A first work\") { id } } }",
+            "{ Page { media(season: FALL, seasonYear: 2026, sort: [POPULARITY_DESC]) { id } } }",
+            "{ Page { media(id_in: [9910051], sort: [TRENDING_DESC]) { id } } }",
+            "{ Page { airingSchedules(airingAt_greater: 1, airingAt_lesser: 2) { id } } }",
+            "{ Page { characters(search: \"x\") { id } } }",
+            "{ MediaTagCollection { name } }",
+        ] {
+            let answer = asked(&state, query, json!({}), None).await;
+            sent += 1;
+            assert_eq!(text(answer).await, ANILISTS, "{query}");
+            assert_eq!(asked_anilist.load(Ordering::SeqCst), sent, "{query}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_id_wikidata_alone_ties_to_a_work_held_here_is_answered_here() {
+        use crate::service::bridge::{self, Site};
+
+        let (at, asked_anilist) = stand_in(vec![reply("200 OK", ANILISTS)]).await;
+        let state = server(&at).await;
+        crate::api::relay::testing::choose(&state, "anilist.relayMode", "local-first").await;
+        let held = |title: &str, tvdb: i64| {
+            let mut item = MediaItem::empty(MediaKind::Series);
+            item.id = crate::db::new_id();
+            item.title = title.into();
+            item.slug = crate::domain::make_slug(&item.title, None);
+            item.created_at = crate::db::now();
+            item.updated_at = crate::db::now();
+            item.status = Some("ended".into());
+            item.external_ids.tvdb = Some(tvdb);
+            item
+        };
+        for item in [
+            held("A series the catalogue ties to no AniList entry", 9_910_061),
+            held("A series Wikidata ties to two AniList entries", 9_910_062),
+        ] {
+            repo::item::upsert(
+                &state.db,
+                repo::item::ItemWrite {
+                    item: &item,
+                    replace_children: true,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let query = "query ($id: Int) { Media(id: $id) { id title { english } } }";
+
+        // The links switched off: AniList's.
+        let off = asked(&state, query, json!({ "id": 9_910_071 }), None).await;
+        assert_eq!(text(off).await, ANILISTS);
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 1);
+
+        bridge::keep_for_tests(
+            &state,
+            &[
+                (Site::TvdbSeries, "9910061", 9_910_061),
+                (Site::AniList, "9910071", 9_910_061),
+                (Site::Mal, "9910571", 9_910_061),
+                (Site::TvdbSeries, "9910062", 9_910_062),
+                (Site::AniList, "9910072", 9_910_062),
+                (Site::AniList, "9910073", 9_910_062),
+            ],
+        )
+        .await;
+        // One item, one entry of AniList's, one work: answered here, by
+        // AniList's id or, for an anime, MyAnimeList's.
+        let by_anilist = asked(&state, query, json!({ "id": 9_910_071 }), None).await;
+        assert_eq!(
+            json_of(by_anilist).await,
+            json!({ "data": { "Media": { "id": 9_910_071,
+                "title": { "english": "A series the catalogue ties to no AniList entry" } } } })
+        );
+        let by_mal = asked(
+            &state,
+            "{ Media(idMal: 9910571, type: ANIME) { id idMal } }",
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(
+            json_of(by_mal).await,
+            json!({ "data": { "Media": { "id": 9_910_071, "idMal": 9_910_571 } } })
+        );
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 1);
+        // An item naming two of AniList's entries — a series' seasons — could
+        // mean either: AniList's.
+        let ambiguous = asked(&state, query, json!({ "id": 9_910_072 }), None).await;
+        assert_eq!(text(ambiguous).await, ANILISTS);
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 2);
+    }
+
+    /// What `here` answers `query` posted with `variables`, by itself.
+    async fn here_answers(state: &AppState, query: &str, variables: Value) -> Option<Value> {
+        let body = Bytes::from(
+            serde_json::to_vec(&json!({ "query": query, "variables": variables })).unwrap(),
+        );
+        let (parts, ()) = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/")
+            .body(())
+            .unwrap()
+            .into_parts();
+        let answer = here::answer(state, &parts, &body, false)
+            .await
+            .expect("read")?;
+        Some(serde_json::from_str(&text(answer).await).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_document_too_deep_too_long_or_too_wide_is_anilists_and_cheap_to_say_so() {
+        let (at, asked_anilist) = stand_in(vec![reply("200 OK", ANILISTS)]).await;
+        let state = server(&at).await;
+        crate::api::relay::testing::choose(&state, "anilist.relayMode", "local-first").await;
+        hold(&state, "A work asked in every way", 9_910_091, 9_910_591).await;
+        let one = "{ Media(id: 9910091) { id } }";
+        assert!(here_answers(&state, one, json!({})).await.is_some());
+
+        // Deep: fragments spread within fragments, and an entry's own
+        // fields nested past what a client asks.
+        let mut chain = String::from("{ Media(id: 9910091) { ...F0 } }");
+        for at in 0..20 {
+            chain += &format!(" fragment F{at} on Media {{ ...F{} }}", at + 1);
+        }
+        chain += " fragment F20 on Media { id }";
+        let nested = format!(
+            "{{ Media(id: 9910091) {{ {}id{} }} }}",
+            "nextAiringEpisode { media { ".repeat(40),
+            " } }".repeat(40)
+        );
+        // Long: past what a client writes, and a variable of more values
+        // than an answer weighs, used again and again.
+        let long = format!("{one} #{}", "x".repeat(70 * 1024));
+        let mut many = String::from("query ($ids: [Int]) {");
+        for at in 0..41 {
+            many += &format!(" p{at}: Page {{ media(id_in: $ids) {{ id }} }}");
+        }
+        many += " }";
+        let ids: Vec<i64> = (0..50).map(|n| 9_910_091 + n).collect();
+        // Wide: more entries than an answer holds, and more fields than a
+        // document would ask.
+        let id_in = format!(
+            "{{ Page {{ media(id_in: [{}]) {{ id }} }} }}",
+            (0..51)
+                .map(|n| (9_910_091 + n).to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let aliased = format!(
+            "{{ {} }}",
+            (0..51)
+                .map(|n| format!("e{n}: Media(id: {}) {{ id }}", 9_910_091 + n))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let wide = format!(
+            "{{ Media(id: 9910091) {{ {} }} }}",
+            (0..5_000)
+                .map(|n| format!("f{n}: id"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        for (query, variables) in [
+            (chain.as_str(), json!({})),
+            (nested.as_str(), json!({})),
+            (long.as_str(), json!({})),
+            (many.as_str(), json!({ "ids": ids })),
+            (id_in.as_str(), json!({})),
+            (aliased.as_str(), json!({})),
+            (wide.as_str(), json!({})),
+        ] {
+            let label = &query[..query.len().min(60)];
+            assert_eq!(
+                here_answers(&state, query, variables.clone()).await,
+                None,
+                "{label}"
+            );
+            let sent = asked_anilist.load(Ordering::SeqCst);
+            let relayed = asked(&state, query, variables, None).await;
+            assert_eq!(text(relayed).await, ANILISTS, "{label}");
+            assert_eq!(asked_anilist.load(Ordering::SeqCst), sent + 1, "{label}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_entry_for_adults_is_answered_here_as_the_client_is_shown_them() {
+        let (at, asked_anilist) = stand_in(vec![reply("200 OK", ANILISTS)]).await;
+        let state = server(&at).await;
+        crate::api::relay::testing::choose(&state, "anilist.relayMode", "local-first").await;
+        crate::api::relay::testing::choose(&state, "adult.mode", "visible").await;
+        state
+            .settings
+            .set(
+                crate::settings::Scope::Peer,
+                "a-rule-kept-from-adults",
+                "adult.clientPolicy",
+                "deny",
+                None,
+            )
+            .await
+            .unwrap();
+        let mut adult = hold(&state, "An adult work some are shown", 9_910_101, 9_910_601).await;
+        adult.is_adult = true;
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &adult,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+        let query = "{ Media(id: 9910101) { id isAdult } }";
+        let from = |rule: Option<&str>| {
+            let mut request = axum::http::Request::builder()
+                .method(Method::POST)
+                .uri("/")
+                .header(header::HOST, "graphql.anilist.co")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(posted(query)))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(Identity::Network(rule.map(str::to_string)));
+            request
+        };
+
+        // A client the server shows them to: answered here.
+        let shown = relay(State(state.clone()), from(None)).await.unwrap();
+        assert_eq!(
+            json_of(shown).await,
+            json!({ "data": { "Media": { "id": 9_910_101, "isAdult": true } } })
+        );
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 0);
+        // One its rule keeps from them: AniList's to answer.
+        let kept_from = relay(State(state.clone()), from(Some("a-rule-kept-from-adults")))
+            .await
+            .unwrap();
+        assert_eq!(text(kept_from).await, ANILISTS);
+        assert_eq!(asked_anilist.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn what_cannot_be_read_here_is_never_answered_short() {
+        let (at, _) = stand_in(vec![reply("200 OK", ANILISTS)]).await;
+        let state = server(&at).await;
+        hold(&state, "A work read no further", 9_910_111, 9_910_611).await;
+        let query = "{ Media(id: 9910111) { id title { romaji } } }";
+        assert!(here_answers(&state, query, json!({})).await.is_some());
+
+        // The store gone: a failure, which the relay hands to AniList —
+        // never an entry written without what could not be read.
+        state.db.pool().close().await;
+        let body = Bytes::from(posted(query));
+        let (parts, ()) = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/")
+            .body(())
+            .unwrap()
+            .into_parts();
+        assert!(here::answer(&state, &parts, &body, false).await.is_err());
+    }
+
+    #[test]
+    fn a_comment_ends_where_the_parser_ends_it() {
+        // A carriage return ends a comment: `Viewer` is a field.
+        assert!(is_personal("{ Media(id: 1) { id } #\r Viewer { id } }"));
+        // An escaped quote is text of a block string, which goes on.
+        assert!(is_personal(
+            "{ Media(id: 1, search: \"\"\" \\\"\"\" \"\"\") { id } Viewer { id } }"
+        ));
     }
 }

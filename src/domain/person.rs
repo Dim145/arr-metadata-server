@@ -10,6 +10,11 @@
 //! the name in its own script TMDB gives, and the credits of single episodes,
 //! which the work's own list leaves out. Read back, it says which person each
 //! credit is filed under.
+//!
+//! The parts they play are [`Character`]s, kept once for every work they are
+//! in by the ids their sources file them under, and a work's are
+//! [`CharacterCredit`]s: what each is to the work, the credit that plays it,
+//! and who voices it in each dub.
 
 use std::{collections::BTreeMap, fmt, str::FromStr};
 
@@ -187,6 +192,173 @@ pub struct PersonTranslation {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub biography: Option<String>,
+}
+
+/// What a character is to a work, as AniList ranks them: one of its leads,
+/// one beside them, or one in the background. TheTVDB's featured characters
+/// are its leads, and the others beside them.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum CharacterRole {
+    Main,
+    Supporting,
+    Background,
+}
+
+impl CharacterRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Supporting => "supporting",
+            Self::Background => "background",
+        }
+    }
+}
+
+impl FromStr for CharacterRole {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "main" => Ok(Self::Main),
+            "supporting" => Ok(Self::Supporting),
+            "background" => Ok(Self::Background),
+            other => anyhow::bail!("unknown role of a character: {other}"),
+        }
+    }
+}
+
+/// A character, kept once for every work it is in: by the ids its sources
+/// file it under — TheTVDB's record of the part, AniList's, MyAnimeList's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Character {
+    /// This server's id for it. Empty in a source's answer, until it is
+    /// stored.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub name: String,
+    /// Their name in the script of the work's own language: フリーレン.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_name: Option<String>,
+    /// Their picture — drawn, or the actor in the part — an address as its
+    /// source gives it, like an image's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// TheTVDB's id for its record of the part: one series' part, one actor's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tvdb_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anilist_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mal_id: Option<i64>,
+}
+
+impl Character {
+    /// Whether an id says outright whether two sources' characters are one:
+    /// `Some` when both give an id of the same source, the answer being
+    /// whether they agree; `None` when no source gives both an id.
+    pub fn same_by_id(&self, other: &Self) -> Option<bool> {
+        [
+            (self.tvdb_id, other.tvdb_id),
+            (self.anilist_id, other.anilist_id),
+            (self.mal_id, other.mal_id),
+        ]
+        .into_iter()
+        .find_map(|pair| match pair {
+            (Some(a), Some(b)) => Some(a == b),
+            _ => None,
+        })
+    }
+
+    /// What `other` knows of the same character that this one does not: an
+    /// id of another source, its name in its own script, a picture, this
+    /// server's id for it.
+    pub fn complete(&mut self, other: &Self) {
+        if self.id.is_empty() {
+            self.id.clone_from(&other.id);
+        }
+        self.tvdb_id = self.tvdb_id.or(other.tvdb_id);
+        self.anilist_id = self.anilist_id.or(other.anilist_id);
+        self.mal_id = self.mal_id.or(other.mal_id);
+        if self.native_name.is_none() {
+            self.native_name.clone_from(&other.native_name);
+        }
+        if self.image.is_none() {
+            self.image.clone_from(&other.image);
+        }
+    }
+
+    /// Whether it carries any source's id.
+    pub fn has_an_id(&self) -> bool {
+        self.tvdb_id.is_some() || self.anilist_id.is_some() || self.mal_id.is_some()
+    }
+}
+
+/// Who voices a character in a dub: the dub's language and the voice as
+/// the source names them, with the ids it files them under. An anime's
+/// original voices are its Japanese dub.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterVoice {
+    /// ISO 639-3, as the rest of the model: `jpn`, `eng`, `fra`.
+    pub language: String,
+    pub name: String,
+    /// Their name in their own script, where the source gives it: 種﨑敦美.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_name: Option<String>,
+    /// Their portrait, an address as the source gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// AniList's id for them, as one of its staff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anilist_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mal_id: Option<i64>,
+    /// Where the source puts them among the voices of the character in that
+    /// language, the most relevant first.
+    pub sort_order: i32,
+}
+
+/// A character on a work: what it is to the work, where its source lists
+/// it, who plays it and who voices it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterCredit {
+    pub character: Character,
+    /// A lead, one beside them, one in the background — where the source
+    /// says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<CharacterRole>,
+    pub sort_order: i32,
+    /// The work's credit that plays it — an actor on screen, an anime's
+    /// original voice — by the credit's id among the work's own: what the
+    /// person and their portrait are read from. None where no credit of the
+    /// work is known to; one a lock hides is not among the credits served,
+    /// and is no performer to show.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit_id: Option<String>,
+    /// Who voices it in each dub, a language at a time, its own order
+    /// within one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voices: Vec<CharacterVoice>,
+    /// The source whose list it is: `tvdb`, `anilist`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// A character's name as two sources' are compared: its words, folded as
+/// the search folds them — accents and case aside — and in order, the order
+/// a source writes them in aside. `Eren Yeager` is `yeager eren`.
+pub fn character_key(name: &str) -> Vec<String> {
+    let mut words: Vec<String> = crate::search::norm(name)
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    words.sort_unstable();
+    words
 }
 
 /// Who a credit names, beyond the name it gives.

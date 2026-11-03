@@ -91,6 +91,14 @@ pub mod kinds {
     pub const IMDB_AKAS: &str = "imdb.akas";
     /// The episodes IMDb lists of each series, read through whole.
     pub const IMDB_EPISODES: &str = "imdb.episodes";
+    /// TVmaze's index of every series it lists: read whole the first time,
+    /// then the series it changed since.
+    pub const IMPORT_TVMAZE: &str = "import.tvmaze";
+    /// Wikidata's links between the sites' ids, read through whole.
+    pub const IMPORT_WIKIDATA: &str = "import.wikidata";
+    /// TheTVDB's feed of the series it deleted or merged into others, read
+    /// for those held here.
+    pub const TVDB_DELETED: &str = "tvdb.deleted";
     /// Every work with an identifier elsewhere, refreshed at once, by hand.
     pub const REFRESH_ALL: &str = "refresh.all";
     /// The `.nfo` documents, written for the whole library.

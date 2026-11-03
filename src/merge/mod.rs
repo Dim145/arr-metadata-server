@@ -16,6 +16,10 @@
 //!   any in it — TMDB's networks, TheTVDB's studios — and the others complete
 //!   those that are the same company with their ids and logos. **Videos** are
 //!   unioned; TMDB's **keywords**, as entities, are taken whole.
+//! * **Characters** are unioned, one character once: TheTVDB's parts and
+//!   AniList's characters are told to be one by an id both give, by name, or
+//!   by who plays them, and each is played by the credit of the cast that
+//!   names it or that is its voice. See [`characters`].
 //! * **Episodes and seasons** take their *list* from one provider and their
 //!   *fields* from all of them. Merging two lists by season and episode number
 //!   sounds right and is not: providers disagree about where a season ends, so
@@ -24,6 +28,7 @@
 //!   opinions about each entry — about a special, only from a provider that
 //!   dates it as the list does, since specials are where numberings part most.
 
+pub mod characters;
 pub mod provenance;
 pub mod rules;
 
@@ -58,6 +63,14 @@ pub(crate) const DATE_CHECKED: &[&str] = &["tvmaze"];
 /// company it happens to list: Production I.G for *Attack on Titan*, whose
 /// first three seasons Wit Studio animated.
 pub(crate) const STUDIO_AUTHORITIES: &[&str] = &["anilist", "mal"];
+
+/// Providers whose name of a character, whose picture of it and whose word
+/// on what it is to the work replace anyone else's.
+///
+/// They are the anime's own: TheTVDB's names are typed by whoever filed the
+/// part, its picture of an anime's part is as often the photograph of its
+/// voice, and it says nothing of a part but whether it features it.
+pub(crate) const CHARACTER_AUTHORITIES: &[&str] = &["anilist", "mal"];
 
 /// The providers whose series names are TheTVDB's: Skyhook passes them on.
 pub(crate) const TVDB_NAMED: &[&str] = &["tvdb", "skyhook"];
@@ -185,6 +198,10 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
         merged.studio = studio;
     }
 
+    // Who plays each character no source said of: the credit that names
+    // it, or its voice.
+    characters::cast(&mut merged);
+
     // Whichever provider ended up supplying the spine, a client reads it in order.
     merged.seasons.sort_by_key(|s| s.season_number);
     merged
@@ -195,6 +212,7 @@ pub fn combine(mut contributions: Vec<Contribution>, priority: &[String]) -> Opt
         .sort_by_key(|i| (i.cover_type.priority(), i.sort_order));
     merged.companies.sort_by_key(|c| (c.role, c.sort_order));
     merged.videos.sort_by_key(|v| v.sort_order);
+    merged.characters.sort_by_key(|c| c.sort_order);
 
     merged.title_qualifier = title_qualifier(&merged, &tvdb_names);
 
@@ -333,13 +351,15 @@ fn fold(into: &mut MediaItem, other: MediaItem, by_day: bool) {
     }
 
     // One provider's cast, not a blend of several, but for TheTVDB's people,
-    // matched into it: see `rules::merge_cast`.
-    rules::merge_cast(
+    // matched into it: see `rules::merge_cast`. Their characters follow the
+    // credits they went into.
+    let renamed = rules::merge_cast(
         &mut into.credits,
         &mut into.people,
         other.credits,
         other.people,
     );
+    characters::union(into, other.characters, &renamed);
 
     // Likewise what a work is filed beside: one provider's relations, whole.
     if into.relations.is_empty() {

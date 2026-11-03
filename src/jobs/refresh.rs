@@ -115,7 +115,12 @@ async fn refresh_movie(state: &AppState, item: &MediaItem) -> Result<Option<Medi
         return Ok(None);
     }
 
-    crate::service::gather::movie(state, ids.tmdb, ids.imdb.as_deref()).await
+    let refreshed = crate::service::gather::movie(state, ids.tmdb, ids.imdb.as_deref()).await?;
+    // Its collection with it, when the one kept is due.
+    if let Some(film) = &refreshed {
+        crate::service::collection::keep_for(state, film).await;
+    }
+    Ok(refreshed)
 }
 
 /// Writes down what a run did to each work, in the order it took them: the
@@ -414,6 +419,7 @@ pub async fn run(state: AppState) {
         prune_relay_documents(&state).await;
         prune_jobs(&state).await;
         prune_callers(&state).await;
+        prune_characters(&state).await;
     }
 }
 
@@ -828,6 +834,41 @@ async fn prune_jobs(state: &AppState) {
     }
 }
 
+/// How often the characters no work lists any more are looked for.
+const PRUNE_CHARACTERS_EVERY: Duration = Duration::from_secs(3600);
+
+/// When they were last looked for, in this process.
+static CHARACTERS_PRUNED: std::sync::LazyLock<parking_lot::Mutex<Option<std::time::Instant>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Forget the characters no work lists any more, once an hour: a refresh
+/// whose source dropped one leaves its row, which kept its picture named —
+/// fetched and held by the media store — for nothing. One a merge that can
+/// still be undone names stays, for the undo to put back
+/// (`repo::character::prune`).
+async fn prune_characters(state: &AppState) {
+    {
+        let mut last = CHARACTERS_PRUNED.lock();
+        if last.is_some_and(|at| at.elapsed() < PRUNE_CHARACTERS_EVERY) {
+            return;
+        }
+        *last = Some(std::time::Instant::now());
+    }
+    let since = match crate::service::merge::undo_days(state) {
+        0 => None,
+        days => match days_ago(days) {
+            Some(since) => Some(since),
+            // A window too long to be a date: every merge can be undone.
+            None => Some(String::new()),
+        },
+    };
+    match repo::character::prune(&state.db, since.as_deref()).await {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(removed, "forgot the characters no work lists"),
+        Err(e) => tracing::warn!(error = %e, "could not forget the characters no work lists"),
+    }
+}
+
 /// Forget callers nobody has seen for a fortnight.
 ///
 /// The table is meant to answer "what is using this server", not "what ever
@@ -991,7 +1032,8 @@ async fn replay_one(state: &AppState, id: &str, priority: &[String]) -> Result<b
     let Some(work) = repo::item::get(&state.db, id).await? else {
         return Ok(false);
     };
-    let answers = repo::snapshot::texts(&state.db, id, &[names::TMDB, names::TVDB]).await?;
+    let answers =
+        repo::snapshot::texts(&state.db, id, &[names::TMDB, names::TVDB, names::ANILIST]).await?;
     let text = |provider: &str| {
         answers
             .iter()
@@ -1024,8 +1066,9 @@ async fn replay_one(state: &AppState, id: &str, priority: &[String]) -> Result<b
     // A role's companies as the merge takes them: from the first source in
     // the priority that lists any, the other completing them.
     let mut tvdb = MediaItem::empty(work.kind);
-    if let Some(raw) = text(names::TVDB) {
-        tvdb.companies = crate::providers::tvdb::companies_of(&raw);
+    let tvdb_answer = text(names::TVDB);
+    if let Some(raw) = &tvdb_answer {
+        tvdb.companies = crate::providers::tvdb::companies_of(raw);
     }
     let mut from_tmdb = MediaItem::empty(work.kind);
     from_tmdb.companies = mapped.companies.clone();
@@ -1045,7 +1088,18 @@ async fn replay_one(state: &AppState, id: &str, priority: &[String]) -> Result<b
     .map(|merged| merged.companies)
     .unwrap_or_default();
 
+    let (characters, played_by) = replayed_characters(
+        state,
+        &work,
+        tvdb_answer.as_ref(),
+        text(names::ANILIST),
+        priority,
+    )
+    .await?;
+
     let filled = repo::item::Filled {
+        characters,
+        played_by,
         companies,
         keywords: mapped.keyword_entities.clone(),
         videos: mapped.videos.clone(),
@@ -1078,6 +1132,75 @@ async fn replay_one(state: &AppState, id: &str, priority: &[String]) -> Result<b
     };
     repo::item::fill_in(&state.db, id, &filled).await?;
     Ok(true)
+}
+
+/// The characters a work's answers kept carry — TheTVDB's parts of a series,
+/// as many as `tvdb.castLimit` keeps; AniList's characters, where its answer
+/// was asked for them — as the merge makes them, each played by the credit
+/// of the work as it is held that is its person's; and the person each such
+/// credit is filed under. None where neither answer holds any.
+async fn replayed_characters(
+    state: &AppState,
+    work: &MediaItem,
+    tvdb: Option<&serde_json::Value>,
+    anilist: Option<serde_json::Value>,
+    priority: &[String],
+) -> Result<(
+    Vec<crate::domain::person::CharacterCredit>,
+    std::collections::HashMap<String, String>,
+)> {
+    use crate::{merge::Contribution, providers::names};
+
+    let mut sources: Vec<Contribution> = Vec::new();
+    if let Some(raw) = tvdb.filter(|_| work.kind == MediaKind::Series) {
+        let limit = crate::providers::tvdb::cast_limit(&state.settings);
+        let (credits, known, characters) = crate::providers::tvdb::characters_of(raw, limit);
+        let mut item = MediaItem::empty(work.kind);
+        item.credits = credits;
+        item.people.by_credit = known;
+        item.characters = characters;
+        sources.push(Contribution {
+            provider: names::TVDB.to_string(),
+            item,
+        });
+    }
+    if let Some(raw) = anilist {
+        // Asked without them, AniList's answer says nothing of its
+        // characters: those the work holds stand, rather than be written
+        // again without what AniList gave them.
+        if !crate::providers::anilist::asked_characters(&raw)
+            && !repo::character::of_work(&state.db, &work.id)
+                .await?
+                .is_empty()
+        {
+            return Ok(Default::default());
+        }
+        let mut item = MediaItem::empty(work.kind);
+        item.characters = crate::providers::anilist::characters_of(&raw);
+        sources.push(Contribution {
+            provider: names::ANILIST.to_string(),
+            item,
+        });
+    }
+    if sources.iter().all(|s| s.item.characters.is_empty()) {
+        return Ok(Default::default());
+    }
+
+    let (credits, people) = repo::item::cast(&state.db, &work.id).await?;
+    let characters = crate::merge::characters::onto_held(
+        (&credits, &people),
+        work.original_language.as_deref(),
+        sources,
+        priority,
+    );
+    let played_by = credits
+        .iter()
+        .filter_map(|credit| {
+            let person = people.of(credit)?.person_id.clone()?;
+            Some((credit.id.clone(), person))
+        })
+        .collect();
+    Ok((characters, played_by))
 }
 
 /// Record a failed refresh, and when to try again: see
@@ -1143,6 +1266,24 @@ mod tests {
             uri: Uri,
         ) -> axum::response::Response {
             asked.lock().expect("the list").push(uri.path().to_string());
+            // A film of a collection, and the collection.
+            if uri.path() == "/3/movie/990603" {
+                return Json(serde_json::json!({
+                    "id": 990_603,
+                    "title": "The Matrix, Synced",
+                    "release_date": "1999-03-31",
+                    "belongs_to_collection": { "id": 992_344, "name": "The Matrix Collection" },
+                }))
+                .into_response();
+            }
+            if uri.path() == "/3/collection/992344" {
+                return Json(serde_json::json!({
+                    "id": 992_344,
+                    "name": "The Matrix Collection",
+                    "parts": [{ "id": 990_603, "title": "The Matrix, Synced" }],
+                }))
+                .into_response();
+            }
             if uri.path() == "/3/tv/1396" {
                 Json(serde_json::json!({
                     "id": 1396,
@@ -1770,6 +1911,99 @@ mod tests {
     /// nobody: its companies, TheTVDB's studio among them, TMDB's keywords
     /// and videos, what TMDB says of its pictures, its crew's jobs. A TMDB
     /// answer more than six months old is not read.
+    /// A collection TMDB has no record of is not asked about again at once:
+    /// not by the next page that shows its film, nor by the film's refresh.
+    #[tokio::test]
+    async fn a_collection_tmdb_has_no_record_of_is_not_asked_about_again_at_once() {
+        let providers = providers().await;
+        let state = server(&providers.at).await;
+        let asked = || {
+            providers
+                .asked()
+                .into_iter()
+                .filter(|path| path == "/3/collection/993404")
+                .count()
+        };
+
+        let absent = crate::service::collection::get(&state, 993_404).await;
+        assert!(absent.unwrap().is_none());
+        assert_eq!(asked(), 1, "TMDB answered 404");
+        let again = crate::service::collection::get(&state, 993_404).await;
+        assert!(again.unwrap().is_none());
+        assert!(
+            crate::service::collection::many(&state, &[993_404])
+                .await
+                .is_empty()
+        );
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.collection_tmdb_id = Some(993_404);
+        crate::service::collection::keep_for(&state, &film).await;
+        assert_eq!(asked(), 0, "not asked again so soon");
+    }
+
+    /// A film synced from TMDB alone keeps its collection as a refresh
+    /// keeps it: asked for once, and not again while the one kept is fresh.
+    #[tokio::test]
+    async fn a_film_synced_keeps_its_collection_as_a_refresh_does() {
+        use crate::service::gather::{ResyncOutcome, resync};
+
+        let providers = providers().await;
+        let state = server(&providers.at).await;
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.title = "The Matrix, Synced".into();
+        film.slug = "the-matrix-synced".into();
+        film.external_ids.tmdb = Some(990_603);
+        repo::item::upsert_traced(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &film,
+                replace_children: true,
+            },
+            &Provenance::default(),
+        )
+        .await
+        .expect("stored");
+
+        for _ in 0..2 {
+            let mut stored = repo::item::get(&state.db, &film.id)
+                .await
+                .unwrap()
+                .expect("the film");
+            repo::item::load_children(&state.db, &mut stored)
+                .await
+                .unwrap();
+            let provenance = repo::item::provenance(&state.db, &film.id)
+                .await
+                .unwrap()
+                .unwrap_or_default();
+            let outcome = resync(
+                &state,
+                &stored,
+                &provenance,
+                &[crate::providers::names::TMDB],
+            )
+            .await
+            .expect("synced");
+            assert!(matches!(outcome, ResyncOutcome::Synced(_)));
+        }
+
+        let kept = repo::collection::by_tmdb(&state.db, 992_344)
+            .await
+            .unwrap()
+            .expect("its collection, kept");
+        assert_eq!(kept.name, "The Matrix Collection");
+        assert_eq!(kept.parts.len(), 1);
+        let asked = providers.asked();
+        assert_eq!(
+            asked
+                .iter()
+                .filter(|p| *p == "/3/collection/992344")
+                .count(),
+            1,
+            "not again while fresh: {asked:?}"
+        );
+    }
+
     #[tokio::test]
     async fn the_answers_kept_fill_a_work_in_without_asking_anybody() {
         use crate::domain::{CompanyRole, CoverType, Credit, CreditType, Image};
@@ -1794,19 +2028,34 @@ mod tests {
                 source: Some("tmdb".into()),
                 is_manual: false,
             }];
-            item.credits = vec![Credit {
-                id: String::new(),
-                credit_type: CreditType::Director,
-                person_name: "A Director".into(),
-                character_name: Some("Director".into()),
-                image: None,
-                tmdb_person_id: Some(66633),
-                credit_tmdb_id: Some(format!("director-{tmdb}")),
-                sort_order: 0,
-                is_manual: false,
-                department: None,
-                job: None,
-            }];
+            item.credits = vec![
+                Credit {
+                    id: String::new(),
+                    credit_type: CreditType::Director,
+                    person_name: "A Director".into(),
+                    character_name: Some("Director".into()),
+                    image: None,
+                    tmdb_person_id: Some(66633),
+                    credit_tmdb_id: Some(format!("director-{tmdb}")),
+                    sort_order: 0,
+                    is_manual: false,
+                    department: None,
+                    job: None,
+                },
+                Credit {
+                    id: String::new(),
+                    credit_type: CreditType::Actor,
+                    person_name: "Bryan Cranston".into(),
+                    character_name: Some("Walter White".into()),
+                    image: None,
+                    tmdb_person_id: Some(17419),
+                    credit_tmdb_id: Some(format!("cast-{tmdb}")),
+                    sort_order: 0,
+                    is_manual: false,
+                    department: None,
+                    job: None,
+                },
+            ];
             item
         };
         let fresh = stored("Replayed From Its Answers", 1396);
@@ -1846,14 +2095,30 @@ mod tests {
             "companies": [
                 { "id": 389, "name": "AMC", "country": "usa", "companyType": { "companyTypeId": 1 } },
                 { "id": 77, "name": "A Studio", "country": "usa", "companyType": { "companyTypeId": 2 } }
+            ],
+            "characters": [
+                { "id": 64178858, "name": "Walter White", "peopleId": 17419, "personName": "Bryan Cranston",
+                  "type": 3, "sort": 1, "isFeatured": true, "image": "/banners/actors/walt.jpg" },
+                { "id": 64178859, "name": "Skyler White", "peopleId": 269404, "personName": "Anna Gunn",
+                  "type": 3, "sort": 2, "isFeatured": true }
             ]
         } })
+        .to_string();
+        // AniList's, asked for its characters: one of them TheTVDB's too.
+        let anilist = serde_json::json!({ "data": { "Media": { "id": 1,
+            "characters": { "edges": [
+                { "role": "MAIN", "node": { "id": 9_330_001, "name": { "full": "Walter White" } } }
+            ] }
+        } } })
         .to_string();
         for (item, tmdb_id) in [(&fresh, 1396), (&old, 1397)] {
             repo::snapshot::put(&state.db, &item.id, "tmdb", &tmdb(tmdb_id), None)
                 .await
                 .expect("kept");
             repo::snapshot::put(&state.db, &item.id, "tvdb", &tvdb, None)
+                .await
+                .expect("kept");
+            repo::snapshot::put(&state.db, &item.id, "anilist", &anilist, None)
                 .await
                 .expect("kept");
         }
@@ -1912,8 +2177,48 @@ mod tests {
         assert_eq!(read.images[0].language.as_deref(), Some("eng"));
         let details = read.image_details[&read.images[0].url];
         assert_eq!((details.width, details.vote_count), (Some(2000), Some(21)));
-        assert_eq!(read.credits[0].department.as_deref(), Some("Directing"));
-        assert_eq!(read.credits[0].job.as_deref(), Some("Director"));
+        let director = read
+            .credits
+            .iter()
+            .find(|c| c.credit_type == CreditType::Director)
+            .expect("the director");
+        assert_eq!(director.department.as_deref(), Some("Directing"));
+        assert_eq!(director.job.as_deref(), Some("Director"));
+
+        // TheTVDB's parts and AniList's characters, one character once, each
+        // played by the credit held of its person; one whose person holds no
+        // credit here played by nobody.
+        // Its name, TheTVDB's and AniList's ids, who plays it.
+        type Played<'a> = (&'a str, Option<i64>, Option<i64>, Option<&'a str>);
+        let played: Vec<Played<'_>> = read
+            .characters
+            .iter()
+            .map(|c| {
+                let by = c
+                    .credit_id
+                    .as_ref()
+                    .and_then(|id| read.credits.iter().find(|credit| credit.id == *id))
+                    .map(|credit| credit.person_name.as_str());
+                (
+                    c.character.name.as_str(),
+                    c.character.tvdb_id,
+                    c.character.anilist_id,
+                    by,
+                )
+            })
+            .collect();
+        assert_eq!(
+            played,
+            [
+                (
+                    "Walter White",
+                    Some(64178858),
+                    Some(9_330_001),
+                    Some("Bryan Cranston")
+                ),
+                ("Skyler White", Some(64178859), None, None),
+            ]
+        );
 
         let mut untouched = repo::item::get(&state.db, &old.id)
             .await
@@ -1923,7 +2228,8 @@ mod tests {
             .await
             .unwrap();
         assert!(untouched.companies.is_empty() && untouched.videos.is_empty());
-        assert_eq!(untouched.credits[0].department, None);
+        assert!(untouched.characters.is_empty());
+        assert!(untouched.credits.iter().all(|c| c.department.is_none()));
     }
 }
 

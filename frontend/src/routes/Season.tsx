@@ -37,7 +37,7 @@ import {
 import { airsWhenOn, releaseDay, releasedNotAired } from '../lib/platforms'
 import type { Episode, EpisodeOrder, MediaItem, PlacedEpisode } from '../lib/types'
 import { NotFound, Unavailable } from './NotFound'
-import { TMDB_AIRED, orderName, orderNames, orderSeasons, placedEpisode } from './admin/editor/orders'
+import { TMDB_AIRED, TVDB_LAST, orderName, orderNames, orderSeasons, placedEpisode } from './admin/editor/orders'
 
 export function Season() {
   const { id = '', season = '' } = useParams()
@@ -141,18 +141,21 @@ function SeasonSheet({
   const orderLabel = (o?: EpisodeOrder) => (o && names.get(o.key)) || orderName(o, t.season.order)
   useTitle(order ? `${name} · ${orderLabel(order)}` : name, item.title)
   // What the note under the orders says of the one shown: where it comes
-  // from, and that it is what the aired order answers with when it is.
+  // from, and that it is what the aired order answers with when it is —
+  // TheTVDB's numbering as it last gave it saying both at once.
   const note = !order
     ? undefined
-    : order.isFrozen
-      ? t.season.orderNoteFrozen
-      : order.source === 'tmdb'
-        ? order.key === TMDB_AIRED
-          ? t.season.orderNoteTmdbAired
-          : t.season.orderNoteTmdb
-        : order.source === 'local'
-          ? t.season.orderNoteLocal
-          : t.season.orderNote
+    : order.key === TVDB_LAST
+      ? t.season.orderNoteTvdbLast(order.isFrozen)
+      : order.isFrozen
+        ? t.season.orderNoteFrozen
+        : order.source === 'tmdb'
+          ? order.key === TMDB_AIRED
+            ? t.season.orderNoteTmdbAired
+            : t.season.orderNoteTmdb
+          : order.source === 'local'
+            ? t.season.orderNoteLocal
+            : t.season.orderNote
 
   // The earliest date and the latest, whatever order the numbers put them in:
   // specials are numbered as they were found, not as they aired.

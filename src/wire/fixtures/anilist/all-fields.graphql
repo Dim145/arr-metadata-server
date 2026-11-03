@@ -1,0 +1,49 @@
+query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    id idMal
+    title { romaji english native userPreferred }
+    type format status statusV2: status(version: 2)
+    description descriptionHtml: description(asHtml: true)
+    startDate { year month day } endDate { year month day }
+    season seasonYear seasonInt
+    episodes duration chapters volumes
+    countryOfOrigin isLicensed
+    source sourceV3: source(version: 3)
+    hashtag
+    trailer { id site thumbnail }
+    updatedAt
+    coverImage { extraLarge large medium color }
+    bannerImage
+    genres synonyms
+    averageScore weightedScore meanScore popularity isLocked trending favourites
+    tags { id name description category rank isGeneralSpoiler isMediaSpoiler isAdult userId }
+    relations {
+      edges {
+        id relationType relationTypeV2: relationType(version: 2) relationTypeV3: relationType(version: 3) isMainStudio
+        node { id idMal type format status title { romaji english native userPreferred } coverImage { large } startDate { year month day } isAdult }
+      }
+      nodes { id type }
+      pageInfo { total perPage currentPage lastPage hasNextPage }
+    }
+    studios { edges { id isMain node { id name isAnimationStudio siteUrl } } nodes { id name } pageInfo { total } }
+    mainStudios: studios(isMain: true) { nodes { id name isAnimationStudio } }
+    isAdult
+    nextAiringEpisode { id airingAt timeUntilAiring episode mediaId }
+    airingSchedule(perPage: 3) {
+      nodes { id airingAt timeUntilAiring episode mediaId }
+      edges { id node { episode } }
+      pageInfo { total perPage currentPage lastPage hasNextPage }
+    }
+    upcoming: airingSchedule(notYetAired: true, perPage: 3) { nodes { airingAt episode } pageInfo { hasNextPage } }
+    stats { scoreDistribution { score amount } statusDistribution { status amount } }
+    siteUrl
+    externalLinks { id url site type }
+    streamingEpisodes { title thumbnail url site }
+    rankings { id rank type format year season allTime context }
+    recommendations(perPage: 2) { nodes { id rating mediaRecommendation { id } } pageInfo { total } }
+    characters(perPage: 2) { edges { id role node { id name { full } } } pageInfo { total } }
+    staff(perPage: 2) { edges { id role node { id name { full } } } }
+    trends(perPage: 2) { nodes { date trending } }
+    __typename
+  }
+}

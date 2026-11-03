@@ -296,8 +296,10 @@ Plex or Kodi library that holds those works alone.
 - `<tagline>`, a `<country>` for each country the work was made in (by its English
   name) and a `<studio>` for each company that made it.
 - For a film that belongs to a TMDB collection, `<set>` with the collection's name and
-  what it is about, as Kodi reads it, so that a library groups its films. Nothing is
-  written where TMDB cannot be asked.
+  what it is about, in the catalogue's language, as Kodi reads it, so that a library
+  groups its films: the collection as the catalogue keeps it (see
+  [Collections](data.md#collections)), asked of TMDB once where it never was. Nothing is
+  written where none is kept and TMDB cannot be asked.
 - For a season with a title of its own — not the *Season 2* a provider falls back on —
   a `<namedseason number="N">` in the series' document, and for a season's poster
   `<thumb aspect="poster" type="season" season="N">`.

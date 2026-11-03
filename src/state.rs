@@ -431,6 +431,10 @@ impl AppState {
                 // them on, each a weekly download of its own.
                 ("imdb.akas", "false".to_string()),
                 ("imdb.episodes", "false".to_string()),
+                // TVmaze's index and Wikidata's links: off until somebody
+                // switches them on, each a weekly reading of its own.
+                ("tvmaze.index", "false".to_string()),
+                ("wikidata.enabled", "false".to_string()),
                 ("fankai.enabled", cfg.fankai.enabled.to_string()),
                 ("fankai.wiki", cfg.fankai_wiki.enabled.to_string()),
                 ("keys.maxPerUser", DEFAULT_KEYS_PER_USER.to_string()),
@@ -484,6 +488,7 @@ impl AppState {
                 // Asking the service for everything, as the relays always did.
                 ("tmdb.relayMode", "relay".to_string()),
                 ("tvdb.relayMode", "relay".to_string()),
+                ("anilist.relayMode", "relay".to_string()),
                 ("oidc.enabled", "false".to_string()),
                 ("oidc.scopes", "openid profile email".to_string()),
                 ("oidc.autoRegister", "false".to_string()),
@@ -1181,6 +1186,7 @@ fn configured_hosts(config: &Config) -> std::collections::HashSet<String> {
         &config.fankai_wiki.upstream,
         &config.imdb.datasets,
         &config.anime_mapping.url,
+        &config.wikidata.endpoint,
     ]
     .into_iter()
     .filter_map(|url| url::Url::parse(url).ok())

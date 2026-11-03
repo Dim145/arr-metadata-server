@@ -184,6 +184,7 @@ address the server fetches. See
 | `AMS_FANKAI_UPSTREAM` | `https://metadata.fankai.fr` |
 | `AMS_FANKAI_WIKI_UPSTREAM` | `https://fan-kai.fandom.com/fr/api.php` |
 | `AMS_ANIME_MAPPING_URL` | `https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json` |
+| `AMS_WIKIDATA_ENDPOINT` | `https://query.wikidata.org/sparql` |
 
 ### The cache
 

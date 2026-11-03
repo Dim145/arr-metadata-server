@@ -85,7 +85,7 @@ async fn similar(
     let Some(genre) = item.genres.first().cloned() else {
         return Ok(Json(Similar { items: Vec::new() }));
     };
-    let candidates = repo::item::search(
+    let mut candidates = repo::item::search(
         &state.db,
         &repo::item::Query {
             kind: Some(item.kind),
@@ -96,6 +96,9 @@ async fn similar(
         },
     )
     .await?;
+    // Of two as alike, the more popular first, by the popularity the lists
+    // sort by: TMDB's, else the one worked out here.
+    service::popularity::overlay(&state, &mut candidates).await;
 
     let mut weighed: Vec<(i32, f64, MediaItem)> = candidates
         .into_iter()
@@ -277,7 +280,9 @@ fn summary(entry: &Value, kind: MediaKind) -> Option<Suggestion> {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionCard {
     pub tmdb_id: i64,
-    /// TMDB's name for it, where a key lets it be asked.
+    /// TMDB's name for it, as the catalogue keeps it, in the reader's
+    /// language where TMDB has it in that one: none where it was never kept
+    /// and no key lets TMDB be asked.
     #[schema(required)]
     pub name: Option<String>,
     #[schema(required)]
@@ -340,29 +345,21 @@ async fn collections(
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
     let language = language_of(&state, &identity, asked.as_deref());
     let held = repo::item::collections(&state.db, adult).await?;
-    // Named all at once — TMDB's own gate on concurrency bounds it — rather
-    // than one after another, on a page every reader of the lists opens.
-    let names = futures::future::join_all(
-        held.iter()
-            .map(|(tmdb_id, _)| named(&state, *tmdb_id, &language)),
-    )
-    .await;
+    // As kept, read at once; one never kept asked of TMDB, all together.
+    let ids: Vec<i64> = held.iter().map(|(tmdb_id, _)| *tmdb_id).collect();
+    let kept = service::collection::many(&state, &ids).await;
     let collections = held
         .into_iter()
-        .zip(names)
-        .map(|((tmdb_id, count), named)| CollectionCard {
-            tmdb_id,
-            name: named
-                .as_ref()
-                .and_then(|n| n.get("name"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            poster: named
-                .as_ref()
-                .and_then(|n| n.get("poster_path"))
-                .and_then(Value::as_str)
-                .map(tmdb::image_url),
-            count,
+        .map(|(tmdb_id, count)| {
+            let named = kept.get(&tmdb_id);
+            CollectionCard {
+                tmdb_id,
+                name: named.map(|c| c.texts_in(&language).0.to_string()),
+                poster: named
+                    .and_then(|c| c.poster.as_deref())
+                    .map(|url| state.media.localized(url)),
+                count,
+            }
         })
         .collect();
     Ok(Json(Collections { collections }))
@@ -405,32 +402,30 @@ async fn collection(
     cards(&state, &identity, &mut items, asked.as_deref()).await?;
 
     let language = language_of(&state, &identity, asked.as_deref());
-    let named = named(&state, tmdb_id, &language).await;
-    let field = |name: &str| {
-        named
-            .as_ref()
-            .and_then(|n| n.get(name))
-            .and_then(Value::as_str)
-            .map(str::to_string)
+    // As kept, or asked of TMDB now where it never was; a page without
+    // TMDB's word on it where neither can be.
+    let named = match service::collection::get(&state, tmdb_id).await {
+        Ok(named) => named,
+        Err(e) => {
+            tracing::warn!(
+                tmdb_id,
+                error = format_args!("{e:#}"),
+                "could not read a collection"
+            );
+            None
+        }
     };
     let mut parts: Vec<CollectionPart> = named
-        .as_ref()
-        .and_then(|n| n.get("parts"))
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|e| summary(e, MediaKind::Movie))
-                .map(|s| CollectionPart {
-                    tmdb_id: s.tmdb_id,
-                    title: s.title,
-                    year: s.year,
-                    poster: s.poster,
-                    held: None,
-                })
-                .collect()
+        .iter()
+        .flat_map(|c| c.parts.iter())
+        .map(|part| CollectionPart {
+            tmdb_id: part.tmdb_id,
+            title: part.title.clone(),
+            year: part.year(),
+            poster: part.poster.clone(),
+            held: None,
         })
-        .unwrap_or_default();
+        .collect();
     parts.sort_by_key(|p| p.year.unwrap_or(i32::MAX));
     for part in &mut parts {
         part.held = items
@@ -438,49 +433,29 @@ async fn collection(
             .find(|i| i.external_ids.tmdb == Some(part.tmdb_id))
             .map(|i| i.id.clone());
     }
+    let texts = named.as_ref().map(|c| c.texts_in(&language));
+    let picture = |url: Option<&String>| url.map(|url| state.media.localized(url));
 
     Ok(Json(CollectionPage {
         tmdb_id,
-        name: field("name"),
-        overview: field("overview").filter(|o| !o.trim().is_empty()),
-        poster: field("poster_path").map(|p| tmdb::image_url(&p)),
-        backdrop: field("backdrop_path").map(|p| tmdb::image_url(&p)),
+        name: texts.map(|(name, _)| name.to_string()),
+        overview: texts.and_then(|(_, overview)| overview).map(str::to_string),
+        poster: picture(named.as_ref().and_then(|c| c.poster.as_ref())),
+        backdrop: picture(named.as_ref().and_then(|c| c.backdrop.as_ref())),
         items,
         parts,
     }))
 }
 
-/// TMDB's own record of a collection — name, pictures, parts — in the
-/// reader's language, kept a day; nothing where no key lets it be asked or
-/// TMDB has none.
-pub(super) async fn named(state: &AppState, tmdb_id: i64, language: &str) -> Option<Value> {
-    if !state.tmdb.is_configured() {
-        return None;
-    }
-    let key = service::movie::collection_key(tmdb_id, language);
-    cached_value(state, &key, || async {
-        state
-            .tmdb
-            .collection_raw(tmdb_id, language)
-            .await
-            .map(|v| v.unwrap_or(Value::Null))
-    })
-    .await
-    .ok()
-    .filter(|v| !v.is_null())
-}
-
-/// The language TMDB is asked in for a reader, and what its answer is kept
-/// under: the one asked for (a tag, checked where it arrived), as far as it
-/// is a language TMDB has, or the one the reader is answered in everywhere
-/// else — see [`service::language::tmdb_locale`]. Not whatever was asked:
-/// each new string was a key no answer was kept under, and so one call to
-/// TMDB for every collection held, on every request.
+/// The language a collection's texts are given a reader in, as the model
+/// keeps languages: the one asked for (a tag, checked where it arrived), or
+/// the one the reader is answered in everywhere else — see
+/// [`service::language::tmdb_locale`].
 fn language_of(state: &AppState, identity: &Identity, asked: Option<&str>) -> String {
-    service::language::tmdb_locale(
+    service::collection::language_of(&service::language::tmdb_locale(
         asked,
         &state.language(identity.client_id(), identity.peer_id()),
-    )
+    ))
 }
 
 // ─── the pieces ──────────────────────────────────────────────────────────────

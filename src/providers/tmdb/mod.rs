@@ -431,13 +431,30 @@ impl TmdbClient {
             .and_then(|v| v.get("results").cloned()))
     }
 
-    /// A collection as TMDB has it — name, overview, pictures, parts — in a
-    /// language, and untyped, for a reader that wants the record rather
-    /// than the model.
-    pub async fn collection_raw(&self, id: i64, language: &str) -> Result<Option<Value>> {
+    /// A collection as TMDB has it — name, overview, pictures, parts — in the
+    /// language the catalogue is stored in, with its name and its synopsis
+    /// in every other TMDB has them in, and its pictures in the languages a
+    /// work's are asked for in: what the catalogue keeps of it
+    /// (`service::collection`). `None` where TMDB has no such collection.
+    pub async fn collection(&self, id: i64) -> Result<Option<(Value, models::Collection)>> {
         let url = format!("{}/collection/{id}", self.base);
-        let params = [("language", language.to_string())];
-        self.fetch(&url, &params).await
+        let language = self.language();
+        let params = [
+            ("include_image_language", image_languages(&language)),
+            ("language", language),
+            ("append_to_response", "images,translations".to_string()),
+        ];
+        let Some(raw) = self.fetch(&url, &params).await? else {
+            return Ok(None);
+        };
+        let collection = Self::typed(&raw, "collection")?;
+        Ok(Some((raw, collection)))
+    }
+
+    /// The language the catalogue is stored in, as TMDB was asked in it:
+    /// what the answers of [`Self::collection`] are written in.
+    pub fn asked_in(&self) -> String {
+        lang::base_language(&self.language()).to_string()
     }
 
     /// Somebody as TMDB has them — biography, dates, the names they go by,

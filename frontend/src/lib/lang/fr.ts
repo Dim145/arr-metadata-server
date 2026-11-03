@@ -121,7 +121,7 @@ export const fr: Dict = {
   collections: {
     label: 'Collections',
     title: 'Les sagas',
-    lead: 'Les collections de films dont le catalogue tient une partie ou la totalité, telles que TMDB les groupe.',
+    lead: 'Les collections de films dont le catalogue tient une partie ou la totalité, telles que TMDB les groupe — chacune nommée dans votre langue quand TMDB a son nom dans celle-ci.',
     one: 'Collection',
     unnamed: (id: number) => `Collection ${id}`,
     held: (n: number, of: number) => (of ? `${n} ${plural(n, { one: 'film', other: 'films' })} sur ${of} au catalogue` : plural(n, { one: `${n} film au catalogue`, other: `${n} films au catalogue` })),
@@ -505,6 +505,36 @@ export const fr: Dict = {
       back: 'Revenir à TheTVDB',
       backDone: 'TheTVDB numérote de nouveau la série.',
       backFailed: 'TheTVDB ne répond toujours pas : TMDB garde la numérotation.',
+      dropped: {
+        deleted: (day: string) =>
+          `TheTVDB a supprimé cette série : elle est servie numérotée comme elle l’était le ${day}, les épisodes diffusés depuis placés à la suite`,
+        merged: (into: string, day: string) =>
+          `TheTVDB a fusionné cette série dans la série ${into} : elle est servie numérotée comme elle l’était le ${day}, les épisodes diffusés depuis placés à la suite`,
+        missing: (day: string) =>
+          `TheTVDB a répondu deux fois qu’il n’a pas cette série : elle est servie numérotée comme elle l’était le ${day}, les épisodes diffusés depuis placés à la suite`,
+        served:
+          'Sonarr, Plex et le relais TheTVDB la reçoivent comme l’ordre « TheTVDB (tel qu’il l’a donné en dernier) », figé comme numérotation de diffusion, pour que les fichiers que Sonarr a rapprochés d’elle restent où ils sont.',
+        thawed:
+          'Sa numérotation telle qu’elle était servie est gardée comme l’ordre « TheTVDB (tel qu’il l’a donné en dernier) », qui n’est plus figé : Sonarr et Plex reçoivent l’ordre de diffusion tel qu’il est.',
+        listedByTmdb: 'Les épisodes de cette page sont numérotés comme TMDB les numérote.',
+        listedByMerged: (into: string) => `Les épisodes de cette page sont numérotés comme TheTVDB numérote la série ${into}.`,
+        mergedCaution: (into: string) =>
+          `Revenir à TheTVDB : Sonarr renumérote la série comme TheTVDB numérote la série ${into}, qui peut découper ses saisons autrement.`,
+        backDone: 'TheTVDB connaît de nouveau la série et la numérote.',
+        backDoneMerged: (into: string) =>
+          `TheTVDB numérote désormais la série sous ${into} : Sonarr la renumérote à son prochain rafraîchissement.`,
+        backFailed: 'TheTVDB n’a toujours pas cette série : la numérotation reste telle qu’elle était servie.',
+        backFailedMerged: (into: string) =>
+          `TheTVDB n’a pas numéroté la série sous ${into}, ou une autre œuvre d’ici détient cet identifiant : la numérotation reste telle qu’elle était servie.`,
+      },
+      missing: (n: number) =>
+        n === 1
+          ? 'TheTVDB a répondu une fois qu’il n’a pas cette série'
+          : `TheTVDB a répondu à ${n} rafraîchissements de suite qu’il n’a pas cette série`,
+      missingNext:
+        'S’il le redit à un rafraîchissement un jour plus tard, la série est gardée numérotée comme elle est servie maintenant, figée, et les épisodes qui sortent ensuite sont placés à la suite. D’ici là, rien ne change.',
+      missingOff:
+        'TMDB ne numérote ici aucune série à la place de TheTVDB (numbering.fallbackAfter vaut 0) : la série garde la numérotation que TheTVDB a donnée en dernier, et rien n’est ajouté à la suite.',
     },
     onThisPage: 'Sur cette page',
     actions: 'Cette œuvre',
@@ -631,8 +661,13 @@ export const fr: Dict = {
       altdvd: 'DVD alternative',
       alttwo: 'Alternative 2',
       'tmdb-aired': 'TMDB (diffusion)',
+      'tvdb-last': 'TheTVDB (tel qu’il l’a donné en dernier)',
     },
     orderNote: 'Telle que TheTVDB les numérote ; les clients reçoivent l’ordre de diffusion, sauf s’ils demandent celui-ci.',
+    orderNoteTvdbLast: (frozen: boolean) =>
+      frozen
+        ? 'Telle que la série était servie quand TheTVDB a cessé de la connaître, les épisodes diffusés depuis placés à la suite ; figée comme numérotation de diffusion, c’est ce que reçoit chaque client qui demande l’ordre de diffusion.'
+        : 'Telle que la série était servie quand TheTVDB a cessé de la connaître, les épisodes diffusés depuis placés à la suite ; les clients reçoivent l’ordre de diffusion, sauf s’ils demandent celui-ci.',
     orderNoteTmdbAired:
       'Telle que TMDB les numérote, gardée à côté de celle de TheTVDB à chaque rafraîchissement ; Plex se la voit proposer, et chaque client reçoit l’ordre de diffusion, sauf s’il demande celui-ci. Elle est à TMDB : elle ne se modifie pas ici, elle se fige seulement.',
     orderNoteTmdb: 'Telle que TMDB les regroupe ; les clients reçoivent l’ordre de diffusion, sauf s’ils demandent celui-ci.',
@@ -640,6 +675,23 @@ export const fr: Dict = {
     orderNoteFrozen: 'Figé comme numérotation de diffusion : tout client qui demande l’ordre de diffusion reçoit celui-ci.',
     orderSource: { tvdb: 'TheTVDB', tmdb: 'TMDB', local: 'fait ici' },
     ownRecord: 'Propre à cet ordre',
+  },
+  character: {
+    label: 'Personnage',
+    section: 'Personnages',
+    sectionLead: 'Tels que TheTVDB et AniList les listent — chacun une fois, quelle que soit la source — les principaux d’abord, avec qui les interprète et qui leur prête sa voix dans le doublage choisi.',
+    whole: (n: number) => `Tous les personnages · ${n}`,
+    roles: { main: 'Principal', supporting: 'Secondaire', background: 'Arrière-plan' },
+    performer: 'Interprète',
+    performerUnknown: 'Interprète inconnu',
+    voice: (language: string) => `Voix, ${language}`,
+    dub: 'Voix en',
+    picture: (name: string) => `Image de ${name}`,
+    works: (n: number) => plural(n, { one: 'Dans 1 œuvre ici', other: `Dans ${n} œuvres ici` }),
+    partial: 'Seulement les œuvres que ce catalogue détient.',
+    onAnilist: 'Sur AniList',
+    onMal: 'Sur MyAnimeList',
+    loadFailed: 'Ce personnage n’a pas pu être chargé pour l’instant.',
   },
   person: {
     label: 'Filmographie',
@@ -1236,9 +1288,12 @@ export const fr: Dict = {
             `Une œuvre que ce serveur détient — corrigée, saisie à la main, ou que ${service} ne connaît pas — reçoit une réponse tirée du catalogue, à la forme de ${service}, sans rien demander à ${service} ni à sa clé ; une recherche liste d’abord les œuvres du catalogue. Le reste est demandé à ${service}, comme avant.`,
         },
         answers: {
-          tmdb: 'Les films et les séries, leurs saisons et leurs épisodes, un find par l’un de leurs identifiants, la première page d’une recherche. Où regarder, les critiques et le reste viennent toujours de TMDB, par le relais, quand TMDB connaît l’œuvre.',
-          tvdb: 'La fiche d’une série ou d’un film, courte ou étendue, ses traductions, ses épisodes dans tous les ordres qu’elle tient, ses saisons et ses épisodes, la première page d’une recherche. Les personnes, les listes et les sociétés viennent toujours de TheTVDB.',
+          tmdb: 'Les films et les séries, leurs saisons et leurs épisodes, une collection dont un film est présent ici, un find par l’un de leurs identifiants, la première page d’une recherche. Où regarder, les critiques et le reste viennent toujours de TMDB, par le relais, quand TMDB connaît l’œuvre.',
+          tvdb: 'La fiche d’une série ou d’un film, courte ou étendue, ses traductions, ses personnages, ses épisodes dans tous les ordres qu’elle tient, ses saisons et ses épisodes, un personnage d’une œuvre présente ici, la première page d’une recherche. Les personnes, les listes et les sociétés viennent toujours de TheTVDB.',
+          anilist: 'Une entrée demandée par son identifiant AniList ou, pour un anime, MyAnimeList — une œuvre, ou l’une de ses saisons ou de ses cours telle que la liste des identifiants d’anime la place — avec ses titres, ses dates, ses épisodes et sa prochaine diffusion, ses personnages et leurs voix, ses étiquettes et ses studios ; une page d’entrées toutes présentes ici, filtrée et triée, et leurs calendriers de diffusion ; les genres d’AniList. Une recherche par texte, le tableau entier d’une saison, un compte, une liste, ce qui touche quelqu’un et une requête signée du jeton d’une personne viennent toujours d’AniList.',
         },
+        anilistLocalFirst:
+          'Une requête sur les anime que ce serveur détient — corrigés, saisis à la main, ou qu’AniList ne connaît pas — reçoit une réponse tirée du catalogue, à la forme d’AniList, sans rien demander à AniList, quand chaque entrée qu’elle demande est présente ici. Le reste est demandé à AniList, comme avant, et en entier : jamais une réponse à moitié tirée du catalogue.',
       },
       surface: 'API',
       address: 'Adresse',
@@ -1969,6 +2024,7 @@ export const fr: Dict = {
         isAdult: 'Adulte',
         credits: 'Distribution (liste entière)',
         castMatched: 'Personnages (rapprochés de la distribution par le nom, les autres à la suite)',
+        characters: 'Personnages, chacun une fois quelle que soit la source, nom, image et rôle d’AniList',
         episodeCredits: 'Crédits des épisodes (invités, réalisation, scénario)',
         studio: 'Studio',
         images: 'Images',
@@ -2018,18 +2074,22 @@ export const fr: Dict = {
       loadFailed: 'Les règles n’ont pas pu être chargées.',
       datasets: {
         title: 'Listes téléchargées en entier',
-        lead: 'Certaines sources ne sont pas interrogées œuvre par œuvre : leurs listes sont téléchargées en entier selon un calendrier, lues à mesure qu’elles arrivent, et seul ce qui concerne les œuvres présentes ici est gardé. Chacune s’active dans Réglages › Sources complémentaires.',
+        lead: 'Certaines sources ne sont pas interrogées œuvre par œuvre : leurs listes sont téléchargées en entier selon un calendrier et lues à mesure qu’elles arrivent. D’IMDb et de la liste d’anime, seul ce qui concerne les œuvres présentes ici est gardé ; l’index de TVmaze et les liens de Wikidata sont gardés en entier, pour les œuvres pas encore présentes. Chacune s’active dans Réglages › Sources complémentaires.',
         names: {
           'imdb-ratings': 'Notes IMDb',
           'imdb-akas': 'Titres IMDb par pays',
           'imdb-episodes': 'Épisodes IMDb',
           'anime-lists': 'Liste des identifiants d’anime',
+          'tvmaze-index': 'Index de TVmaze',
+          'wikidata-ids': 'Liens de Wikidata entre identifiants',
         },
         brings: {
           'imdb-ratings': 'La note IMDb de chaque œuvre présente — et de chaque épisode, tant que les épisodes d’IMDb sont lus.',
           'imdb-akas': 'Les titres qu’IMDb donne à chaque œuvre dans chaque pays. Radarr reçoit ceux d’un film, dans les pays qui lui sont réglés, à côté de ceux de TMDB ; rien d’autre ne les reçoit.',
           'imdb-episodes': 'Quel épisode d’IMDb est chaque épisode, d’après la saison et le numéro qu’IMDb leur donne : son identifiant IMDb dans son document .nfo, sa note IMDb sur sa page.',
           'anime-lists': 'Quelles entrées AniList et MyAnimeList sont une série ou un film, pour l’anime.',
+          'tvmaze-index': 'Chaque série que liste TVmaze — son nom, son type, sa langue, son statut, ses dates et sa chaîne, ses identifiants TheTVDB et IMDb, son poids — pour que la recherche de Sonarr trouve encore une série, sous son identifiant TheTVDB, quand les fournisseurs ne répondent pas, et pour la popularité calculée ici d’une œuvre à laquelle TMDB n’en donne pas. Gardé en entier, pas seulement pour les œuvres présentes ; ses données sont sous CC BY-SA.',
+          'wikidata-ids': 'Les identifiants que Wikidata relie pour chaque film, série et anime — IMDb, TMDB, TheTVDB, TVmaze, AniList, MyAnimeList, AniDB — pour qu’un identifiant d’une œuvre présente ici mène aux autres sans rien demander à personne : la recherche par identifiant de TMDB, celle de TheTVDB par un identifiant d’ailleurs et les termes imdb: et tmdb: de Sonarr. Ses données sont sous CC0.',
         },
         on: 'Activée',
         off: 'Désactivée',
@@ -2047,7 +2107,7 @@ export const fr: Dict = {
       },
       terms: {
         title: 'Conditions d’utilisation',
-        lead: 'Chaque source répond sous ses propres conditions. Ce serveur garde une copie de ce qu’elles ont répondu pour les œuvres qu’il détient, la rafraîchit, ne recopie aucun catalogue et n’entraîne rien dessus ; le reste est à elles de le dire, et chaque page publique crédite les sources actives.',
+        lead: 'Chaque source répond sous ses propres conditions. Ce serveur garde une copie de ce qu’elles ont répondu pour les œuvres qu’il détient et la rafraîchit — et, une fois activés, l’index de TVmaze et les liens de Wikidata en entier, sous leurs licences libres — et n’entraîne rien sur rien de tout cela ; le reste est à elles de le dire, et chaque page publique crédite les sources actives.',
         read: (name: string) => `Conditions de ${name}`,
         lines: {
           tmdb: 'Usage non commercial ; la mention montrée aux lecteurs ; rien de gardé plus de six mois, si bien qu’une œuvre est redemandée à TMDB tous les six mois quel que soit l’intervalle de rafraîchissement.',
@@ -2061,6 +2121,7 @@ export const fr: Dict = {
           fankai: 'Les métadonnées de Fankai, pour ses propres productions, demandées une à la fois ; le contenu du wiki est sous CC BY-SA.',
           skyhook: 'Le service de Sonarr, qui republie TheTVDB, dont les conditions s’appliquent à ce qu’il porte.',
           radarr: 'Le service de Radarr, qui republie TMDB, dont les conditions s’appliquent à ce qu’il porte.',
+          wikidata: 'Données sous CC0, libres de réutilisation ; son service de requêtes est interrogé une requête à la fois, par un client qui se nomme, comme le veut la politique de Wikimedia.',
         },
       },
       reach: {
@@ -3244,6 +3305,8 @@ export const fr: Dict = {
         reading: 'Lecture des ordres…',
         frozen: 'Figé comme numérotation de diffusion',
         notOffered: 'Pas proposé : le même ordre, tenu par la source qui numérote la série, le remplace',
+        tvdbLast:
+          'La numérotation que la série recevait quand TheTVDB a cessé de la connaître, les épisodes diffusés depuis placés à la suite : elle ne s’écrit pas ici — faites-en un ordre pour la changer — et s’en va quand TheTVDB numérote de nouveau la série.',
         see: 'Voir',
         seeNamed: (name: string) => `Voir ${name}`,
         copy: 'En faire un ordre',
@@ -3537,6 +3600,9 @@ export const fr: Dict = {
         'import.imdb': 'Notes IMDb',
         'imdb.akas': 'Titres IMDb par pays',
         'imdb.episodes': 'Épisodes IMDb',
+        'import.tvmaze': 'Index de TVmaze',
+        'import.wikidata': 'Liens de Wikidata entre identifiants',
+        'tvdb.deleted': 'Séries supprimées par TheTVDB',
         'export.nfo': 'Export NFO',
         'media.store': 'Stocker les médias',
         'media.sweep': 'Nettoyer les médias',
@@ -3561,6 +3627,9 @@ export const fr: Dict = {
         'import.imdb': 'Le fichier des notes d’IMDb, téléchargé en entier et gardé pour les œuvres présentes ici.',
         'imdb.akas': 'Le fichier des titres d’IMDb — un demi-gigaoctet — lu à mesure qu’il arrive, et les titres des œuvres présentes ici gardés : Radarr reçoit les titres d’un film dans les pays qui lui sont réglés. Chaque semaine, une fois activé dans les réglages. Il peut être arrêté : les œuvres atteintes gardent leurs nouveaux titres, les autres les anciens.',
         'imdb.episodes': 'Le fichier des épisodes d’IMDb lu en entier, et les épisodes des séries présentes ici gardés selon la saison et le numéro qu’IMDb leur donne : l’identifiant IMDb et la note d’un épisode, sur sa page et dans son document .nfo. Chaque semaine, une fois activé dans les réglages. Il peut être arrêté.',
+        'import.tvmaze': 'L’index de TVmaze, de chaque série qu’il liste — son nom, son type, sa langue, son statut, ses dates, sa chaîne, ses identifiants TheTVDB et IMDb, son poids — lu page par page la première fois, quelques centaines de pages au rythme de TVmaze, puis seulement les séries changées depuis. La recherche de Sonarr y trouve une série quand les fournisseurs ne répondent pas, et son poids entre dans la popularité calculée ici. Chaque semaine, une fois activé dans les réglages. Il peut être arrêté, et dit où il en est : ce qu’il a lu reste, et le passage suivant reprend de là.',
+        'import.wikidata': 'Les liens de Wikidata entre les identifiants des sites — IMDb, TMDB, TheTVDB, TVmaze, AniList, MyAnimeList, AniDB — lus par une requête par site au service de requêtes de Wikidata, l’une après l’autre : un identifiant d’une œuvre mène alors aux autres sans rien demander à TMDB ni à TheTVDB. Chaque semaine, une fois activé dans les réglages. Les liens lus avant restent tant qu’une lecture n’est pas allée au bout.',
+        'tvdb.deleted': 'Le flux des changements de TheTVDB, lu pour les séries qu’il a supprimées ou fusionnées dans une autre depuis la dernière lecture : une série présente ici parmi elles garde la numérotation qui lui était servie, figée comme numérotation diffusée, et les épisodes qui sortent ensuite sont placés à sa suite. Chaque jour, tant que TheTVDB est configuré et que TMDB peut numéroter une série à sa place (numbering.fallbackAfter au-dessus de 0).',
         'export.nfo': 'Un document .nfo pour chaque œuvre, pour une bibliothèque que lisent Plex, Jellyfin ou Kodi.',
         'media.store': 'Chaque image et chaque musique que le catalogue référence et qui n’est pas encore stockée, récupérée maintenant, quelques-unes à la fois. Peut être arrêtée ; le reste se récupère au fil de l’eau.',
         'media.sweep': 'Les médias que plus rien ne référence — une fiche supprimée, une image abandonnée par sa source, un envoi retiré — oubliés et effacés.',
@@ -3758,6 +3827,31 @@ export const fr: Dict = {
           `${plural(episodes, { one: `${episodes} épisode`, other: `${episodes} épisodes` })} de ${plural(series, { one: `${series} série`, other: `${series} séries` })} sur ${of}`,
         episodesStopped: (episodes: number, series: number) =>
           `Arrêtée : ${plural(episodes, { one: `${episodes} épisode écrit`, other: `${episodes} épisodes écrits` })} pour ${plural(series, { one: `${series} série`, other: `${series} séries` })} ; les autres gardent les leurs`,
+        tvmazePages: (pages: number, series: number, say: (n: number) => string) =>
+          `${plural(pages, { one: `${say(pages)} page lue`, other: `${say(pages)} pages lues` })}, ${plural(series, { one: `${say(series)} série gardée`, other: `${say(series)} séries gardées` })}`,
+        tvmazeRead: (series: number, pages: number, gone: number, unread: number, say: (n: number) => string) =>
+          `${plural(series, { one: `${say(series)} série`, other: `${say(series)} séries` })} sur ${plural(pages, { one: `${say(pages)} page`, other: `${say(pages)} pages` })}${
+            gone ? `, ${plural(gone, { one: `${say(gone)} plus listée`, other: `${say(gone)} plus listées` })}` : ''
+          }${unread ? `, ${plural(unread, { one: `${say(unread)} entrée illisible`, other: `${say(unread)} entrées illisibles` })}` : ''}`,
+        tvmazeStopped: (series: number, pages: number, say: (n: number) => string) =>
+          `Arrêtée : ${plural(series, { one: `${say(series)} série gardée`, other: `${say(series)} séries gardées` })} sur ${plural(pages, { one: `${say(pages)} page`, other: `${say(pages)} pages` })}`,
+        tvmazeChanging: (at: number, of: number, say: (n: number) => string) =>
+          `${say(at)} sur ${say(of)} séries changées relues`,
+        tvmazeChangedStopped: (read: number, of: number, gone: number, say: (n: number) => string) =>
+          `Arrêtée : ${say(read)} sur ${say(of)} séries changées relues, ${plural(gone, { one: `${say(gone)} disparue`, other: `${say(gone)} disparues` })}`,
+        tvmazeChanged: (read: number, changed: number, since: string, gone: number, held: number, say: (n: number) => string) =>
+          `${say(read)} des ${say(changed)} séries changées ${
+            ({ day: 'depuis la veille', week: 'dans la semaine', month: 'dans le mois' } as Record<string, string>)[since] ?? since
+          } relues, ${plural(gone, { one: `${say(gone)} disparue`, other: `${say(gone)} disparues` })} : ${say(held)} en tout`,
+        wikidata: (links: number, items: number, added: number, gone: number, say: (n: number) => string) =>
+          `${plural(links, { one: `${say(links)} lien`, other: `${say(links)} liens` })} sur ${plural(items, { one: `${say(items)} élément`, other: `${say(items)} éléments` })} : ${plural(added, { one: `${say(added)} nouveau`, other: `${say(added)} nouveaux` })}, ${plural(gone, { one: `${say(gone)} disparu`, other: `${say(gone)} disparus` })}`,
+        tvdbDeleted: (deleted: number, since: string, kept: string | undefined, already: number) =>
+          `TheTVDB a supprimé ${plural(deleted, { one: `${deleted} série`, other: `${deleted} séries` })} depuis le ${since}${
+            kept ? ` ; numérotées comme elles étaient servies : ${kept}` : ''
+          }${already ? ` ; ${plural(already, { one: `${already} présente ici l’était déjà`, other: `${already} présentes ici l’étaient déjà` })}` : ''}${
+            !kept && !already ? ' ; aucune n’est présente ici' : ''
+          }`,
+        mergedInto: (id: string) => ` (fusionnée dans ${id})`,
       },
     },
     runs: {
@@ -3969,6 +4063,10 @@ export const fr: Dict = {
       imdbTitleRows: (n: string) => `${n} titres gardés`,
       imdbEpisodes: 'Épisodes IMDb',
       imdbEpisodeRows: (n: string) => `${n} épisodes gardés`,
+      tvmazeIndex: 'Index de TVmaze',
+      tvmazeIndexRows: (n: string) => `${n} séries gardées`,
+      wikidataIds: 'Liens de Wikidata entre identifiants',
+      wikidataIdsRows: (n: string) => `${n} liens gardés`,
       notImported: 'Pas téléchargée',
       malVia: 'MyAnimeList par',
       malOfficial: 'Son API officielle',
@@ -4063,6 +4161,9 @@ export const fr: Dict = {
       'imdb.enabled': 'Les notes d’IMDb',
       'imdb.akas': 'Les titres d’IMDb par pays, pour Radarr',
       'imdb.episodes': 'Les épisodes d’IMDb',
+      'tvmaze.index': 'L’index de TVmaze, pour les recherches',
+      'wikidata.enabled': 'Les liens de Wikidata entre identifiants',
+      'anilist.relayMode': 'Ce que le relais AniList répond lui-même',
       'imdb.regions': 'Pays dont Radarr reçoit les titres',
       'fankai.enabled': 'Fankai, pour les fan-kai',
       'fankai.wiki': 'Le wiki Fankai, pour l’anime d’origine',
@@ -4130,6 +4231,10 @@ export const fr: Dict = {
       'imdb.enabled': 'Les notes d’IMDb, téléchargées chaque jour pour les œuvres présentes ici. C’est aussi la note transmise à Sonarr, comme le fait Skyhook. Pour un usage personnel et non commercial uniquement.',
       'imdb.akas': 'Les titres d’IMDb par pays, lus chaque semaine — un demi-gigaoctet, dont seules les œuvres présentes ici sont gardées. Radarr reçoit les titres d’un film dans les pays ci-dessous parmi ses titres alternatifs, pour reconnaître une sortie nommée d’après l’un d’eux. Rien d’autre ne les reçoit : pour Sonarr, chacun serait une recherche de plus. Pour un usage personnel et non commercial uniquement.',
       'imdb.episodes': 'Les épisodes d’IMDb, lus chaque semaine — cinquante mégaoctets, dont seules les séries présentes ici sont gardées. Chaque épisode qu’IMDb numérote comme l’ordre officiel porte son identifiant IMDb dans son document .nfo et sur sa page, avec la note d’IMDb tant que les notes d’IMDb sont activées. Rapproché d’après ses numéros, la page dit que ce rapprochement est moins sûr.',
+      'tvmaze.index': 'L’index de TVmaze, de chaque série qu’il liste, lu chaque semaine — quelques centaines de pages la première fois, au rythme de TVmaze, puis seulement les séries changées depuis — et gardé en entier : la recherche de Sonarr trouve encore une série, sous son identifiant TheTVDB, quand les fournisseurs ne répondent pas, et son poids entre dans la popularité calculée ici pour une œuvre à laquelle TMDB n’en donne pas. Ses données sont sous CC BY-SA, créditées sur chaque page tant que ceci est activé.',
+      'wikidata.enabled': 'Les liens de Wikidata entre les identifiants des sites — IMDb, TMDB, TheTVDB, TVmaze, AniList, MyAnimeList, AniDB — lus chaque semaine par une requête par site au service de requêtes de Wikidata, et gardés en base — un million de liens, quelque trente-six mégaoctets en SQLite, une centaine en PostgreSQL : un identifiant par lequel un client demande mène à l’œuvre présente ici sous un autre — le find de TMDB, la recherche de TheTVDB par un identifiant d’ailleurs, les termes imdb: et tmdb: de Sonarr — et aux identifiants par lesquels TMDB ou TheTVDB sont interrogés quand TMDB ne répond pas, sans rien demander à personne. Il ne fait jamais que trouver des identifiants ; les liens lus avant restent tant qu’une lecture n’est pas allée au bout. Ses données sont sous CC0.',
+      'anilist.relayMode':
+        'relay demande tout à AniList et écrit les verrous dans ses réponses. local-first répond lui-même à une requête sur les anime que ce serveur détient — des entrées par leurs identifiants AniList ou MyAnimeList, une œuvre ou l’une de ses saisons ou de ses cours, une page d’entre elles, leurs calendriers de diffusion — depuis le catalogue, à la forme d’AniList, corrections et œuvres saisies à la main comprises, sans demander à AniList ; et demande le reste à AniList — une recherche par texte, toujours ce qui touche un compte ou est demandé avec le jeton de quelqu’un. Aussi sur Ouverture & API.',
       'imdb.regions': 'Des codes de deux lettres — FR, BE, CA — ou ceux d’IMDb : XWW est le monde, en anglais. Réglé pour une clé ou une adresse, c’est celui de ce Radarr. Non réglé, le pays de la langue dans laquelle un Radarr reçoit ses réponses : fr-FR lui donne les titres français.',
       'fankai.enabled': 'Les productions Fan-Kai, depuis le service de métadonnées de Fankai : chaque anime remonté comme une série, ses arcs comme des saisons et ses films comme des épisodes, numérotés comme Fankai nomme ses fichiers — S02E08 est le huitième film en tout, dans le deuxième arc. Trouvées par leur titre, ou par « fankai: » suivi d’un identifiant, et récupérées seulement à la demande. Sonarr reçoit un identifiant propre à ce serveur, TheTVDB n’en ayant aucun pour elles. Sans clé ; Fankai est crédité sur chaque page. Désactivée, ce qui a été récupéré reste tel quel.',
       'fankai.wiki': 'La page de chaque Fan-Kai sur le wiki de la communauté Fankai, fan-kai.fandom.com : les entrées AniList et MyAnimeList dont il est tiré, et le Fan-Kai qui lui fait suite. La fiche d’un Fan-Kai mène alors à son anime, et celle de l’anime — une fois que Sonarr la détient — à ses Fan-Kai. Un appel par récupération d’un Fan-Kai, et seulement tant que Fankai est actif ; avec AniList actif, le titre, l’année et l’affiche de l’anime viennent de là. Sans clé ; son contenu est sous CC BY-SA et crédité sur chaque page.',
@@ -4141,9 +4246,9 @@ export const fr: Dict = {
       'tmdb.images':
         'Le serveur d’images que nomme le /3/configuration du relais TMDB. Celui de TMDB, ou celui de ce serveur, /tmdb-images/…, où Jellyfin, Kodi, Kometa et Emby prennent alors les images — seulement avec le magasin de médias allumé et AMS_PUBLIC_URL défini ; sans l’un ou l’autre, celui de TMDB. Seerr et Yamtrack chargent les leurs dans le navigateur du lecteur, chez TMDB, dans les deux cas. Aussi sur Ouverture & API.',
       'tmdb.relayMode':
-        'relay demande tout à TMDB et écrit les verrous dans ses réponses. local-first répond lui-même pour un film ou une série que ce serveur détient — ses saisons et ses épisodes, un find par l’un de ses identifiants — depuis le catalogue, à la forme de TMDB, corrections et œuvres saisies à la main comprises, sans demander à TMDB ni sa clé ; met les œuvres du catalogue en tête d’une recherche ; et demande le reste à TMDB. Aussi sur Ouverture & API.',
+        'relay demande tout à TMDB et écrit les verrous dans ses réponses. local-first répond lui-même pour un film ou une série que ce serveur détient — ses saisons et ses épisodes, sa collection, un find par l’un de ses identifiants — depuis le catalogue, à la forme de TMDB, corrections et œuvres saisies à la main comprises, sans demander à TMDB ni sa clé ; met les œuvres du catalogue en tête d’une recherche ; et demande le reste à TMDB. Aussi sur Ouverture & API.',
       'tvdb.relayMode':
-        'relay demande tout à TheTVDB et écrit les verrous dans ses réponses. local-first répond lui-même pour une série ou un film que ce serveur détient — sa fiche, ses épisodes dans tous les ordres, ses saisons et ses épisodes — depuis le catalogue, à la forme de TheTVDB, sans demander à TheTVDB ni sa clé ; met les œuvres du catalogue en tête d’une recherche ; et demande le reste à TheTVDB. Aussi sur Ouverture & API.',
+        'relay demande tout à TheTVDB et écrit les verrous dans ses réponses. local-first répond lui-même pour une série ou un film que ce serveur détient — sa fiche et ses personnages, ses épisodes dans tous les ordres, ses saisons et ses épisodes — depuis le catalogue, à la forme de TheTVDB, sans demander à TheTVDB ni sa clé ; met les œuvres du catalogue en tête d’une recherche ; et demande le reste à TheTVDB. Aussi sur Ouverture & API.',
       'refresh.enabled': 'Les œuvres stockées sont récupérées à nouveau, régulièrement, à mesure que ce qu’on en sait vieillit.',
       'refresh.intervalSeconds': 'En secondes. Une minute au minimum, une semaine au maximum.',
       'refresh.batchSize': 'Le nombre d’œuvres récupérées à nouveau à chaque réveil du planificateur.',
@@ -4188,6 +4293,8 @@ export const fr: Dict = {
       'tmdb.relayMode.local-first': 'Le catalogue d’abord',
       'tvdb.relayMode.relay': 'Demander à TheTVDB',
       'tvdb.relayMode.local-first': 'Le catalogue d’abord',
+      'anilist.relayMode.relay': 'Demander à AniList',
+      'anilist.relayMode.local-first': 'Le catalogue d’abord',
     },
     inherited: 'Hérité',
     inheritedHint: 'Suit la réponse du serveur.',

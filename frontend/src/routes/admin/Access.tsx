@@ -466,9 +466,16 @@ function RelayCredential({
 const RELAY_MODES = [
   { api: 'tmdb', key: 'tmdb.relayMode' },
   { api: 'tvdb', key: 'tvdb.relayMode' },
+  { api: 'anilist', key: 'anilist.relayMode' },
 ] as const
 
-/** What `tmdb.relayMode` and `tvdb.relayMode` take: the service asked for all of it, or the catalogue first. */
+/** The service each of those relays asks, by its name. */
+const RELAYED: Record<(typeof RELAY_MODES)[number]['api'], string> = { tmdb: 'TMDB', tvdb: 'TheTVDB', anilist: 'AniList' }
+
+/**
+ * What `tmdb.relayMode`, `tvdb.relayMode` and `anilist.relayMode` take: the
+ * service asked for all of it, or the catalogue first.
+ */
 const MODES = ['relay', 'local-first'] as const
 
 type RelayMode = (typeof MODES)[number]
@@ -512,7 +519,13 @@ function RelayModes({
         <div key={relay.api} className="grid gap-x-6 gap-y-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
           <div className="min-w-0">
             <span className="block text-sm text-bone">{a.apis[relay.api]}</span>
-            <Consequence>{m.consequence[relay.mode](SERVICES[relay.api])}</Consequence>
+            {/* AniList is asked with no key of the server's, and a query part
+                of which is held elsewhere goes to it whole: said apart. */}
+            <Consequence>
+              {relay.api === 'anilist' && relay.mode === 'local-first'
+                ? m.anilistLocalFirst
+                : m.consequence[relay.mode](RELAYED[relay.api])}
+            </Consequence>
             {relay.mode === 'local-first' ? (
               <p className="mt-3 max-w-prose text-xs leading-relaxed text-bone-faint">{m.answers[relay.api]}</p>
             ) : null}

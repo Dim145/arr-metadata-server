@@ -1,0 +1,170 @@
+{
+ "data": {
+  "byIds": {
+   "pageInfo": {
+    "total": 3,
+    "perPage": 50,
+    "currentPage": 1,
+    "lastPage": 1,
+    "hasNextPage": false
+   },
+   "media": [
+    {
+     "id": 21
+    },
+    {
+     "id": 21519
+    },
+    {
+     "id": 154587
+    }
+   ]
+  },
+  "sorted": {
+   "pageInfo": {
+    "total": 5000,
+    "perPage": 2,
+    "currentPage": 1,
+    "lastPage": 2500,
+    "hasNextPage": true
+   },
+   "media": [
+    {
+     "id": 154587
+    },
+    {
+     "id": 21519
+    }
+   ]
+  },
+  "secondPage": {
+   "pageInfo": {
+    "total": 3,
+    "perPage": 2,
+    "currentPage": 2,
+    "lastPage": 2,
+    "hasNextPage": false
+   },
+   "media": [
+    {
+     "id": 21
+    }
+   ]
+  },
+  "mal": {
+   "media": [
+    {
+     "id": 21,
+     "idMal": 21
+    },
+    {
+     "id": 21519,
+     "idMal": 32281
+    }
+   ]
+  },
+  "filtered": {
+   "media": [
+    {
+     "id": 154587
+    }
+   ]
+  },
+  "empty": {
+   "pageInfo": {
+    "total": 0,
+    "perPage": 50,
+    "currentPage": 1,
+    "lastPage": 1,
+    "hasNextPage": false
+   },
+   "media": []
+  },
+  "schedule": {
+   "pageInfo": {
+    "total": 5000,
+    "perPage": 3,
+    "currentPage": 1,
+    "lastPage": 1666,
+    "hasNextPage": true
+   },
+   "airingSchedules": [
+    {
+     "id": 421363,
+     "airingAt": 1798985760,
+     "timeUntilAiring": 5313472,
+     "episode": 1181,
+     "mediaId": 21,
+     "media": {
+      "id": 21
+     }
+    },
+    {
+     "id": 421364,
+     "airingAt": 1799590560,
+     "timeUntilAiring": 5918272,
+     "episode": 1182,
+     "mediaId": 21,
+     "media": {
+      "id": 21
+     }
+    },
+    {
+     "id": 421365,
+     "airingAt": 1800195360,
+     "timeUntilAiring": 6523072,
+     "episode": 1183,
+     "mediaId": 21,
+     "media": {
+      "id": 21
+     }
+    }
+   ]
+  },
+  "scheduleDefault": {
+   "pageInfo": {
+    "total": 5000,
+    "lastPage": 1666,
+    "hasNextPage": true
+   },
+   "airingSchedules": [
+    {
+     "id": 374988,
+     "airingAt": 1696600800,
+     "episode": 5
+    },
+    {
+     "id": 374989,
+     "airingAt": 1697205600,
+     "episode": 6
+    },
+    {
+     "id": 374990,
+     "airingAt": 1697810400,
+     "episode": 7
+    }
+   ]
+  },
+  "GenreCollection": [
+   "Action",
+   "Adventure",
+   "Comedy",
+   "Drama",
+   "Ecchi",
+   "Fantasy",
+   "Hentai",
+   "Horror",
+   "Mahou Shoujo",
+   "Mecha",
+   "Music",
+   "Mystery",
+   "Psychological",
+   "Romance",
+   "Sci-Fi",
+   "Slice of Life",
+   "Sports",
+   "Supernatural",
+   "Thriller"
+  ]
+ }
+}

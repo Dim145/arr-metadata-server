@@ -305,7 +305,7 @@ sent, and a value the server does not know is refused with a `400`. Exactly:
 | `imdb` | has no IMDb identifier |
 | `refresh` | was never refreshed although it has an identifier to be refreshed by. A work entered by hand is never refreshed, and is not counted |
 | `duplicates` | is one of a pair proposed as one work, not said to be two, the other still a work of its own: see [Duplicates](#duplicates) |
-| `mediaFailed` | has a picture, a photograph or a theme — its own, a season's, an episode's, its cast's, a related work's — that the media store gave up fetching, as the Media page lists them: so that another can be chosen |
+| `mediaFailed` | has a picture, a photograph or a theme — its own, a season's, an episode's, its cast's, a related work's, its characters' or their voices', a network's or a company's logo, its collection's — that the media store gave up fetching, as the Media page lists them: so that another can be chosen |
 
 The figure beside each filter is `GET /api/v1/admin/gaps`, which counts what each `missing`
 value lists, through the same definition and over the same works — disabled ones included,
@@ -380,6 +380,14 @@ its files then stand for other episodes, XEM's mappings no longer fit — before
 done; *Thaw* undoes it. See [Orders](sonarr-radarr.md#orders). While TMDB numbers the series
 in TheTVDB's place, a banner at the top of the tab, and on the work's page, says since when,
 with *Back to TheTVDB*: see [Who numbers a series](sonarr-radarr.md#who-numbers-a-series).
+
+A series TheTVDB no longer knows lists *TheTVDB (as last given)* (`tvdb-last`) among its orders: the
+numbering it was served by when TheTVDB dropped it, frozen. It is neither written nor deleted here —
+`PUT` and `DELETE` on it are a `409` — but can be made an order of one's own, and thawed or frozen
+again; it goes once TheTVDB numbers the series again. The banner says why the series is served so —
+deleted, merged into another, or answered for twice as no such series — and *Back to TheTVDB* what it
+did; a single answer of TheTVDB's that it has no such series is a note for whoever edits the work,
+which changes nothing yet. See [A series TheTVDB no longer knows](sonarr-radarr.md#a-series-thetvdb-no-longer-knows).
 
 The *Other numberings* panel of the **Elsewhere** tab lists the same orders and leads here.
 Through the API: `GET`/`POST /api/v1/items/{id}/orders`, `PUT`/`DELETE

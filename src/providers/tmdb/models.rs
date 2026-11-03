@@ -353,7 +353,31 @@ pub struct Collection {
     pub poster_path: Option<String>,
     pub backdrop_path: Option<String>,
     #[serde(default)]
-    pub parts: Vec<MovieSummary>,
+    pub parts: Vec<CollectionPart>,
+    /// Its name — as `title` — and its synopsis in every language TMDB has
+    /// them in, where they were asked for with it.
+    pub translations: Option<Translations>,
+}
+
+/// One of a collection's films, as its list carries it: a search's result,
+/// its title under `title`, or under `name` as TMDB's own documentation
+/// writes the list now — read either way.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CollectionPart {
+    pub id: i64,
+    pub title: Option<String>,
+    pub name: Option<String>,
+    pub original_title: Option<String>,
+    pub original_name: Option<String>,
+    pub overview: Option<String>,
+    pub release_date: Option<String>,
+    pub original_language: Option<String>,
+    pub vote_average: Option<f64>,
+    pub vote_count: Option<i64>,
+    pub popularity: Option<f64>,
+    pub poster_path: Option<String>,
+    pub backdrop_path: Option<String>,
+    pub adult: Option<bool>,
 }
 
 /// One country's certification block from `/movie/{id}/release_dates`.

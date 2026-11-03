@@ -213,16 +213,24 @@ pub async fn enqueue(db: &Db, wanted: &[Wanted<'_>]) -> Result<usize> {
     Ok(added)
 }
 
-/// Every address a work's rows hold that no row here knows, kind by kind.
-/// The people's photographs and the themes only when asked for.
+/// Every address a work's rows hold that no row here knows, kind by kind —
+/// its companies' logos, and the pictures of the collections its films
+/// belong to, among them. The people's photographs — the cast's, the
+/// characters' pictures and their voices' portraits among them — and the
+/// themes only when asked for.
 pub async fn unknown_origins(db: &Db, people: bool, audio: bool) -> Result<Vec<(String, Kind)>> {
     let mut columns: Vec<(&str, &str, Kind)> = vec![
         ("media_image", "url", Kind::Image),
         ("media_episode", "image", Kind::Image),
         ("media_relation", "image", Kind::Image),
+        ("company", "logo", Kind::Image),
+        ("collection", "poster", Kind::Image),
+        ("collection", "backdrop", Kind::Image),
     ];
     if people {
         columns.push(("media_credit", "image", Kind::Image));
+        columns.push(("character", "image", Kind::Image));
+        columns.push(("media_character_voice", "image", Kind::Image));
     }
     if audio {
         columns.push(("media_item", "theme_music", Kind::Audio));
@@ -678,7 +686,9 @@ pub async fn held_stems(db: &Db) -> Result<HashSet<String>> {
 
 /// Every place an address is named from: a work's pictures and its
 /// seasons', an episode's still, a cast's photographs, a relation's poster,
-/// a work's theme, a selection's cover — and any locked value, on any work,
+/// a work's theme, a selection's cover, a company's logo, a collection's
+/// poster and background, a character's picture, its voice's portrait —
+/// and any locked value, on any work,
 /// that is the address itself, or with `by_path`, one that is the path of its
 /// bytes here: a lock can name a picture another work holds, and one written
 /// before locks were filed by their origin names it by its path.
@@ -690,6 +700,10 @@ fn naming(by_path: bool) -> String {
          OR EXISTS (SELECT 1 FROM media_relation r WHERE r.image = ?)
          OR EXISTS (SELECT 1 FROM media_item m WHERE m.theme_music = ?)
          OR EXISTS (SELECT 1 FROM curated_list l WHERE l.cover = ?)
+         OR EXISTS (SELECT 1 FROM company k WHERE k.logo = ?)
+         OR EXISTS (SELECT 1 FROM collection s WHERE s.poster = ? OR s.backdrop = ?)
+         OR EXISTS (SELECT 1 FROM character h WHERE h.image = ?)
+         OR EXISTS (SELECT 1 FROM media_character_voice v WHERE v.image = ?)
          OR EXISTS (SELECT 1 FROM media_override o WHERE o.value = ?)",
     );
     if by_path {
@@ -698,10 +712,10 @@ fn naming(by_path: bool) -> String {
     sql
 }
 
-/// What [`naming`] is asked with: the address, six times; as a locked
+/// What [`naming`] is asked with: the address, eleven times; as a locked
 /// value holds it, in JSON; and the path of its bytes, when it has any.
 fn naming_binds(origin: &str, key: Option<&str>) -> Result<Vec<String>> {
-    let mut binds = vec![origin.to_string(); 6];
+    let mut binds = vec![origin.to_string(); 11];
     binds.push(serde_json::to_string(origin)?);
     if let Some(key) = key {
         let stem = crate::media::file::stem_of(key);
@@ -730,7 +744,8 @@ pub async fn delete_unless_referenced(db: &Db, asset: &Asset) -> Result<bool> {
 /// The rows no work points at any more, among those older than
 /// `created_before` — an upload's row is written a moment before the
 /// picture or the lock that points at it: every column an address can sit
-/// in is looked through, a selection's cover among them, and the locked
+/// in is looked through, a selection's cover, a company's logo, a
+/// collection's pictures and a character's among them, and the locked
 /// values a caller passes — those are JSON, and read in Rust.
 pub async fn unreferenced(
     db: &Db,
@@ -745,7 +760,12 @@ pub async fn unreferenced(
            AND NOT EXISTS (SELECT 1 FROM media_credit c WHERE c.image = a.origin)
            AND NOT EXISTS (SELECT 1 FROM media_relation r WHERE r.image = a.origin)
            AND NOT EXISTS (SELECT 1 FROM media_item m WHERE m.theme_music = a.origin)
-           AND NOT EXISTS (SELECT 1 FROM curated_list l WHERE l.cover = a.origin)"
+           AND NOT EXISTS (SELECT 1 FROM curated_list l WHERE l.cover = a.origin)
+           AND NOT EXISTS (SELECT 1 FROM company k WHERE k.logo = a.origin)
+           AND NOT EXISTS (SELECT 1 FROM collection s
+                            WHERE s.poster = a.origin OR s.backdrop = a.origin)
+           AND NOT EXISTS (SELECT 1 FROM character h WHERE h.image = a.origin)
+           AND NOT EXISTS (SELECT 1 FROM media_character_voice v WHERE v.image = a.origin)"
     )))
     .bind(created_before)
     .fetch_all(db.pool())
@@ -803,13 +823,24 @@ pub async fn counts(db: &Db) -> Result<Counts> {
 
 /// Every address a work points at, once per work: its pictures and its
 /// seasons', its episodes' stills, its cast's portraits, its relations'
-/// covers, its theme — what the work's own media list shows. A picture
+/// covers, its characters' pictures and their voices' portraits, its
+/// companies' logos, its collection's poster and background, its theme —
+/// every column [`unknown_origins`] fetches from, by the work. A picture
 /// shared by two works is each one's.
 const WORK_ADDRESSES: &str = "
     SELECT media_id, url AS origin FROM media_image
     UNION SELECT media_id, image FROM media_episode WHERE image IS NOT NULL
     UNION SELECT media_id, image FROM media_credit WHERE image IS NOT NULL
     UNION SELECT media_id, image FROM media_relation WHERE image IS NOT NULL
+    UNION SELECT l.media_id, h.image FROM media_character l
+          JOIN character h ON h.id = l.character_id WHERE h.image IS NOT NULL
+    UNION SELECT media_id, image FROM media_character_voice WHERE image IS NOT NULL
+    UNION SELECT l.media_id, k.logo FROM media_company l
+          JOIN company k ON k.id = l.company_id WHERE k.logo IS NOT NULL
+    UNION SELECT m.id, s.poster FROM media_item m
+          JOIN collection s ON s.tmdb_id = m.collection_tmdb_id WHERE s.poster IS NOT NULL
+    UNION SELECT m.id, s.backdrop FROM media_item m
+          JOIN collection s ON s.tmdb_id = m.collection_tmdb_id WHERE s.backdrop IS NOT NULL
     UNION SELECT id, theme_music FROM media_item WHERE theme_music IS NOT NULL";
 
 /// What one work's media come to.
@@ -949,6 +980,17 @@ pub async fn work_totals(db: &Db, id: &str) -> Result<WorkTotals> {
             UNION SELECT image FROM media_episode WHERE media_id = ? AND image IS NOT NULL
             UNION SELECT image FROM media_credit WHERE media_id = ? AND image IS NOT NULL
             UNION SELECT image FROM media_relation WHERE media_id = ? AND image IS NOT NULL
+            UNION SELECT h.image FROM media_character l JOIN character h ON h.id = l.character_id
+                   WHERE l.media_id = ? AND h.image IS NOT NULL
+            UNION SELECT image FROM media_character_voice WHERE media_id = ? AND image IS NOT NULL
+            UNION SELECT k.logo FROM media_company l JOIN company k ON k.id = l.company_id
+                   WHERE l.media_id = ? AND k.logo IS NOT NULL
+            UNION SELECT s.poster FROM media_item m
+                   JOIN collection s ON s.tmdb_id = m.collection_tmdb_id
+                   WHERE m.id = ? AND s.poster IS NOT NULL
+            UNION SELECT s.backdrop FROM media_item m
+                   JOIN collection s ON s.tmdb_id = m.collection_tmdb_id
+                   WHERE m.id = ? AND s.backdrop IS NOT NULL
             UNION SELECT theme_music FROM media_item WHERE id = ? AND theme_music IS NOT NULL)
          SELECT COALESCE(SUM(CASE WHEN x.status = 'stored' THEN 1 ELSE 0 END), 0) AS stored,
                 COALESCE(SUM(CASE WHEN x.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
@@ -960,6 +1002,11 @@ pub async fn work_totals(db: &Db, id: &str) -> Result<WorkTotals> {
                    FROM refs r
                    JOIN media_asset a ON a.origin = r.origin) x",
     ))
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
     .bind(id)
     .bind(id)
     .bind(id)
@@ -988,8 +1035,10 @@ pub async fn troubled(db: &Db, limit: i64) -> Result<Vec<Asset>> {
 
 /// What a work's rows have a picture as, by its address: a poster first,
 /// then a background, then whatever else — what decides the copy made of
-/// it as it is stored, and the night's. `None` for an address no work's
-/// pictures hold: a still, a photograph, a lock's.
+/// it as it is stored, and the night's. A company's logo is a logo, drawn
+/// art copied without loss where it is transparent; a collection's poster
+/// and background are a poster and a background. `None` for an address none
+/// of those hold: a still, a photograph, a lock's.
 pub async fn cover_of(db: &Db, origin: &str) -> Result<Option<CoverType>> {
     let row = sqlx::query(db.sql(
         "SELECT cover_type FROM media_image WHERE url = ?
@@ -1000,13 +1049,32 @@ pub async fn cover_of(db: &Db, origin: &str) -> Result<Option<CoverType>> {
     .bind(origin)
     .fetch_optional(db.pool())
     .await?;
-    row.map(|row| -> Result<CoverType> {
-        Ok(row
-            .text("cover_type")?
-            .parse()
-            .unwrap_or(CoverType::Unknown))
+    if let Some(row) = row {
+        return Ok(Some(
+            row.text("cover_type")?
+                .parse()
+                .unwrap_or(CoverType::Unknown),
+        ));
+    }
+    let row = sqlx::query(db.sql(
+        "SELECT (SELECT COUNT(*) FROM company WHERE logo = ?) AS logos,
+                (SELECT COUNT(*) FROM collection WHERE poster = ?) AS posters,
+                (SELECT COUNT(*) FROM collection WHERE backdrop = ?) AS backdrops",
+    ))
+    .bind(origin)
+    .bind(origin)
+    .bind(origin)
+    .fetch_one(db.pool())
+    .await?;
+    Ok(if row.big("logos")? > 0 {
+        Some(CoverType::Clearlogo)
+    } else if row.big("posters")? > 0 {
+        Some(CoverType::Poster)
+    } else if row.big("backdrops")? > 0 {
+        Some(CoverType::Fanart)
+    } else {
+        None
     })
-    .transpose()
 }
 
 /// The next pictures stored that this version has not prepared — no
@@ -1862,6 +1930,178 @@ mod tests {
         let counts = variant_counts(&db).await.unwrap();
         assert_eq!((counts.webp, counts.avif, counts.jpeg), (0, 1, 1));
         assert_eq!(variants_of(&db, SHA).await.unwrap().len(), 2);
+    }
+
+    /// A company's logo, a collection's pictures, a character's picture and
+    /// its voices' portraits are named as a work's own pictures are: looked
+    /// for by the pass that keeps everything — the people's when theirs are
+    /// — copied as what they are, and kept while anything names them.
+    #[tokio::test]
+    async fn a_companys_logo_and_a_collections_pictures_are_named_as_a_works_are() {
+        use crate::domain::{
+            Collection, Company, CompanyCredit, CompanyRole,
+            person::{Character, CharacterCredit, CharacterVoice},
+        };
+
+        let db = db().await;
+        let mut item = crate::domain::MediaItem::empty(crate::domain::MediaKind::Series);
+        item.title = "Logos".into();
+        item.slug = item.id.clone();
+        item.collection_tmdb_id = Some(9_400_002);
+        item.companies = vec![CompanyCredit {
+            company: Company {
+                id: String::new(),
+                kind: CompanyRole::Network.kind(),
+                name: "A Network With A Logo".into(),
+                tmdb_id: Some(9_400_001),
+                tvdb_id: None,
+                logo: Some("https://a/logo.png".into()),
+                country: None,
+            },
+            role: CompanyRole::Network,
+            sort_order: 0,
+            source: Some("tmdb".into()),
+        }];
+        item.characters = vec![CharacterCredit {
+            character: Character {
+                id: String::new(),
+                name: "A Part With A Picture".into(),
+                native_name: None,
+                image: Some("https://a/part.png".into()),
+                tvdb_id: None,
+                anilist_id: Some(9_400_003),
+                mal_id: None,
+            },
+            role: None,
+            sort_order: 0,
+            credit_id: None,
+            voices: vec![CharacterVoice {
+                language: "jpn".into(),
+                name: "A Voice".into(),
+                native_name: None,
+                image: Some("https://a/voice.jpg".into()),
+                anilist_id: None,
+                mal_id: None,
+                sort_order: 0,
+            }],
+            source: Some("anilist".into()),
+        }];
+        crate::db::repo::item::upsert(
+            &db,
+            crate::db::repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+        crate::db::repo::collection::write(
+            &db,
+            &Collection {
+                id: String::new(),
+                tmdb_id: 9_400_002,
+                name: "A Saga".into(),
+                overview: None,
+                poster: Some("https://a/saga.jpg".into()),
+                backdrop: Some("https://a/saga-back.jpg".into()),
+                language: None,
+                translations: Vec::new(),
+                parts: Vec::new(),
+                refreshed_at: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut unknown: Vec<String> = unknown_origins(&db, false, false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(origin, _)| origin)
+            .collect();
+        unknown.sort();
+        assert_eq!(
+            unknown,
+            [
+                "https://a/logo.png",
+                "https://a/saga-back.jpg",
+                "https://a/saga.jpg"
+            ]
+        );
+        let people = unknown_origins(&db, true, false).await.unwrap();
+        for picture in ["https://a/part.png", "https://a/voice.jpg"] {
+            assert!(
+                people.iter().any(|(origin, _)| origin == picture),
+                "{picture}, with the people's"
+            );
+        }
+        assert_eq!(cover_of(&db, "https://a/part.png").await.unwrap(), None);
+        assert_eq!(
+            cover_of(&db, "https://a/logo.png").await.unwrap(),
+            Some(CoverType::Clearlogo),
+            "drawn art, copied without loss"
+        );
+        assert_eq!(
+            cover_of(&db, "https://a/saga.jpg").await.unwrap(),
+            Some(CoverType::Poster)
+        );
+        assert_eq!(
+            cover_of(&db, "https://a/saga-back.jpg").await.unwrap(),
+            Some(CoverType::Fanart)
+        );
+
+        enqueue(
+            &db,
+            &[
+                wanted("https://a/logo.png"),
+                wanted("https://a/saga.jpg"),
+                wanted("https://a/saga-back.jpg"),
+                wanted("https://a/part.png"),
+                wanted("https://a/voice.jpg"),
+                wanted("https://a/nobodys.jpg"),
+            ],
+        )
+        .await
+        .unwrap();
+        let lost = unreferenced(&db, &HashSet::new(), LATER).await.unwrap();
+        assert_eq!(
+            lost.iter().map(|a| a.origin.as_str()).collect::<Vec<_>>(),
+            ["https://a/nobodys.jpg"]
+        );
+        for asset in due(&db, 10).await.unwrap() {
+            let gone = delete_unless_referenced(&db, &asset).await.unwrap();
+            assert_eq!(
+                gone,
+                asset.origin == "https://a/nobodys.jpg",
+                "{}",
+                asset.origin
+            );
+        }
+
+        // Every one of them the work's: counted on its media page, and one
+        // given up on is a work whose media failed.
+        assert_eq!(work_totals(&db, &item.id).await.unwrap().pending, 5);
+        sqlx::query(db.sql("UPDATE media_asset SET status = 'failed' WHERE origin = ?"))
+            .bind("https://a/logo.png")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let failed = crate::db::repo::item::search(
+            &db,
+            &crate::db::repo::item::Query {
+                missing: vec!["mediaFailed".parse().expect("a gap")],
+                include_disabled: true,
+                include_adult: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            failed.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
+            [item.id.as_str()],
+            "its network's logo given up on"
+        );
     }
 
     /// What a work has a picture as decides the copies made of it; the

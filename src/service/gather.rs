@@ -14,7 +14,10 @@
 //! tried again sooner (see [`store`]).
 //!
 //! Until TheTVDB has not answered for a series long enough: then TMDB
-//! numbers it in TheTVDB's place, reversibly (see [`Numbering`]).
+//! numbers it in TheTVDB's place, reversibly (see [`Numbering`]). TheTVDB
+//! answering that it has no such series is no failure, but stands for one
+//! all the same: what it gave before stands — and once it has said so long
+//! enough, its numbering is kept as it was served (`service::numbering`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -29,7 +32,7 @@ use crate::{
     domain::{Episode, ExternalIds, ExternalSource, MediaItem, MediaKind, OrderKind},
     merge::{self, Contribution, provenance::Provenance},
     providers::{names, tmdb::map as tmdb_map},
-    service::{anime, orders},
+    service::{anime, numbering, orders},
     state::AppState,
     wire,
 };
@@ -78,6 +81,7 @@ impl Answer {
 }
 
 /// A provider that was asked and did not answer, and why.
+#[derive(Clone)]
 struct Failure {
     provider: &'static str,
     error: String,
@@ -90,6 +94,11 @@ enum Asked {
     /// It was not asked — switched off, or no id to ask by — or it knows
     /// nothing of the work, which is an answer too.
     Nothing,
+    /// It was asked by an id of its own, and answered that it has no such
+    /// work: TheTVDB, for a series it deleted. Nothing of the work either;
+    /// for one held under that id, what it said last time stands, and how
+    /// long it has said so is counted ([`Numbering`]).
+    Missing(&'static str),
     /// It was asked and said nothing: an error, a timeout, a rate limit, a
     /// queue that declined. Not a word about the work, so what it said last
     /// time stands.
@@ -111,7 +120,7 @@ impl Asked {
     fn answer(self) -> Option<Answer> {
         match self {
             Self::Answered(answer) => Some(*answer),
-            Self::Nothing | Self::Failed(_) => None,
+            Self::Nothing | Self::Missing(_) | Self::Failed(_) => None,
         }
     }
 }
@@ -121,6 +130,13 @@ impl Asked {
 struct Gathered {
     answers: Vec<Answer>,
     failed: Vec<Failure>,
+    /// Those that answered they have no such work.
+    missing: Vec<&'static str>,
+    /// The TheTVDB id TheTVDB was asked by, for a series.
+    asked_tvdb: Option<i64>,
+    /// Whether that is the id TheTVDB merged the series into, which the work
+    /// takes once TheTVDB answers for it.
+    merged: bool,
 }
 
 impl Gathered {
@@ -128,6 +144,7 @@ impl Gathered {
         match asked {
             Asked::Answered(answer) => self.answers.push(*answer),
             Asked::Nothing => {}
+            Asked::Missing(provider) => self.missing.push(provider),
             Asked::Failed(failure) => self.failed.push(failure),
         }
     }
@@ -147,6 +164,16 @@ pub async fn series(
     tmdb_id: Option<i64>,
     tvdb_id: Option<i64>,
 ) -> Result<Option<MediaItem>> {
+    // A series TheTVDB merged into another is asked about by the id TheTVDB
+    // kept: the work takes it, and answers to the one it had besides.
+    let (tvdb_id, merged) = match tvdb_id {
+        Some(id) => {
+            let (asked, merged) = numbering::asked_by(state, id).await;
+            (Some(asked), merged)
+        }
+        None => (None, false),
+    };
+
     // The fan-out on the heap: every provider's state machine at once, which
     // inline would sit in the future of whoever awaits this — a client's
     // handler, the sweep — on a thread with two megabytes of stack in a
@@ -177,8 +204,16 @@ pub async fn series(
         _ => (None, None),
     };
     let tvdb_answered = matches!(from_tvdb, Asked::Answered(_));
+    // TVmaze's episodes, which the merge holds out of the list: what follows
+    // the numbering TheTVDB last gave a series is read from them where
+    // nothing else lists any.
+    let tvmaze_episodes = tvmaze_episodes(&from_tvmaze);
 
-    let mut gathered = Gathered::default();
+    let mut gathered = Gathered {
+        asked_tvdb: tvdb_id,
+        merged,
+        ..Gathered::default()
+    };
     for asked in [from_tmdb, from_tvdb, from_skyhook, from_fanart, from_tvmaze] {
         gathered.add(asked);
     }
@@ -207,7 +242,8 @@ pub async fn series(
 
     let stored = store(state, gathered).await?;
     // The other orders TheTVDB numbers it in, and TMDB's groups, kept beside
-    // the aired one — not by a refresh that is only previewed.
+    // the aired one — not by a refresh that is only previewed — and what
+    // aired since TheTVDB last numbered a series it no longer knows.
     if let Some(item) = stored.as_ref().filter(|_| !super::is_previewing()) {
         orders::gather(
             state,
@@ -219,8 +255,19 @@ pub async fn series(
             },
         )
         .await;
+        numbering::follow(state, item, tvmaze_episodes.as_deref()).await;
     }
     Ok(stored)
+}
+
+/// The episodes TVmaze answered with, as it numbers them.
+fn tvmaze_episodes(asked: &Asked) -> Option<Vec<Episode>> {
+    match asked {
+        Asked::Answered(answer) if answer.provider == names::TVMAZE => {
+            Some(answer.item.episodes.clone())
+        }
+        _ => None,
+    }
 }
 
 /// Fetch a movie from everything that can address it, and store the result.
@@ -526,20 +573,54 @@ fn snapshots_of(answers: &mut [Answer]) -> Vec<(String, String)> {
 /// failed; and the adult flag stands when the source that says so failed.
 /// The work is then written as refreshed in part: the failure is recorded on
 /// it, and it is tried again sooner than its interval says.
+///
+/// TheTVDB answering that it has no series by the id a work is held under
+/// stands for it failing — what it gave before stands, its numbering
+/// included, and the work keeps that id — and is said so until its
+/// numbering is kept as TheTVDB last gave it (see [`Numbering`]): from then
+/// on it is the way of things, and no failure.
 async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>> {
     let Gathered {
         mut answers,
         failed,
+        missing: unknown,
+        asked_tvdb,
+        merged: rekeyed,
     } = gathered;
+    // The id TheTVDB merged the series into: the work takes it, whatever
+    // TMDB still says of the one it had — and keeps it while TheTVDB does
+    // not answer, for TMDB's word would hand it back the one it had.
+    let taken_tvdb = asked_tvdb.filter(|_| rekeyed);
 
-    if answers.is_empty() {
+    // The work held under the TheTVDB id TheTVDB has no series by, and that
+    // id: what TheTVDB gave it before stands, however few others answered.
+    let gone = match asked_tvdb {
+        Some(tvdb) if unknown.contains(&names::TVDB) => {
+            match repo::item::find_id_by_external(
+                &state.db,
+                ExternalSource::TvdbSeries,
+                &tvdb.to_string(),
+            )
+            .await
+            {
+                Ok(held) => held.map(|id| (id, tvdb)),
+                Err(e) => {
+                    tracing::warn!(tvdb_id = tvdb, error = %e, "could not look up the series TheTVDB has no record of");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
+    if answers.is_empty() && gone.is_none() {
         return Ok(None);
     }
 
     let providers: Vec<&str> = answers.iter().map(|a| a.provider).collect();
     tracing::debug!(?providers, "merging provider answers");
 
-    if !describes_a_work(&answers) {
+    if !describes_a_work(&answers) && gone.is_none() {
         tracing::warn!(
             ?providers,
             "only supplementary sources answered; not storing"
@@ -553,29 +634,90 @@ async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>
         .iter()
         .find(|a| a.provider == names::TMDB)
         .and_then(|a| tmdb_map::episode_groups(&a.payload));
+    // AniList's answer asked without its characters says nothing of them
+    // (`providers::anilist::asked_characters`): it is given those it gave
+    // before in their place, once the stored work is read.
+    let characters_unasked = answers.iter().any(|a| {
+        a.provider == names::ANILIST && !crate::providers::anilist::asked_characters(&a.payload)
+    });
     let snapshots = snapshots_of(&mut answers);
+
+    // Who numbers a series this time: TheTVDB, unless it has not answered
+    // for it long enough that TMDB does in its place, or it no longer knows
+    // the series.
+    let mut numbering = numbering_of(state, &answers, &failed, gone.as_ref(), rekeyed).await;
+
+    // TheTVDB having no such series stands for it failing: what it gave
+    // before is handed back.
+    let gone_failure = gone.as_ref().map(|(_, tvdb)| Failure {
+        provider: names::TVDB,
+        error: format!("TheTVDB has no series {tvdb} (404)"),
+    });
+    let handed: Vec<Failure> = failed.iter().cloned().chain(gone_failure.clone()).collect();
+
+    let unanswered = answers.iter().any(|a| !a.unanswered_seasons.is_empty());
+    let before = match unanswered || !handed.is_empty() || numbering.by_tmdb || characters_unasked {
+        false => None,
+        true => held_before(state, &answers, gone.as_ref()).await,
+    };
+
+    // The numbering of a series TheTVDB no longer knows is kept as it was
+    // served — the work as it stood, by which Sonarr's files are matched —
+    // before anything of this refresh is written, in one write with what
+    // says why, and said so at once. Not kept, the series is numbered as it
+    // was, and kept at the next refresh.
+    if numbering.change == Some(NumberingChange::Dropped) && !super::is_previewing() {
+        let kept = match &before {
+            Some((held, _)) => numbering::keep_last(state, held, &numbering.kept).await,
+            None => Err(anyhow::anyhow!("the work as held could not be read")),
+        };
+        match (kept, &before) {
+            (Ok(()), Some((held, _))) => {
+                let detail = numbering::dropped_detail(
+                    &held.title,
+                    numbering::TvdbDropped::Missing,
+                    gone.as_ref().map(|(_, tvdb)| *tvdb),
+                    None,
+                );
+                numbering::tell_dropped(state, &held.id, &held.title, &detail).await;
+            }
+            (Err(e), _) => {
+                tracing::warn!(
+                    id = numbering.work.as_deref().unwrap_or_default(),
+                    error = format_args!("{e:#}"),
+                    "could not keep the numbering of a series TheTVDB no longer knows; it is numbered as it was"
+                );
+                numbering.undrop();
+            }
+            (Ok(()), None) => {}
+        }
+    }
+
+    // Said while it is counted; once the numbering is kept as TheTVDB last
+    // gave it, it is the way of things.
+    let noted: Vec<Failure> = failed
+        .into_iter()
+        .chain(gone_failure.filter(|_| numbering.kept.dropped.is_none()))
+        .collect();
+    let failed = handed;
 
     // Everything that did not answer in full: what is kept from before, and
     // what the log says.
-    let missing = failure_note(&failed, &answers, |_| true);
+    let missing = failure_note(&noted, &answers, |_| true);
     // What the work is said to have failed by — its refresh error, and the
     // notification of it — counts the sources it is made from. A supplement
     // that did not answer leaves it refreshed, with what it gave before.
-    let failure = failure_note(&failed, &answers, |provider| {
+    let failure = failure_note(&noted, &answers, |provider| {
         !SUPPLEMENTS.contains(&provider)
     });
-    // Who numbers a series this time: TheTVDB, unless it has not answered
-    // for it long enough that TMDB does in its place.
-    let numbering = numbering_of(state, &answers, &failed).await;
-
-    let before = match (&missing, numbering.by_tmdb) {
-        (None, false) => None,
-        _ => held_before(state, &answers).await,
-    };
 
     if let Some((stored, _)) = &before {
         for answer in &mut answers {
             fill_unanswered_seasons(answer, stored);
+            if characters_unasked && answer.provider == names::ANILIST {
+                answer.item.characters =
+                    merge::provenance::characters_given(stored, names::ANILIST);
+            }
         }
     }
 
@@ -626,6 +768,12 @@ async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>
         };
         keep_tvdb_ids(&mut merged.episodes, held, stored_episodes);
     }
+    // The id TheTVDB has no series by is still the one Sonarr holds the
+    // series under, and the one it merged the series into is the work's
+    // from now on: whatever TMDB says of either.
+    if let Some(tvdb) = gone.as_ref().map(|(_, tvdb)| *tvdb).or(taken_tvdb) {
+        merged.external_ids.tvdb = Some(tvdb);
+    }
     let provenance = merge::provenance::attribute(&merged, &views);
 
     if let Some((stored, _)) = &before {
@@ -651,14 +799,13 @@ async fn store(state: &AppState, gathered: Gathered) -> Result<Option<MediaItem>
 
     // The seasons and the episodes this refresh moved, it moved by handing
     // the numbering over, when it did: the journal says so.
-    let renumbered = numbering.change.is_some();
     let stored = super::persist_as(
         state,
         merged,
         &snapshots,
         provenance,
         failure.as_deref(),
-        renumbered,
+        numbering.change,
     )
     .await?;
     if !super::is_previewing() {
@@ -679,7 +826,8 @@ pub const FALLBACK_AFTER: i64 = 3;
 /// every series it held to TMDB — and Sonarr would renumber its library.
 const SILENCE_APART: TimeDelta = TimeDelta::hours(20);
 
-/// Who numbers a series this refresh, TheTVDB's silence weighed.
+/// Who numbers a series this refresh, TheTVDB's silence weighed — and
+/// whether TheTVDB still knows it.
 ///
 /// TheTVDB numbers a series — Sonarr addresses it by TheTVDB's id and its
 /// numbers — and a refresh it does not answer keeps the numbering it gave
@@ -698,6 +846,17 @@ const SILENCE_APART: TimeDelta = TimeDelta::hours(20);
 /// work's orders as the aired numbering meanwhile: what they froze was
 /// TMDB's, and stays so until they give the numbering back by hand
 /// (`POST /items/{id}/numbering/restore`).
+///
+/// TheTVDB answering that it has no such series is counted apart, the same
+/// twenty hours apart: it keeps the numbering TheTVDB gave last, as a
+/// silence does, and at the second — or when TheTVDB's feed of updates says
+/// it deleted the series (`service::numbering::watch`) — the numbering as it
+/// is served then is kept and frozen as the aired numbering, the episodes
+/// that air afterwards placed after it; TMDB numbers the work meanwhile, as
+/// above, where it answers with a list. The same trail and notifications say
+/// so. It lasts until TheTVDB answers for the series again; for a series
+/// TheTVDB merged into another, until the numbering is given back by hand.
+/// `numbering.fallbackAfter` at `0` keeps it from happening at all.
 #[derive(Debug, Default)]
 struct Numbering {
     /// The work as held, by id: nothing is counted for one not held yet.
@@ -711,16 +870,162 @@ struct Numbering {
     change: Option<NumberingChange>,
 }
 
+impl Numbering {
+    /// The numbering of a series TheTVDB no longer knows not kept after
+    /// all: it is numbered as it was before this refresh — TMDB going on
+    /// numbering it only where it did in TheTVDB's silence — and the 404s
+    /// stay counted, so that the next refresh keeps it.
+    fn undrop(&mut self) {
+        self.kept = repo::order::Numbering {
+            gone: self.kept.gone,
+            gone_at: self.kept.gone_at.clone(),
+            ..self.held.clone()
+        };
+        self.by_tmdb = self.by_tmdb && self.held.since.is_some();
+        self.change = None;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NumberingChange {
+pub(crate) enum NumberingChange {
     /// TMDB took over from TheTVDB.
     ToTmdb,
     /// TheTVDB took its numbering back.
     BackToTvdb,
+    /// TheTVDB answered at refresh after refresh that it has no such series:
+    /// its numbering is kept as it was served.
+    Dropped,
+    /// TheTVDB knows the series again, and numbers it.
+    Known,
+}
+
+/// What TheTVDB did on one refresh of a series.
+#[derive(Clone, Copy, Debug, Default)]
+struct Seen {
+    /// TheTVDB's numbering came: TheTVDB, or Skyhook which hands it on,
+    /// gave a list.
+    listed: bool,
+    /// TheTVDB itself answered with the series.
+    known: bool,
+    /// TheTVDB answered that it has no such series.
+    gone: bool,
+    /// TheTVDB was asked and failed, and nobody gave its numbering.
+    silent: bool,
+    /// TMDB answered with a list.
+    tmdb_listed: bool,
+    /// An order somebody froze as the aired numbering: read only where it
+    /// can matter, while TMDB numbers the series and TheTVDB lists it.
+    frozen_by_hand: bool,
+    /// TheTVDB was asked by the id it merged the series into, which the
+    /// work takes: TheTVDB numbers it under that one, and its silence is a
+    /// silence.
+    rekeyed: bool,
+}
+
+/// Weigh what TheTVDB did on this refresh against what is kept of the
+/// work's numbering (`held`), as of `now`, the fallback set to `after`:
+/// what is kept after it, whether TMDB numbers the work this time, and what
+/// changed.
+fn weigh(
+    held: &repo::order::Numbering,
+    seen: Seen,
+    now: chrono::DateTime<Utc>,
+    after: i64,
+) -> (repo::order::Numbering, bool, Option<NumberingChange>) {
+    use crate::domain::orders::TvdbDropped;
+
+    let at = crate::db::to_rfc3339(now);
+    let apart = |last: Option<&str>| {
+        last.and_then(crate::db::parse_rfc3339)
+            .is_none_or(|last| now - last >= SILENCE_APART)
+    };
+    let mut kept = held.clone();
+    let mut change = None;
+
+    // Whether TheTVDB knows the series.
+    if seen.known {
+        kept.gone = 0;
+        kept.gone_at = None;
+        // TheTVDB numbering the series again: a list, not its record alone.
+        // A series TheTVDB merged into another is answered for under the id
+        // it kept: Sonarr's files are matched by the one it had, whose
+        // numbering is given back by hand.
+        if seen.listed && kept.dropped.is_some() && kept.dropped_why != Some(TvdbDropped::Merged) {
+            kept.dropped = None;
+            kept.dropped_why = None;
+            kept.merged_into = None;
+            change = Some(NumberingChange::Known);
+        }
+    }
+    if seen.gone {
+        if apart(kept.gone_at.as_deref()) {
+            kept.gone = kept.gone.saturating_add(1);
+            kept.gone_at = Some(at.clone());
+        }
+        if kept.dropped.is_none() && after > 0 && kept.gone >= numbering::DROP_AFTER {
+            kept = kept.without_silence();
+            kept.dropped = Some(at.clone());
+            kept.dropped_why = Some(TvdbDropped::Missing);
+            change = Some(NumberingChange::Dropped);
+        }
+    }
+    // TMDB numbers a series TheTVDB no longer knows while nobody numbers it
+    // as TheTVDB does; what the aired order answers with is kept apart. One
+    // TheTVDB merged into another it numbers under that one, the series'
+    // own: TheTVDB failing for it there is weighed as any silence, below.
+    let numbered_under_the_merge = seen.rekeyed && kept.dropped_why == Some(TvdbDropped::Merged);
+    if kept.dropped.is_some() && !numbered_under_the_merge {
+        let by_tmdb = seen.tmdb_listed && !seen.listed;
+        return (kept, by_tmdb, change);
+    }
+
+    // Whether TheTVDB answers for it at all.
+    if seen.listed {
+        if held.since.is_some() && seen.tmdb_listed && seen.frozen_by_hand {
+            // Somebody froze the numbering TMDB gave: it stays TMDB's until
+            // they give it back.
+            let kept = repo::order::Numbering {
+                silent: 0,
+                silent_at: None,
+                ..kept
+            };
+            return (kept, true, change);
+        }
+        let back = held.since.is_some();
+        return (
+            kept.without_silence(),
+            false,
+            change.or(back.then_some(NumberingChange::BackToTvdb)),
+        );
+    }
+    if seen.silent && apart(kept.silent_at.as_deref()) {
+        kept.silent = kept.silent.saturating_add(1);
+        kept.silent_at = Some(at.clone());
+    }
+    if !(seen.silent || seen.gone) {
+        return (kept, false, change);
+    }
+    if kept.since.is_some() {
+        return (kept, seen.tmdb_listed, change);
+    }
+    if seen.silent && after > 0 && i64::from(kept.silent) >= after && seen.tmdb_listed {
+        kept.since = Some(at);
+        return (kept, true, Some(NumberingChange::ToTmdb));
+    }
+    (kept, false, change)
 }
 
 /// Weigh what TheTVDB did on this refresh against what it did on the last.
-async fn numbering_of(state: &AppState, answers: &[Answer], failed: &[Failure]) -> Numbering {
+/// `gone` is the work held under the TheTVDB id TheTVDB answered it has no
+/// series by, and that id; `rekeyed`, whether TheTVDB was asked by the id
+/// it merged the series into.
+async fn numbering_of(
+    state: &AppState,
+    answers: &[Answer],
+    failed: &[Failure],
+    gone: Option<&(String, i64)>,
+    rekeyed: bool,
+) -> Numbering {
     let listed = |provider: &str| {
         answers
             .iter()
@@ -730,15 +1035,21 @@ async fn numbering_of(state: &AppState, answers: &[Answer], failed: &[Failure]) 
     // on, gave a list; it was silent when TheTVDB was asked and failed, and
     // nobody gave it.
     let tvdb_listed = merge::TVDB_NUMBERED.iter().any(|p| listed(p));
+    let tvdb_known = answers.iter().any(|a| a.provider == names::TVDB);
     let tvdb_silent = !tvdb_listed && failed.iter().any(|f| f.provider == names::TVDB);
-    let is_series = answers
-        .iter()
-        .find(|a| !SUPPLEMENTS.contains(&a.provider))
-        .is_some_and(|a| a.item.kind == MediaKind::Series);
-    if !is_series || !(tvdb_listed || tvdb_silent) {
+    let is_series = gone.is_some()
+        || answers
+            .iter()
+            .find(|a| !SUPPLEMENTS.contains(&a.provider))
+            .is_some_and(|a| a.item.kind == MediaKind::Series);
+    if !is_series || !(tvdb_listed || tvdb_silent || tvdb_known || gone.is_some()) {
         return Numbering::default();
     }
-    let Some(work) = held_id(state, answers).await else {
+    let work = match gone {
+        Some((work, _)) => Some(work.clone()),
+        None => held_id(state, answers).await,
+    };
+    let Some(work) = work else {
         return Numbering::default();
     };
     let held = match repo::order::numbering(&state.db, &work).await {
@@ -749,82 +1060,43 @@ async fn numbering_of(state: &AppState, answers: &[Answer], failed: &[Failure]) 
         }
     };
     let tmdb_listed = listed(names::TMDB);
-
-    if tvdb_listed {
-        if held.since.is_some() && tmdb_listed && frozen(state, &work).await {
-            // Somebody froze the numbering TMDB gave: it stays TMDB's until
-            // they give it back.
-            return Numbering {
-                work: Some(work),
-                by_tmdb: true,
-                kept: repo::order::Numbering {
-                    since: held.since.clone(),
-                    ..Default::default()
-                },
-                held,
-                change: None,
-            };
-        }
-        let change = held.since.is_some().then_some(NumberingChange::BackToTvdb);
-        return Numbering {
-            work: Some(work),
-            by_tmdb: false,
-            kept: repo::order::Numbering::default(),
-            held,
-            change,
-        };
-    }
-
-    let now = Utc::now();
-    let mut kept = held.clone();
-    let apart = kept
-        .silent_at
-        .as_deref()
-        .and_then(crate::db::parse_rfc3339)
-        .is_none_or(|last| now - last >= SILENCE_APART);
-    if apart {
-        kept.silent = kept.silent.saturating_add(1);
-        kept.silent_at = Some(crate::db::to_rfc3339(now));
-    }
-    if kept.since.is_some() {
-        return Numbering {
-            work: Some(work),
-            by_tmdb: tmdb_listed,
-            kept,
-            held,
-            change: None,
-        };
-    }
+    let frozen_by_hand = held.dropped.is_none()
+        && held.since.is_some()
+        && tvdb_listed
+        && tmdb_listed
+        && frozen_by_hand(state, &work).await;
     let after = state
         .settings
         .int_at("numbering.fallbackAfter", None, None)
         .unwrap_or(FALLBACK_AFTER);
-    if after > 0 && i64::from(kept.silent) >= after && tmdb_listed {
-        kept.since = Some(crate::db::to_rfc3339(now));
-        return Numbering {
-            work: Some(work),
-            by_tmdb: true,
-            kept,
-            held,
-            change: Some(NumberingChange::ToTmdb),
-        };
-    }
+
+    let seen = Seen {
+        listed: tvdb_listed,
+        known: tvdb_known,
+        gone: gone.is_some(),
+        silent: tvdb_silent,
+        tmdb_listed,
+        frozen_by_hand,
+        rekeyed,
+    };
+    let (kept, by_tmdb, change) = weigh(&held, seen, Utc::now(), after);
     Numbering {
         work: Some(work),
-        by_tmdb: false,
-        kept,
+        by_tmdb,
         held,
-        change: None,
+        kept,
+        change,
     }
 }
 
-/// Whether one of a work's orders is frozen as its aired numbering.
-async fn frozen(state: &AppState, work: &str) -> bool {
+/// Whether one of a work's orders is frozen as its aired numbering by
+/// somebody: the numbering TheTVDB last gave, frozen of itself, is not one.
+async fn frozen_by_hand(state: &AppState, work: &str) -> bool {
     repo::order::frozen(&state.db, work)
         .await
         .ok()
         .flatten()
-        .is_some()
+        .is_some_and(|key| key != numbering::TVDB_LAST)
 }
 
 /// TMDB's episodes numbered by its group of the original air date, when it
@@ -998,17 +1270,38 @@ fn keep_tvdb_ids(episodes: &mut [Episode], tvdb_list: &[Episode], stored: &[Epis
 }
 
 /// Keep what this refresh made of the series' numbering, and tell what
-/// changed.
+/// changed. The numbering of a series TheTVDB no longer knows was kept, and
+/// said so, before the work was written (`store`).
 async fn keep_numbering(state: &AppState, stored: &MediaItem, numbering: &Numbering) {
     if numbering.work.is_none() {
         return;
     }
     // Written only when it moved: a series TheTVDB answers for, as most are,
-    // costs its refresh no write here.
+    // costs its refresh no write here. Kept already for one dropped now.
     if numbering.kept != numbering.held
+        && numbering.change != Some(NumberingChange::Dropped)
         && let Err(e) = repo::order::set_numbering(&state.db, &stored.id, &numbering.kept).await
     {
         tracing::warn!(id = %stored.id, error = %e, "could not keep who numbers the series");
+    }
+    match numbering.change {
+        Some(NumberingChange::Known) => {
+            numbering::forget_last(state, &stored.id).await;
+            let detail = format!(
+                "“{}”: TheTVDB knows the series again and numbers it",
+                stored.title
+            );
+            tracing::info!(id = %stored.id, title = %stored.title, "{detail}");
+            crate::api::audit::record_system(
+                state,
+                Action::ItemNumberingRestored,
+                &stored.id,
+                &detail,
+            )
+            .await;
+        }
+        Some(NumberingChange::Dropped | NumberingChange::ToTmdb | NumberingChange::BackToTvdb)
+        | None => {}
     }
     match numbering.change {
         Some(NumberingChange::ToTmdb) => {
@@ -1046,7 +1339,7 @@ async fn keep_numbering(state: &AppState, stored: &MediaItem, numbering: &Number
             )
             .await;
         }
-        None => {}
+        Some(NumberingChange::Dropped | NumberingChange::Known) | None => {}
     }
 }
 
@@ -1128,9 +1421,18 @@ async fn held_id(state: &AppState, answers: &[Answer]) -> Option<String> {
 /// The work these answers describe, as stored, and who gave it what: what
 /// stands for a provider that did not answer. `None` for a work not held
 /// yet, or one that cannot be read — logged, and the refresh goes on with
-/// what answered.
-async fn held_before(state: &AppState, answers: &[Answer]) -> Option<(MediaItem, Provenance)> {
-    let id = held_id(state, answers).await?;
+/// what answered. `gone` names it when TheTVDB has no series by the id it
+/// is held under: then the supplements alone may have answered, which name
+/// no work of themselves.
+async fn held_before(
+    state: &AppState,
+    answers: &[Answer],
+    gone: Option<&(String, i64)>,
+) -> Option<(MediaItem, Provenance)> {
+    let id = match gone {
+        Some((id, _)) => id.clone(),
+        None => held_id(state, answers).await?,
+    };
 
     let read = async {
         let Some(mut stored) = repo::item::get(&state.db, &id).await? else {
@@ -1496,9 +1798,15 @@ pub async fn resync(
 ) -> Result<ResyncOutcome> {
     let mut answers = ask_again(state, stored, asking).await;
     // A season asked again that went unanswered keeps what is stored of it,
-    // as a refresh keeps it.
+    // as a refresh keeps it; and AniList asked without its characters, those
+    // it gave before.
     for answer in &mut answers {
         fill_unanswered_seasons(answer, stored);
+        if answer.provider == names::ANILIST
+            && !crate::providers::anilist::asked_characters(&answer.payload)
+        {
+            answer.item.characters = merge::provenance::characters_given(stored, names::ANILIST);
+        }
     }
     let answered: Vec<&'static str> = answers.iter().map(|a| a.provider).collect();
     let silent: Vec<&'static str> = asking
@@ -1512,10 +1820,14 @@ pub async fn resync(
     }
 
     // The episode groups TMDB lists, and its own seasons, when it was asked
-    // again.
+    // again; and TVmaze's episodes, when it was.
     let tmdb = answers.iter().find(|a| a.provider == names::TMDB);
     let tmdb_groups = tmdb.and_then(|a| tmdb_map::episode_groups(&a.payload));
     let tmdb_aired = tmdb.map(|a| orders::TmdbAired::of(&a.item.episodes, &a.unanswered_seasons));
+    let tvmaze_episodes: Option<Vec<Episode>> = answers
+        .iter()
+        .find(|a| a.provider == names::TVMAZE)
+        .map(|a| a.item.episodes.clone());
 
     let snapshots = snapshots_of(&mut answers);
 
@@ -1592,6 +1904,12 @@ pub async fn resync(
             },
         )
         .await;
+        numbering::follow(state, &item, tvmaze_episodes.as_deref()).await;
+    }
+    // A film's collection with it, when the one kept is due, as a refresh
+    // keeps it (`collection::keep_for` never asks while only previewed).
+    if item.kind == MediaKind::Movie {
+        super::collection::keep_for(state, &item).await;
     }
 
     Ok(ResyncOutcome::Synced(Box::new(Resynced {
@@ -1813,7 +2131,8 @@ async fn series_from_tvdb(state: &AppState, tvdb_id: Option<i64>) -> Asked {
     let cast = crate::providers::tvdb::cast_limit(&state.settings);
     match state.tvdb.series(tvdb_id, cast).await {
         Ok(Some((raw, item))) => Asked::answered(Answer::new(names::TVDB, raw, item)),
-        Ok(None) => Asked::Nothing,
+        // It answered 404: it has no such series.
+        Ok(None) => Asked::Missing(names::TVDB),
         Err(e) => {
             tracing::warn!(
                 tvdb_id,
@@ -2998,5 +3317,897 @@ mod tests {
                 (2, 1, Some(62087), Some(13)),
             ]
         );
+    }
+
+    // ─── a series TheTVDB no longer knows ───────────────────────────────────
+
+    /// A series both sources number, dated, under ids of its own: TheTVDB
+    /// three episodes in its first season, TMDB the third in a second season
+    /// of its own.
+    struct Show {
+        tvdb: i64,
+        tmdb: i64,
+        title: &'static str,
+    }
+
+    /// What TheTVDB answers for a [`Show`].
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Tvdb {
+        /// The series.
+        Up,
+        /// 404: it has no such series.
+        Gone,
+    }
+
+    impl Show {
+        /// The routes that answer for it: TheTVDB as `tvdb` says, TMDB with
+        /// the episodes `since` after its three.
+        fn answer(&self, routes: &Routes, tvdb: Tvdb, since: &[(i32, i32, &str, &str)]) {
+            let mut routes = routes.lock();
+            routes.insert("/login".into(), (200, json!({ "data": { "token": "t" } })));
+            let document = format!("/series/{}/extended", self.tvdb);
+            match tvdb {
+                Tvdb::Up => {
+                    routes.insert(
+                        document,
+                        (
+                            200,
+                            json!({ "data": {
+                                "id": self.tvdb, "name": self.title, "status": { "name": "Continuing" },
+                                "seasons": [{ "id": 1, "number": 1, "type": { "type": "official" } }],
+                                "remoteIds": [{ "id": self.tmdb.to_string(), "sourceName": "TheMovieDB.com" }]
+                            } }),
+                        ),
+                    );
+                }
+                Tvdb::Gone => {
+                    routes.remove(&document);
+                }
+            }
+            let tvdb_id = |n: i64| self.tvdb * 10 + n;
+            routes.insert(
+                format!("/series/{}/episodes/official/eng", self.tvdb),
+                (
+                    200,
+                    json!({ "data": { "episodes": [
+                        { "id": tvdb_id(1), "seasonNumber": 1, "number": 1, "name": "Pilot", "aired": "2008-01-20" },
+                        { "id": tvdb_id(2), "seasonNumber": 1, "number": 2, "name": "Second", "aired": "2008-01-27" },
+                        { "id": tvdb_id(3), "seasonNumber": 1, "number": 3, "name": "Third", "aired": "2008-02-10" }
+                    ] }, "links": { "next": null } }),
+                ),
+            );
+            let mut listed: Vec<i32> = vec![1, 2];
+            listed.extend(since.iter().map(|(season, ..)| *season));
+            listed.sort_unstable();
+            listed.dedup();
+            let seasons_listed: Vec<Value> = listed
+                .iter()
+                .map(|season| json!({ "season_number": season }))
+                .collect();
+            routes.insert(
+                format!("/3/tv/{}", self.tmdb),
+                (
+                    200,
+                    json!({ "id": self.tmdb, "name": self.title, "status": "Returning Series",
+                            "external_ids": { "tvdb_id": self.tvdb },
+                            "seasons": seasons_listed,
+                            "episode_groups": { "results": [] } }),
+                ),
+            );
+            let episode = |season: i32, number: i32, name: &str, aired: &str| {
+                let mut episode = tmdb_episode(season, number, name);
+                episode["id"] = json!(self.tmdb * 10 + i64::from(season * 100 + number));
+                episode["air_date"] = json!(aired);
+                episode
+            };
+            let mut seasons: std::collections::BTreeMap<i32, Vec<Value>> = Default::default();
+            seasons.entry(1).or_default().extend([
+                episode(1, 1, "Pilot", "2008-01-20"),
+                episode(1, 2, "Second", "2008-01-27"),
+            ]);
+            seasons
+                .entry(2)
+                .or_default()
+                .push(episode(2, 1, "Third", "2008-02-10"));
+            for (season, number, name, aired) in since {
+                seasons
+                    .entry(*season)
+                    .or_default()
+                    .push(episode(*season, *number, name, aired));
+            }
+            for (season, episodes) in seasons {
+                routes.insert(
+                    format!("/3/tv/{}/season/{season}", self.tmdb),
+                    (
+                        200,
+                        json!({ "season_number": season, "episodes": episodes }),
+                    ),
+                );
+            }
+        }
+
+        async fn refreshed(&self, state: &AppState) -> MediaItem {
+            series(state, Some(self.tmdb), Some(self.tvdb))
+                .await
+                .expect("stored")
+                .expect("a work")
+        }
+    }
+
+    /// The last 404 TheTVDB answered counted as a day ago: the next counts.
+    async fn gone_a_day_ago(state: &AppState, work: &MediaItem) {
+        let mut held = repo::order::numbering(&state.db, &work.id)
+            .await
+            .expect("read");
+        held.gone_at = Some(crate::db::to_rfc3339(Utc::now() - TimeDelta::hours(21)));
+        repo::order::set_numbering(&state.db, &work.id, &held)
+            .await
+            .expect("kept");
+    }
+
+    /// What the aired order answers with: the order frozen as it, served,
+    /// or the work's own episodes; by numbers and title.
+    async fn served_as_aired(state: &AppState, work: &MediaItem) -> Vec<(i32, i32, String)> {
+        let all = repo::order::list(&state.db, &work.id).await.expect("read");
+        match orders::as_official(work, &all) {
+            Some(placed) => placed
+                .into_iter()
+                .map(|p| (p.season_number, p.episode_number, p.episode.title.clone()))
+                .collect(),
+            None => work
+                .episodes
+                .iter()
+                .map(|e| (e.season_number, e.episode_number, e.title.clone()))
+                .collect(),
+        }
+    }
+
+    /// The defect wave P found: TheTVDB answering 404 was neither an answer
+    /// nor a failure, and with Skyhook silent too the merge took TMDB's list
+    /// as the numbering — TMDB's second season under a TheTVDB id, without a
+    /// word. Now it stands for a failure: TheTVDB's numbering stands, the
+    /// work keeps its TheTVDB id, and the refresh says why it is in part.
+    #[tokio::test]
+    async fn a_series_thetvdb_has_no_record_of_keeps_thetvdbs_numbering() {
+        let (at, routes) = providers().await;
+        let state = server(&at).await;
+        let show = Show {
+            tvdb: 770_001,
+            tmdb: 770_101,
+            title: "Gone Once P4",
+        };
+        show.answer(&routes, Tvdb::Up, &[]);
+        let first = show.refreshed(&state).await;
+        assert_eq!(numbers(&first), [(1, 1), (1, 2), (1, 3)], "TheTVDB's list");
+
+        show.answer(&routes, Tvdb::Gone, &[]);
+        let again = show.refreshed(&state).await;
+        assert_eq!(again.id, first.id);
+        // TMDB numbers it otherwise, which is what it was served as before.
+        let all = repo::order::list(&state.db, &again.id).await.unwrap();
+        let tmdbs: Vec<(i32, i32)> = orders::named(&all, orders::TMDB_AIRED)
+            .expect("TMDB's own numbering")
+            .episodes
+            .iter()
+            .map(|p| (p.season_number, p.episode_number))
+            .collect();
+        assert_eq!(tmdbs, [(1, 1), (1, 2), (2, 1)]);
+        assert_eq!(
+            numbers(&again),
+            [(1, 1), (1, 2), (1, 3)],
+            "TheTVDB's numbering, not TMDB's"
+        );
+        assert_eq!(again.external_ids.tvdb, Some(770_001));
+        let error = again.refresh_error.as_deref().expect("said");
+        assert!(error.contains("TheTVDB has no series 770001"), "{error}");
+        assert!(retried_soon(&again), "{:?}", again.refresh_after);
+        let provenance = repo::item::provenance(&state.db, &again.id)
+            .await
+            .unwrap()
+            .expect("recorded");
+        assert_eq!(provenance.episodes.as_deref(), Some("tvdb"));
+        let held = repo::order::numbering(&state.db, &again.id).await.unwrap();
+        assert_eq!((held.gone, held.dropped.as_deref()), (1, None));
+        assert!(orders::named(&all, orders::TVDB_LAST).is_none());
+
+        // Asked again within the hour: the same 404, counted once.
+        show.refreshed(&state).await;
+        let held = repo::order::numbering(&state.db, &again.id).await.unwrap();
+        assert_eq!((held.gone, held.dropped.as_deref()), (1, None));
+    }
+
+    /// TheTVDB answering 404 at two refreshes a day apart: the numbering the
+    /// series was served by is kept and frozen as the aired numbering, TMDB
+    /// numbers the work meanwhile, and an episode aired since goes on after
+    /// TheTVDB's last — in its season, since TMDB's second season holds it.
+    /// The trail says so. TheTVDB knowing the series again takes it back.
+    #[tokio::test]
+    async fn a_series_thetvdb_no_longer_knows_keeps_its_numbering_and_what_airs_follows() {
+        let (at, routes) = providers().await;
+        let state = server(&at).await;
+        let show = Show {
+            tvdb: 770_002,
+            tmdb: 770_102,
+            title: "Dropped Twice P4",
+        };
+        show.answer(&routes, Tvdb::Up, &[]);
+        let first = show.refreshed(&state).await;
+        let theirs = vec![
+            (1, 1, "Pilot".to_string()),
+            (1, 2, "Second".to_string()),
+            (1, 3, "Third".to_string()),
+        ];
+        assert_eq!(served_as_aired(&state, &first).await, theirs);
+
+        show.answer(&routes, Tvdb::Gone, &[]);
+        show.refreshed(&state).await;
+        gone_a_day_ago(&state, &first).await;
+        let dropped = show.refreshed(&state).await;
+        assert_eq!(dropped.id, first.id);
+        assert_eq!(dropped.external_ids.tvdb, Some(770_002));
+        assert_eq!(numbers(&dropped), [(1, 1), (1, 2), (2, 1)], "TMDB's");
+        assert_eq!(dropped.refresh_error, None, "the way of things now");
+        let held = repo::order::numbering(&state.db, &first.id).await.unwrap();
+        assert_eq!(held.gone, 2);
+        assert!(held.dropped.is_some());
+        assert_eq!(
+            held.dropped_why,
+            Some(crate::domain::orders::TvdbDropped::Missing)
+        );
+        let all = repo::order::list(&state.db, &first.id).await.unwrap();
+        let kept = orders::named(&all, orders::TVDB_LAST).expect("kept");
+        assert!(kept.is_frozen);
+        assert_eq!(
+            served_as_aired(&state, &dropped).await,
+            theirs,
+            "served as TheTVDB numbered it"
+        );
+        assert!(
+            trail(&state)
+                .await
+                .iter()
+                .any(|a| a == "item.numbering_fallback")
+        );
+
+        // An episode aired since, in TMDB's second season.
+        show.answer(&routes, Tvdb::Gone, &[(2, 2, "Fourth", "2008-03-02")]);
+        let since = show.refreshed(&state).await;
+        assert_eq!(
+            numbers(&since),
+            [(1, 1), (1, 2), (2, 1), (2, 2)],
+            "TMDB's own"
+        );
+        let mut more = theirs.clone();
+        more.push((1, 4, "Fourth".to_string()));
+        assert_eq!(served_as_aired(&state, &since).await, more);
+        // Placed once, it stays at the next refresh.
+        let again = show.refreshed(&state).await;
+        assert_eq!(served_as_aired(&state, &again).await, more);
+
+        // TheTVDB knows the series again: its numbering back, nothing kept.
+        show.answer(&routes, Tvdb::Up, &[(2, 2, "Fourth", "2008-03-02")]);
+        let back = show.refreshed(&state).await;
+        assert_eq!(numbers(&back), [(1, 1), (1, 2), (1, 3)]);
+        assert_eq!(
+            repo::order::numbering(&state.db, &first.id).await.unwrap(),
+            repo::order::Numbering::default()
+        );
+        let all = repo::order::list(&state.db, &first.id).await.unwrap();
+        assert!(orders::named(&all, orders::TVDB_LAST).is_none());
+        assert_eq!(orders::aired(&all).unwrap().source, "tvdb");
+        assert!(
+            trail(&state)
+                .await
+                .iter()
+                .any(|a| a == "item.numbering_restored")
+        );
+    }
+
+    /// `numbering.fallbackAfter` at 0: TheTVDB's numbering stands however
+    /// often TheTVDB answers 404, and is never frozen.
+    #[tokio::test]
+    async fn no_fallback_keeps_thetvdbs_numbering_and_freezes_nothing() {
+        let (at, routes) = providers().await;
+        let state = server(&at).await;
+        state
+            .settings
+            .set(
+                crate::settings::registry::Scope::Server,
+                "",
+                "numbering.fallbackAfter",
+                "0",
+                None,
+            )
+            .await
+            .expect("set");
+        let show = Show {
+            tvdb: 770_003,
+            tmdb: 770_103,
+            title: "Never Dropped P4",
+        };
+        show.answer(&routes, Tvdb::Up, &[]);
+        let first = show.refreshed(&state).await;
+        show.answer(&routes, Tvdb::Gone, &[]);
+        for _ in 0..3 {
+            gone_a_day_ago(&state, &first).await;
+            let gone = show.refreshed(&state).await;
+            assert_eq!(numbers(&gone), [(1, 1), (1, 2), (1, 3)]);
+        }
+        let held = repo::order::numbering(&state.db, &first.id).await.unwrap();
+        assert_eq!((held.gone, held.dropped.as_deref()), (3, None));
+        let all = repo::order::list(&state.db, &first.id).await.unwrap();
+        assert!(orders::named(&all, orders::TVDB_LAST).is_none());
+    }
+
+    /// TheTVDB's feed says it merged the series into another: the numbering
+    /// is kept as it was served, the work is read under the id TheTVDB kept
+    /// at once, takes it, and answers to the one Sonarr holds it by; TheTVDB
+    /// answering for it under the new id does not give the numbering back.
+    #[tokio::test]
+    async fn a_series_thetvdb_merged_into_another_is_served_under_both_ids() {
+        let (at, routes) = providers().await;
+        let state = server(&at).await;
+        let show = Show {
+            tvdb: 770_004,
+            tmdb: 770_104,
+            title: "Merged Away P4",
+        };
+        show.answer(&routes, Tvdb::Up, &[]);
+        let first = show.refreshed(&state).await;
+        let theirs = served_as_aired(&state, &first).await;
+
+        // TheTVDB merges it into 770005, which numbers it in two seasons.
+        show.answer(&routes, Tvdb::Gone, &[]);
+        {
+            let mut routes = routes.lock();
+            routes.insert(
+                "/updates".into(),
+                (
+                    200,
+                    json!({ "data": [
+                        { "entityType": "series", "methodInt": 3, "method": "delete",
+                          "recordId": 770_004, "timeStamp": Utc::now().timestamp(),
+                          "mergeToId": 770_005, "mergeToEntityType": "series" }
+                    ], "links": { "next": null } }),
+                ),
+            );
+            routes.insert(
+                "/series/770005/extended".into(),
+                (
+                    200,
+                    json!({ "data": {
+                        "id": 770_005, "name": "Merged Away P4", "status": { "name": "Continuing" },
+                        "seasons": [{ "id": 1, "number": 1, "type": { "type": "official" } },
+                                    { "id": 2, "number": 2, "type": { "type": "official" } }],
+                        "remoteIds": [{ "id": "770104", "sourceName": "TheMovieDB.com" }]
+                    } }),
+                ),
+            );
+            routes.insert(
+                "/series/770005/episodes/official/eng".into(),
+                (
+                    200,
+                    json!({ "data": { "episodes": [
+                        { "id": 7_700_051, "seasonNumber": 1, "number": 1, "name": "Pilot", "aired": "2008-01-20" },
+                        { "id": 7_700_052, "seasonNumber": 1, "number": 2, "name": "Second", "aired": "2008-01-27" },
+                        { "id": 7_700_053, "seasonNumber": 2, "number": 1, "name": "Third", "aired": "2008-02-10" },
+                        { "id": 7_700_054, "seasonNumber": 2, "number": 2, "name": "Fourth", "aired": "2008-03-02" }
+                    ] }, "links": { "next": null } }),
+                ),
+            );
+        }
+
+        let said = numbering::watch(&state).await.expect("read");
+        assert!(said.contains("Merged Away P4"), "{said}");
+        assert!(said.contains("merged into 770005"), "{said}");
+
+        let work = repo::item::get(&state.db, &first.id)
+            .await
+            .unwrap()
+            .expect("held");
+        assert_eq!(work.external_ids.tvdb, Some(770_005), "the id TheTVDB kept");
+        let mut held_work = work.clone();
+        repo::item::load_children(&state.db, &mut held_work)
+            .await
+            .unwrap();
+        assert_eq!(
+            numbers(&held_work),
+            [(1, 1), (1, 2), (2, 1), (2, 2)],
+            "TheTVDB's numbering under 770005"
+        );
+        // Served as it was, and the episode aired since after it.
+        let mut more = theirs.clone();
+        more.push((1, 4, "Fourth".to_string()));
+        assert_eq!(served_as_aired(&state, &held_work).await, more);
+
+        // Both ids answer with it.
+        let by_old = crate::service::series::by_tvdb_id(&state, 770_004)
+            .await
+            .unwrap()
+            .expect("answered");
+        assert_eq!(by_old.id, first.id);
+        let by_new = crate::service::series::by_tvdb_id(&state, 770_005)
+            .await
+            .unwrap()
+            .expect("answered");
+        assert_eq!(by_new.id, first.id);
+
+        // TheTVDB answers for it under 770005: the numbering stays kept, and
+        // the work keeps 770005 though TMDB still says 770004.
+        let again = series(&state, Some(770_104), Some(770_005))
+            .await
+            .unwrap()
+            .expect("a work");
+        assert_eq!(again.external_ids.tvdb, Some(770_005));
+        assert_eq!(served_as_aired(&state, &again).await, more);
+        let held = repo::order::numbering(&state.db, &first.id).await.unwrap();
+        assert_eq!(held.merged_into, Some(770_005));
+        assert!(held.dropped.is_some());
+
+        // TheTVDB failing for it under 770005: it keeps 770005 all the same,
+        // TMDB's 770004 notwithstanding.
+        routes.lock().insert(
+            "/series/770005/extended".into(),
+            (500, json!({ "status": "failure" })),
+        );
+        let silent = series(&state, Some(770_104), Some(770_005))
+            .await
+            .unwrap()
+            .expect("a work");
+        assert_eq!(silent.id, first.id);
+        assert_eq!(silent.external_ids.tvdb, Some(770_005));
+        assert_eq!(served_as_aired(&state, &silent).await, more);
+
+        // Read again: kept once, and said so — the id deleted being one the
+        // work only answers to now.
+        let said = numbering::watch(&state).await.expect("read");
+        assert!(said.contains("1 held here numbered so already"), "{said}");
+        assert!(!said.contains("none held here"), "{said}");
+    }
+
+    /// TheTVDB's feed merges a series nothing else names — no TMDB id — into
+    /// another: it stays one work, which takes the id TheTVDB kept and
+    /// answers to the one it had, rather than a second work under the new
+    /// one, which the TheTVDB ids alone could not tell for the same.
+    #[tokio::test]
+    async fn a_series_without_a_tmdb_id_thetvdb_merged_into_another_stays_one_work() {
+        let (at, routes) = providers().await;
+        let state = server(&at).await;
+        let series_doc = |id: i64| {
+            json!({ "data": {
+                "id": id, "name": "Merged Without TMDB P4", "status": { "name": "Continuing" },
+                "seasons": [{ "id": 1, "number": 1, "type": { "type": "official" } }],
+                "remoteIds": [{ "id": "tt7700110", "sourceName": "IMDB" }]
+            } })
+        };
+        let episodes = |base: i64, more: bool| {
+            let mut list = vec![
+                json!({ "id": base + 1, "seasonNumber": 1, "number": 1, "name": "Pilot", "aired": "2009-01-20" }),
+                json!({ "id": base + 2, "seasonNumber": 1, "number": 2, "name": "Second", "aired": "2009-01-27" }),
+            ];
+            if more {
+                list.push(json!({ "id": base + 3, "seasonNumber": 1, "number": 3, "name": "Third", "aired": "2009-02-03" }));
+            }
+            json!({ "data": { "episodes": list }, "links": { "next": null } })
+        };
+        {
+            let mut routes = routes.lock();
+            routes.insert("/login".into(), (200, json!({ "data": { "token": "t" } })));
+            routes.insert("/series/770011/extended".into(), (200, series_doc(770_011)));
+            routes.insert(
+                "/series/770011/episodes/official/eng".into(),
+                (200, episodes(7_700_110, false)),
+            );
+        }
+        let first = series(&state, None, Some(770_011))
+            .await
+            .expect("stored")
+            .expect("a work");
+        assert_eq!(first.external_ids.tmdb, None);
+        assert_eq!(first.external_ids.imdb.as_deref(), Some("tt7700110"));
+
+        // TheTVDB merges it into 770012, which has an episode more.
+        {
+            let mut routes = routes.lock();
+            routes.remove("/series/770011/extended");
+            routes.insert("/series/770012/extended".into(), (200, series_doc(770_012)));
+            routes.insert(
+                "/series/770012/episodes/official/eng".into(),
+                (200, episodes(7_700_120, true)),
+            );
+            routes.insert(
+                "/updates".into(),
+                (
+                    200,
+                    json!({ "data": [
+                        { "entityType": "series", "methodInt": 3, "method": "delete",
+                          "recordId": 770_011, "timeStamp": Utc::now().timestamp(),
+                          "mergeToId": 770_012, "mergeToType": "series" }
+                    ], "links": { "next": null } }),
+                ),
+            );
+        }
+        let said = numbering::watch(&state).await.expect("read");
+        assert!(said.contains("merged into 770012"), "{said}");
+
+        // One work, under the id TheTVDB kept, answering to both.
+        let holder =
+            repo::item::find_id_by_external(&state.db, ExternalSource::TvdbSeries, "770012")
+                .await
+                .unwrap();
+        assert_eq!(holder.as_deref(), Some(first.id.as_str()), "the same work");
+        for asked in [770_011, 770_012] {
+            let answered = crate::service::series::by_tvdb_id(&state, asked)
+                .await
+                .unwrap()
+                .expect("answered");
+            assert_eq!(answered.id, first.id, "asked by {asked}");
+        }
+        // Served as it was, the episode TheTVDB lists since after it.
+        let mut work = repo::item::get(&state.db, &first.id)
+            .await
+            .unwrap()
+            .expect("held");
+        repo::item::load_children(&state.db, &mut work)
+            .await
+            .unwrap();
+        assert_eq!(
+            served_as_aired(&state, &work).await,
+            [
+                (1, 1, "Pilot".to_string()),
+                (1, 2, "Second".to_string()),
+                (1, 3, "Third".to_string()),
+            ]
+        );
+
+        // Refreshed again under the id it holds: still one work.
+        let again = series(&state, None, Some(770_012))
+            .await
+            .unwrap()
+            .expect("a work");
+        assert_eq!(again.id, first.id);
+    }
+
+    /// The id TheTVDB merged a series into, which another work here answers
+    /// to — merged here from one that held it: the series does not take it,
+    /// nor is it asked by it, and keeps its own, numbered as a series
+    /// TheTVDB deleted.
+    #[tokio::test]
+    async fn the_id_thetvdb_kept_that_another_work_answers_to_is_not_taken() {
+        let (at, routes) = providers().await;
+        let state = server(&at).await;
+        let show = Show {
+            tvdb: 770_031,
+            tmdb: 770_131,
+            title: "Merged Into Taken P4",
+        };
+        let other = Show {
+            tvdb: 770_033,
+            tmdb: 770_133,
+            title: "Answers For It P4",
+        };
+        show.answer(&routes, Tvdb::Up, &[]);
+        other.answer(&routes, Tvdb::Up, &[]);
+        let work = show.refreshed(&state).await;
+        let answering = other.refreshed(&state).await;
+        {
+            let mut tx = state.db.begin_write().await.unwrap();
+            repo::alias::write(
+                &state.db,
+                &mut tx,
+                "a-work-merged-here",
+                &answering.id,
+                &[("tvdb_series".to_string(), "770032".to_string())],
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+        assert!(!numbering::takes_id(&state, &work.id, 770_032).await);
+        assert!(numbering::takes_id(&state, &answering.id, 770_032).await);
+
+        show.answer(&routes, Tvdb::Gone, &[]);
+        routes.lock().insert(
+            "/updates".into(),
+            (
+                200,
+                json!({ "data": [
+                    { "entityType": "series", "methodInt": 3, "method": "delete",
+                      "recordId": 770_031, "timeStamp": Utc::now().timestamp(),
+                      "mergeToId": 770_032, "mergeToType": "series" }
+                ], "links": { "next": null } }),
+            ),
+        );
+        numbering::watch(&state).await.expect("read");
+        assert_eq!(numbering::asked_by(&state, 770_031).await, (770_031, false));
+        assert_eq!(
+            repo::alias::for_external(&state.db, ExternalSource::TvdbSeries, "770031")
+                .await
+                .unwrap(),
+            None,
+            "no other id to answer to"
+        );
+        let kept = repo::item::get(&state.db, &work.id)
+            .await
+            .unwrap()
+            .expect("held");
+        assert_eq!(kept.external_ids.tvdb, Some(770_031));
+        let held = repo::order::numbering(&state.db, &work.id).await.unwrap();
+        assert!(held.dropped.is_some());
+        assert_eq!(held.merged_into, Some(770_032));
+    }
+
+    /// TheTVDB's feed deletes an id a work only answers to — merged here from
+    /// a work that held it — which TheTVDB still knows under the id it holds:
+    /// nothing is kept, and the work is numbered by TheTVDB as before.
+    #[tokio::test]
+    async fn an_id_a_work_only_answers_to_deleted_by_thetvdb_freezes_nothing() {
+        let (at, routes) = providers().await;
+        let state = server(&at).await;
+        let show = Show {
+            tvdb: 770_021,
+            tmdb: 770_121,
+            title: "Answers To Another P4",
+        };
+        show.answer(&routes, Tvdb::Up, &[]);
+        let work = show.refreshed(&state).await;
+        // It answers to 770020 too, as a work merged here from one that
+        // held it does.
+        {
+            let mut tx = state.db.begin_write().await.unwrap();
+            repo::alias::write(
+                &state.db,
+                &mut tx,
+                "a-work-merged-here",
+                &work.id,
+                &[("tvdb_series".to_string(), "770020".to_string())],
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+        routes.lock().insert(
+            "/updates".into(),
+            (
+                200,
+                json!({ "data": [
+                    { "entityType": "series", "methodInt": 3, "method": "delete",
+                      "recordId": 770_020, "timeStamp": Utc::now().timestamp(),
+                      "mergeToId": 770_021, "mergeToType": "series" },
+                    { "entityType": "series", "methodInt": 3, "method": "delete",
+                      "recordId": 770_020, "timeStamp": Utc::now().timestamp() }
+                ], "links": { "next": null } }),
+            ),
+        );
+        let said = numbering::watch(&state).await.expect("read");
+        assert!(said.contains("none held here"), "{said}");
+        assert_eq!(
+            repo::order::numbering(&state.db, &work.id).await.unwrap(),
+            repo::order::Numbering::default()
+        );
+        let all = repo::order::list(&state.db, &work.id).await.unwrap();
+        assert!(orders::named(&all, orders::TVDB_LAST).is_none());
+        assert_eq!(
+            served_as_aired(&state, &work).await,
+            [
+                (1, 1, "Pilot".to_string()),
+                (1, 2, "Second".to_string()),
+                (1, 3, "Third".to_string()),
+            ]
+        );
+    }
+
+    /// A reading of TheTVDB's feed that could not keep the numbering of a
+    /// series it deleted fails, and is not counted as made: the next one
+    /// reads from the same instant.
+    #[tokio::test]
+    async fn a_reading_that_could_not_keep_a_numbering_is_read_again() {
+        let (at, routes) = providers().await;
+        let state = server(&at).await;
+        let show = Show {
+            tvdb: 770_022,
+            tmdb: 770_122,
+            title: "Not Kept This Time P4",
+        };
+        show.answer(&routes, Tvdb::Up, &[]);
+        show.refreshed(&state).await;
+        routes.lock().insert(
+            "/updates".into(),
+            (
+                200,
+                json!({ "data": [
+                    { "entityType": "series", "methodInt": 3, "method": "delete",
+                      "recordId": 770_022, "timeStamp": Utc::now().timestamp() }
+                ], "links": { "next": null } }),
+            ),
+        );
+        // What says who numbers a series cannot be read.
+        sqlx::query(state.db.sql("DROP TABLE media_numbering"))
+            .execute(state.db.pool())
+            .await
+            .unwrap();
+        let failed = numbering::watch(&state).await.expect_err("not kept");
+        assert!(format!("{failed:#}").contains("770022"), "{failed:#}");
+        assert!(
+            repo::import::get(&state.db, numbering::FEED)
+                .await
+                .unwrap()
+                .is_none(),
+            "the reading is not counted as made"
+        );
+    }
+
+    /// A numbering that could not be kept when TheTVDB answered 404 a second
+    /// time leaves the series numbered as it was — TheTVDB's — nothing said
+    /// of it but the 404s counted, and kept at a later refresh.
+    #[tokio::test]
+    async fn a_numbering_that_could_not_be_kept_leaves_the_series_as_it_was() {
+        let (at, routes) = providers().await;
+        let state = server(&at).await;
+        let show = Show {
+            tvdb: 770_023,
+            tmdb: 770_123,
+            title: "Kept Later P4",
+        };
+        show.answer(&routes, Tvdb::Up, &[]);
+        let first = show.refreshed(&state).await;
+        show.answer(&routes, Tvdb::Gone, &[]);
+        show.refreshed(&state).await;
+        gone_a_day_ago(&state, &first).await;
+        // The orders' places cannot be written.
+        sqlx::query(
+            state
+                .db
+                .sql("ALTER TABLE media_order_episode RENAME TO kept_aside"),
+        )
+        .execute(state.db.pool())
+        .await
+        .unwrap();
+        let not_kept = show.refreshed(&state).await;
+        assert_eq!(
+            numbers(&not_kept),
+            [(1, 1), (1, 2), (1, 3)],
+            "TheTVDB's numbering, not TMDB's"
+        );
+        let held = repo::order::numbering(&state.db, &first.id).await.unwrap();
+        assert_eq!((held.gone, held.dropped.as_deref()), (2, None));
+        assert!(
+            !trail(&state)
+                .await
+                .iter()
+                .any(|a| a == "item.numbering_fallback")
+        );
+
+        // Writable again: kept at the next refresh.
+        sqlx::query(
+            state
+                .db
+                .sql("ALTER TABLE kept_aside RENAME TO media_order_episode"),
+        )
+        .execute(state.db.pool())
+        .await
+        .unwrap();
+        let kept = show.refreshed(&state).await;
+        assert_eq!(numbers(&kept), [(1, 1), (1, 2), (2, 1)], "TMDB's");
+        let held = repo::order::numbering(&state.db, &first.id).await.unwrap();
+        assert!(held.dropped.is_some());
+        let all = repo::order::list(&state.db, &first.id).await.unwrap();
+        assert!(orders::named(&all, orders::TVDB_LAST).is_some_and(|o| o.is_frozen));
+    }
+
+    /// What one refresh makes of what TheTVDB did, the clock and the
+    /// setting given.
+    #[test]
+    fn thetvdb_answering_404_is_counted_a_day_apart_and_kept_after_two() {
+        use crate::domain::orders::TvdbDropped;
+
+        let now = Utc::now();
+        let gone = Seen {
+            gone: true,
+            tmdb_listed: true,
+            ..Seen::default()
+        };
+        let held = repo::order::Numbering::default();
+
+        // The first: counted, TheTVDB's numbering kept.
+        let (once, by_tmdb, change) = weigh(&held, gone, now, 3);
+        assert_eq!((once.gone, by_tmdb, change), (1, false, None));
+        // Within the twenty hours: the same, once.
+        let (same, _, change) = weigh(&once, gone, now + TimeDelta::hours(6), 3);
+        assert_eq!((same.gone, change), (1, None));
+        // A day on: kept as it was served, TMDB numbering the work.
+        let later = now + TimeDelta::hours(21);
+        let (twice, by_tmdb, change) = weigh(&once, gone, later, 3);
+        assert_eq!(
+            (twice.gone, by_tmdb, change),
+            (2, true, Some(NumberingChange::Dropped))
+        );
+        assert_eq!(twice.dropped_why, Some(TvdbDropped::Missing));
+        // Off: counted, never kept.
+        let (off, by_tmdb, change) = weigh(&once, gone, later, 0);
+        assert_eq!(
+            (off.gone, off.dropped.is_some(), by_tmdb, change),
+            (2, false, false, None)
+        );
+
+        // Skyhook still hands TheTVDB's list on: counted, and it numbers.
+        let handed_on = Seen {
+            listed: true,
+            ..gone
+        };
+        let (still, by_tmdb, _) = weigh(&twice, handed_on, later, 3);
+        assert!(still.dropped.is_some() && !by_tmdb);
+
+        // A series TheTVDB merged into another, asked under that one, which
+        // TheTVDB fails for: a silence like any, counted — TMDB does not
+        // number it, TheTVDB's list stands.
+        let merged_away = repo::order::Numbering {
+            dropped_why: Some(TvdbDropped::Merged),
+            merged_into: Some(9),
+            ..twice.clone()
+        };
+        let silent_there = Seen {
+            silent: true,
+            tmdb_listed: true,
+            rekeyed: true,
+            ..Seen::default()
+        };
+        let (counted, by_tmdb, change) = weigh(&merged_away, silent_there, later, 3);
+        assert_eq!((counted.silent, by_tmdb, change), (1, false, None));
+        assert!(counted.dropped.is_some());
+
+        // TheTVDB answering with its record and no episode: it knows the
+        // series, and does not number it — nothing given back.
+        let record_alone = Seen {
+            known: true,
+            tmdb_listed: true,
+            ..Seen::default()
+        };
+        let (still, by_tmdb, change) = weigh(&twice, record_alone, later, 3);
+        assert!(still.dropped.is_some() && by_tmdb && change.is_none());
+        assert_eq!(still.gone, 0, "it knows the series");
+
+        // TheTVDB knows it again: given back.
+        let known = Seen {
+            known: true,
+            listed: true,
+            tmdb_listed: true,
+            ..Seen::default()
+        };
+        let (back, by_tmdb, change) = weigh(&twice, known, later, 3);
+        assert_eq!(
+            (back, by_tmdb, change),
+            (
+                repo::order::Numbering::default(),
+                false,
+                Some(NumberingChange::Known)
+            )
+        );
+        // Not for a series it merged into another: by hand.
+        let merged = repo::order::Numbering {
+            dropped_why: Some(TvdbDropped::Merged),
+            merged_into: Some(2),
+            ..twice.clone()
+        };
+        let (kept, by_tmdb, change) = weigh(&merged, known, later, 3);
+        assert_eq!(
+            (kept.dropped.is_some(), by_tmdb, change),
+            (true, false, None)
+        );
+
+        // TMDB numbering the series in TheTVDB's silence, then a 404: TMDB
+        // goes on numbering it while the 404 is counted.
+        let silence = repo::order::Numbering {
+            silent: 3,
+            since: Some(crate::db::to_rfc3339(now)),
+            ..Default::default()
+        };
+        let (counted, by_tmdb, change) = weigh(&silence, gone, now, 3);
+        assert_eq!((counted.gone, by_tmdb, change), (1, true, None));
+        assert!(counted.since.is_some());
+        // And kept, the silence forgotten: the series is dropped now.
+        let (dropped, by_tmdb, change) = weigh(&counted, gone, later, 3);
+        assert_eq!(change, Some(NumberingChange::Dropped));
+        assert!(by_tmdb && dropped.since.is_none() && dropped.silent == 0);
     }
 }
