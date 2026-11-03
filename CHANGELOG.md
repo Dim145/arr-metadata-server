@@ -7,6 +7,15 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Reading Wikidata's links failed — "line 153945 of Wikidata's answer for
+  TheTVDB's films is no row of the table" — once a site's query came to the
+  sixty seconds Wikidata's query service gives one: TMDB's films and TheTVDB's
+  did by November 2026, and the service cut them partway. Each site is asked in
+  eleven parts now, its ids by their last digit and what ends in none, each a
+  few seconds.
+
 ## [0.15.0] — 2026-11-03
 
 ### Security

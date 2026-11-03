@@ -13,8 +13,11 @@
 //! between two (the job's), a User-Agent that says who asks and where they are
 //! found, and a 429 waited out as its `Retry-After` says. The answers are
 //! tables, tab-separated. The largest, every TMDB film, was 287 000 rows and
-//! 18 MB in November 2026 — 4 MB on the wire — answered in seven seconds of
-//! the sixty the service allows a query; TheTVDB's films took 28.
+//! 18 MB in November 2026 — 4 MB on the wire. Asked whole, the join with the
+//! items' IMDb ids came to the sixty seconds the service allows a query by
+//! that month's end — TMDB's films and TheTVDB's were cut partway, and
+//! refused — so each site is asked in eleven parts ([`Part`]), by the last
+//! digit of its ids, each a few seconds.
 
 use std::{
     collections::HashMap,
@@ -219,16 +222,77 @@ const LONGEST_WAIT: Duration = Duration::from_secs(5 * 60);
 static LEFT_ALONE: LazyLock<Mutex<HashMap<String, Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// The query for one site: every item carrying an id of the site's, with
-/// its IMDb ids beside.
-pub fn query(site: Site) -> String {
+/// One of the parts a site's ids are asked in: those ending in a digit, or
+/// the values ending in none — no id, but read so that they are counted as
+/// skipped. A tenth of a large site's join with IMDb's ids takes a few
+/// seconds where the whole came to the service's sixty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    Ending(u8),
+    Rest,
+}
+
+impl Part {
+    /// Every part, once: together, every value of the site's.
+    pub const ALL: [Self; 11] = [
+        Self::Ending(0),
+        Self::Ending(1),
+        Self::Ending(2),
+        Self::Ending(3),
+        Self::Ending(4),
+        Self::Ending(5),
+        Self::Ending(6),
+        Self::Ending(7),
+        Self::Ending(8),
+        Self::Ending(9),
+        Self::Rest,
+    ];
+
+    /// The query's filter that keeps the part's values alone.
+    fn filter(self) -> String {
+        match self {
+            Self::Ending(digit) => format!("FILTER(STRENDS(STR(?value), \"{digit}\"))"),
+            Self::Rest => "FILTER(!REGEX(STR(?value), \"[0-9]$\"))".to_string(),
+        }
+    }
+
+    /// What the part holds, in a message.
+    fn said(self) -> String {
+        match self {
+            Self::Ending(digit) => format!("the ids ending in {digit}"),
+            Self::Rest => "the values ending in no digit".to_string(),
+        }
+    }
+
+    /// The part a value of the site's falls in, as the filters place it.
+    #[cfg(test)]
+    pub fn of(value: &str) -> Self {
+        match value.bytes().last() {
+            Some(last) if last.is_ascii_digit() => Self::Ending(last - b'0'),
+            _ => Self::Rest,
+        }
+    }
+}
+
+/// The pause between two parts of a site's reading: one query at a time,
+/// as Wikimedia asks, and a moment between them.
+#[cfg(not(test))]
+pub const BETWEEN_PARTS: Duration = Duration::from_secs(1);
+#[cfg(test)]
+pub const BETWEEN_PARTS: Duration = Duration::from_millis(25);
+
+/// The query for one part of a site's ids: every item carrying one of them,
+/// with its IMDb ids beside.
+pub fn query(site: Site, part: Part) -> String {
     format!(
         "PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n\
          SELECT ?item ?value ?imdb WHERE {{\n  \
          ?item wdt:P{} ?value .\n  \
+         {}\n  \
          OPTIONAL {{ ?item wdt:P345 ?imdb . }}\n\
          }}",
-        site.property()
+        site.property(),
+        part.filter()
     )
 }
 
@@ -238,10 +302,22 @@ pub(crate) const HEADER: &str = "?item\t?value\t?imdb";
 /// Ask Wikidata's query service at `endpoint`, through `http`, for one
 /// site's ids and the IMDb ids beside them.
 pub async fn read(http: &reqwest::Client, endpoint: &str, site: Site) -> Result<Read> {
-    let body = ask(http, endpoint, &query(site)).await?;
-    tokio::task::spawn_blocking(move || parse(&body, site))
-        .await
-        .context("the reading of Wikidata's answer ended abruptly")?
+    let mut whole = Read::default();
+    for (n, part) in Part::ALL.into_iter().enumerate() {
+        if n > 0 {
+            tokio::time::sleep(BETWEEN_PARTS).await;
+        }
+        let body = ask(http, endpoint, &query(site, part))
+            .await
+            .with_context(|| part.said())?;
+        let read = tokio::task::spawn_blocking(move || parse(&body, site))
+            .await
+            .context("the reading of Wikidata's answer ended abruptly")?
+            .with_context(|| part.said())?;
+        whole.skipped += read.skipped;
+        whole.links.extend(read.links);
+    }
+    Ok(whole)
 }
 
 /// One query's answer, as the service wrote it.
@@ -490,12 +566,36 @@ mod tests {
 
     #[test]
     fn the_query_asks_for_the_site_with_imdb_beside() {
-        let asked = query(Site::TvdbMovie);
+        let asked = query(Site::TvdbMovie, Part::Ending(3));
         assert!(asked.contains("?item wdt:P12196 ?value ."), "{asked}");
+        assert!(
+            asked.contains("FILTER(STRENDS(STR(?value), \"3\"))"),
+            "{asked}"
+        );
+        let rest = query(Site::TvdbMovie, Part::Rest);
+        assert!(
+            rest.contains("FILTER(!REGEX(STR(?value), \"[0-9]$\"))"),
+            "{rest}"
+        );
         assert!(
             asked.contains("OPTIONAL { ?item wdt:P345 ?imdb . }"),
             "{asked}"
         );
+    }
+
+    /// The eleven parts hold every value once: its last digit's, or the rest.
+    #[test]
+    fn every_value_falls_in_one_part() {
+        for (value, part) in [
+            ("27205", Part::Ending(5)),
+            ("113", Part::Ending(3)),
+            ("tt1375666", Part::Ending(6)),
+            ("https://thetvdb.com/movies/inception", Part::Rest),
+            ("", Part::Rest),
+        ] {
+            assert_eq!(Part::of(value), part, "{value}");
+            assert_eq!(Part::ALL.iter().filter(|&&p| p == part).count(), 1);
+        }
     }
 
     const ITEM: &str = "<http://www.wikidata.org/entity/Q";

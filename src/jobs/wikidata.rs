@@ -24,9 +24,11 @@ use crate::{
     state::AppState,
 };
 
-/// How long between two queries: Wikidata's service wants a client's queries
-/// one at a time, and a moment between them. Some fifty seconds of queries
-/// in all, in November 2026.
+/// How long between two sites' readings: Wikidata's service wants a client's
+/// queries one at a time, and a moment between them. A site is read in eleven
+/// parts, with a pause of their own between them
+/// ([`wikidata::BETWEEN_PARTS`]): a few minutes of queries in all, in
+/// November 2026.
 #[cfg(not(test))]
 const BETWEEN: Duration = Duration::from_secs(2);
 #[cfg(test)]
@@ -206,9 +208,9 @@ mod tests {
                                 if under_way.fetch_add(1, Ordering::SeqCst) > 0 {
                                     overlapped.fetch_add(1, Ordering::SeqCst);
                                 }
-                                let property = asked_property(
-                                    query.get("query").map(String::as_str).unwrap_or_default(),
-                                );
+                                let asked = query.get("query").map(String::as_str).unwrap_or_default();
+                                let property = asked_property(asked);
+                                let part = asked_part(asked);
                                 // As long as a query takes, a little.
                                 tokio::time::sleep(Duration::from_millis(5)).await;
                                 let reply = {
@@ -221,9 +223,11 @@ mod tests {
                                         (
                                             StatusCode::OK,
                                             None,
-                                            script.tables.get(&property).cloned().unwrap_or_else(
-                                                || format!("{}\n", wikidata::HEADER),
-                                            ),
+                                            script
+                                                .tables
+                                                .get(&property)
+                                                .map(|table| only(table, part))
+                                                .unwrap_or_else(|| format!("{}\n", wikidata::HEADER)),
                                         )
                                     });
                                     let field = |name: header::HeaderName| {
@@ -316,6 +320,35 @@ mod tests {
             .unwrap_or(0)
     }
 
+    /// The part a query asks for, as its filter says it.
+    fn asked_part(query: &str) -> wikidata::Part {
+        query
+            .split("STRENDS(STR(?value), \"")
+            .nth(1)
+            .and_then(|rest| rest.bytes().next())
+            .filter(u8::is_ascii_digit)
+            .map_or(wikidata::Part::Rest, |digit| {
+                wikidata::Part::Ending(digit - b'0')
+            })
+    }
+    /// A table's header, and its rows whose value falls in `part`: what the
+    /// service answers the part's filter with.
+    fn only(table: &str, part: wikidata::Part) -> String {
+        let mut lines = table.lines();
+        let mut out = format!("{}\n", lines.next().unwrap_or_default());
+        for line in lines {
+            let value = line
+                .split('\t')
+                .nth(1)
+                .unwrap_or_default()
+                .trim_matches('"');
+            if wikidata::Part::of(value) == part {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        out
+    }
     /// The server, Wikidata's query service at `endpoint`.
     async fn server(endpoint: &str) -> AppState {
         let mut config = crate::config::Config::from_env().expect("a configuration");
@@ -384,16 +417,24 @@ mod tests {
         let summary = import(&state).await.expect("read");
         assert_eq!(summary, "13 links on 3 items: 13 new, 0 gone");
 
-        // Each site once, in order, one at a time, a pause between two,
-        // with who asks and what is wanted said.
+        // Each site in turn, in its eleven parts, one query at a time, a
+        // pause between two, with who asks and what is wanted said.
         let asked = stand_in.asked();
         assert_eq!(
             asked.iter().map(|a| a.property).collect::<Vec<_>>(),
-            Site::ANCHORS.map(Site::property).to_vec()
+            Site::ANCHORS
+                .iter()
+                .flat_map(|site| [site.property(); wikidata::Part::ALL.len()])
+                .collect::<Vec<_>>()
         );
         assert_eq!(stand_in.overlapped.load(Ordering::SeqCst), 0);
         for pair in asked.windows(2) {
-            assert!(pair[1].began >= pair[0].ended + BETWEEN, "{pair:?}");
+            let pause = if pair[0].property == pair[1].property {
+                wikidata::BETWEEN_PARTS
+            } else {
+                BETWEEN
+            };
+            assert!(pair[1].began >= pair[0].ended + pause, "{pair:?}");
         }
         for one in &asked {
             assert_eq!(
@@ -471,7 +512,11 @@ mod tests {
             format!("{failed:#}").contains("AniList's entries could not be read"),
             "{failed:#}"
         );
-        assert_eq!(stand_in.asked().len(), asked + 5);
+        // The four sites before it, each in its parts, then its first part.
+        assert_eq!(
+            stand_in.asked().len(),
+            asked + 4 * wikidata::Part::ALL.len() + 1
+        );
         assert_eq!(all_kept(&state).await, before);
 
         // An answer begun with a success and cut short.
@@ -550,7 +595,8 @@ mod tests {
             .iter()
             .filter(|a| a.property == Site::TmdbTv.property())
             .collect();
-        assert_eq!(tv.len(), 2);
+        // Its first part asked twice, then the others.
+        assert_eq!(tv.len(), wikidata::Part::ALL.len() + 1);
         assert!(tv[1].began >= tv[0].ended + Duration::from_secs(1));
 
         // An hour asked: the reading fails at once, and the next one does

@@ -215,7 +215,7 @@ None needs a key.
 | **IMDb** | IMDb's rating, for every work with an IMDb id; with its titles read (`imdb.akas`), the titles a film goes by in each region, which Radarr is given; with its episodes read (`imdb.episodes`), each episode's IMDb id, in its `.nfo` document, and its IMDb rating, on its page | one download a day for the ratings; one a week each for the titles and the episodes |
 | **Fankai** | the Fan-Kai productions — anime recut into films, each as a series with its sagas as seasons — from Fankai's own metadata service | one call per saga, and three more per production fetch |
 | **Wiki Fankai** | for each Fan-Kai, the anime it was cut from and the Fan-Kai that follows it — only while Fankai is on | one call per Fan-Kai fetch |
-| **Wikidata** | the links its items make between the sites' ids (`wikidata.enabled`), which lead an id a client asks by to the work held here under another | eight queries a week |
+| **Wikidata** | the links its items make between the sites' ids (`wikidata.enabled`), which lead an id a client asks by to the work held here under another | eighty-eight short queries a week |
 
 TVmaze's servers take fifteen to twenty seconds, now and then, over what their
 cache does not hold — the first lookup of a series — whatever the pace of the
@@ -414,11 +414,13 @@ either is the search a `502`. Each series' weight goes into
 With `wikidata.enabled` on, the server keeps the links Wikidata's items make
 between the sites' ids — IMDb's, TMDB's, TheTVDB's, TVmaze's, AniList's,
 MyAnimeList's and AniDB's — and reads them again weekly, as the task *Wikidata's
-links between ids* (`import.wikidata`): eight queries to Wikidata's query service
-(`AMS_WIKIDATA_ENDPOINT`), one for each of TMDB's films and series, TheTVDB's
+links between ids* (`import.wikidata`): Wikidata's query service
+(`AMS_WIKIDATA_ENDPOINT`) is asked for each of TMDB's films and series, TheTVDB's
 series and films, AniList, MyAnimeList, AniDB and TVmaze, each with the IMDb id
-beside, one after the other with two seconds between them — some fifty seconds in
-all — under a `User-Agent` that names this server, as Wikimedia's policy asks. A
+beside — each site in eleven queries, its ids by their last digit and what ends in
+none, since the largest asked whole came to the sixty seconds the service gives a
+query and were cut — one after the other with a pause between them, a few minutes
+in all, under a `User-Agent` that names this server, as Wikimedia's policy asks. A
 reading is kept only once every query has answered whole and none lists fewer than
 half the ids kept of its site; until then the links read before stay, and only
 what changed is written. In November 2026 that was a million links on 360,000
