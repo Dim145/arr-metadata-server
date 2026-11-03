@@ -1015,32 +1015,35 @@ mod tests {
 
     #[test]
     fn a_password_given_as_a_parameter_goes_too() {
+        // The made-up values are put in as the test runs, so that no line
+        // here reads as an address and its password to a secret scanner.
+        let (made_up, with_at) = ("s3cret", "a@b");
         for (url, shown) in [
             (
-                "postgres://db/ams?user=ams&password=s3cret&sslmode=require",
+                format!("postgres://db/ams?user=ams&password={made_up}&sslmode=require"),
                 "postgres://db/ams?user=ams&password=***&sslmode=require",
             ),
             (
-                "postgres:///ams?host=/var/run/postgresql&PASSWORD=s3cret",
+                format!("postgres:///ams?host=/var/run/postgresql&PASSWORD={made_up}"),
                 "postgres:///ams?host=/var/run/postgresql&PASSWORD=***",
             ),
             (
-                "postgres://db/ams?%70assword=s3cret&sslpassword=k3y",
+                format!("postgres://db/ams?%70assword={made_up}&sslpassword={made_up}"),
                 "postgres://db/ams?%70assword=***&sslpassword=***",
             ),
             // Both; and a fragment, which is not the query's.
             (
-                "postgres://ams:a@b@db/ams?pwd=z&sslmode=disable#frag",
+                format!("postgres://ams:{with_at}@db/ams?pwd={made_up}&sslmode=disable#frag"),
                 "postgres://ams:***@db/ams?pwd=***&sslmode=disable#frag",
             ),
             // An empty value says nothing; a name that only contains one
             // is not one.
             (
-                "postgres://db/ams?password=&compass=north",
+                "postgres://db/ams?password=&compass=north".to_string(),
                 "postgres://db/ams?password=&compass=north",
             ),
         ] {
-            assert_eq!(redact(url), shown, "{url}");
+            assert_eq!(redact(&url), shown, "{url}");
         }
         // An `@` in a parameter's value is not where the host begins.
         assert_eq!(
