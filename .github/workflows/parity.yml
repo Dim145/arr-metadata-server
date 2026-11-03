@@ -36,14 +36,18 @@ jobs:
     name: Skyhook v2 parity
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The providers' keys are the secrets of this environment, given to this
+    # job and to the end-to-end tests alone. Forgejo, which runs this workflow
+    # too, has no environments and reads its own secrets.
+    environment: provider-keys
 
     steps:
       # The server answers the series from TheTVDB and TMDB, so the run needs
-      # their keys, as the end-to-end tests do: the repository secrets
-      # TMDB_API_KEY and TVDB_API_KEY. Said before anything is fetched or
-      # built, so that a run without them costs a few seconds. A secret
-      # cannot be tested in an `if`, which is why it is an environment
-      # variable here, and why the answer is an output.
+      # their keys, as the end-to-end tests do: the secrets TMDB_API_KEY and
+      # TVDB_API_KEY of the environment provider-keys. Said before anything
+      # is fetched or built, so that a run without them costs a few seconds.
+      # A secret cannot be tested in an `if`, which is why it is an
+      # environment variable here, and why the answer is an output.
       - name: Look for the provider keys
         id: keys
         env:

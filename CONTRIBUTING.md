@@ -99,6 +99,10 @@ why. Say in the pull request why a new dependency is worth carrying.
 `gitleaks detect --source . --redact` reads the history with
 [`.gitleaks.toml`](.gitleaks.toml); the few lines of past commits that are no
 secret are named, each with its reason, in [`.gitleaksignore`](.gitleaksignore).
+CI's own keys — `TMDB_API_KEY`, `TVDB_API_KEY` and `FANARTTV_API_KEY`, which the
+end-to-end tests and the parity check run against the real services with — are
+the secrets of the GitHub environment `provider-keys`, given to those two jobs
+alone. Without them, both say so and stop within seconds.
 
 ## The interface's design system
 
