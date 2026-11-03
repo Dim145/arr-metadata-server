@@ -106,6 +106,8 @@ what they had lost.
 - Tying an account to the identity provider is a button on the account page
   that asks for the password (`POST /api/v1/account/provider`); untying is
   beside it (`DELETE /api/v1/account/provider`).
+- The interface's `react-router` is 8.5.1, a week old: it mends the
+  `document.startViewTransition` type 8.5.0 declared, which had kept it at 8.4.
 
 ## [0.14.0] — 2026-11-03
 
