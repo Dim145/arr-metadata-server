@@ -5400,7 +5400,7 @@
           "Catalogue"
         ],
         "summary": "Take a copy away.",
-        "description": "An upload is taken off the work, and deleted unless something else still\nnames it — another work's lock, say. A provider's copy is forgotten and\ndeleted — the work keeps pointing at the provider, and the next refresh\nfetches it again. Only a copy of the work's own: an address its rows or\nits locks hold, or an upload made for it.",
+        "description": "An upload is taken off the work, and deleted unless something else still\nnames it — another work's lock, say. A provider's copy is forgotten and\ndeleted — the work keeps pointing at the provider, and the next refresh\nfetches it again; a collection's pictures, the next time TMDB is asked\nabout the collection. Only a copy of the work's own: an address it points\nat — its characters', its companies' logos and its collection's pictures\namong them —, one its locks hold, or an upload made for it.",
         "operationId": "media_forget",
         "parameters": [
           {

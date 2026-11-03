@@ -15,8 +15,14 @@ import type { Dict } from './en'
 const agreed = (gender: number | undefined, feminine: string, masculine: string, both: string) =>
   gender === 1 ? feminine : gender === 2 ? masculine : both
 
-/** "de" before a service's name, elided before a vowel: "de TMDB", "d’AniList". */
-const de = (name: string) => (/^[aeiouàâéèêîôû]/i.test(name) ? `d’${name}` : `de ${name}`)
+/** Whether French elides the word before this one: "d’AniList", "qu’Alice". */
+const elides = (word: string) => /^[aeiouàâéèêîôû]/i.test(word)
+
+/** "de" before a name, elided before a vowel: "de TMDB", "d’AniList". */
+const de = (name: string) => (elides(name) ? `d’${name}` : `de ${name}`)
+
+/** "que" before a name, elided before a vowel: "que TMDB", "qu’AniList". */
+const que = (name: string) => (elides(name) ? `qu’${name}` : `que ${name}`)
 
 /**
  * The form a count's words take, by French rules, where 0 is singular like
@@ -581,7 +587,7 @@ export const fr: Dict = {
     // Les chaînes et les sociétés, chacune menant à sa page.
     companiesTitle: 'Chaînes et sociétés',
     companyRoles: { network: 'Chaîne', production: 'Production', studio: 'Studio', distributor: 'Distribution' },
-    companyPage: (name: string) => `Tout ce qui vient de ${name} au catalogue`,
+    companyPage: (name: string) => `Tout ce qui vient ${de(name)} au catalogue`,
     keywordPage: (word: string) => `Tout ce qui porte le mot-clé « ${word} » au catalogue`,
   },
   elsewhere: {
@@ -689,7 +695,7 @@ export const fr: Dict = {
     performerUnknown: 'Interprète inconnu',
     voice: (language: string) => `Voix, ${language}`,
     dub: 'Voix en',
-    picture: (name: string) => `Image de ${name}`,
+    picture: (name: string) => `Image ${de(name)}`,
     works: (n: number) => plural(n, { one: 'Dans 1 œuvre ici', other: `Dans ${n} œuvres ici` }),
     partial: 'Seulement les œuvres que ce catalogue détient.',
     onAnilist: 'Sur AniList',
@@ -701,7 +707,7 @@ export const fr: Dict = {
     works: (n: number) => plural(n, { one: `${n} œuvre ici`, other: `${n} œuvres ici` }),
     partial: 'Seulement les œuvres présentes dans ce catalogue.',
     onTmdb: 'Toute la carrière sur TMDB',
-    as: (character: string) => `rôle de ${character}`,
+    as: (character: string) => `rôle ${de(character)}`,
     cast: 'Distribution',
     biography: 'Biographie',
     readMore: 'Lire la suite',
@@ -886,7 +892,7 @@ export const fr: Dict = {
     episodes: (n: number) => plural(n, { one: `${n} épisode`, other: `${n} épisodes` }),
     aired: (aired: number, of: number) => `${aired} sur ${of} diffusés`,
     nextEpisode: (n: number, when: string) => `Épisode ${n} le ${when}`,
-    sequelOf: (title: string) => `Suite de ${title}`,
+    sequelOf: (title: string) => `Suite ${de(title)}`,
     // Une entrée AniList et MyAnimeList d’une saison, telle que la liste des identifiants d’anime la place.
     cour: {
       label: 'L’entrée de cette saison',
@@ -1077,7 +1083,7 @@ export const fr: Dict = {
       createLead: 'Donnez un mot de passe maintenant, ou laissez vide pour en générer un à transmettre. La personne pourra le changer depuis sa page de compte.',
       passwordOptional: 'Mot de passe',
       passwordGenerate: 'Facultatif : laissé vide, il est généré et montré une fois.',
-      opened: (name: string) => `Le compte de ${name} est ouvert`,
+      opened: (name: string) => `Le compte ${de(name)} est ouvert`,
       generated: 'Son mot de passe, montré une fois :',
       deleteTitle: (n: number) => plural(n, { one: 'Supprimer ce compte ?', other: `Supprimer ${n} comptes ?` }),
       deleteBody: 'Ses sessions et ses clés partent avec lui. Ce qu’il a fait reste au journal, sous son nom.',
@@ -1288,7 +1294,7 @@ export const fr: Dict = {
           relay: (service: string) =>
             `Tout est demandé à ${service}, et les verrous sont écrits dans ses réponses. Une œuvre saisie à la main ici est inconnue des clients ${de(service)}.`,
           'local-first': (service: string) =>
-            `Une œuvre que ce serveur détient — corrigée, saisie à la main, ou que ${service} ne connaît pas — reçoit une réponse tirée du catalogue, à la forme ${de(service)}, sans rien demander à ${service} ni à sa clé ; une recherche liste d’abord les œuvres du catalogue. Le reste est demandé à ${service}, comme avant.`,
+            `Une œuvre que ce serveur détient — corrigée, saisie à la main, ou ${que(service)} ne connaît pas — reçoit une réponse tirée du catalogue, à la forme ${de(service)}, sans rien demander à ${service} ni à sa clé ; une recherche liste d’abord les œuvres du catalogue. Le reste est demandé à ${service}, comme avant.`,
         },
         answers: {
           tmdb: 'Les films et les séries, leurs saisons et leurs épisodes, une collection dont un film est présent ici, un find par l’un de leurs identifiants, la première page d’une recherche. Où regarder, les critiques et le reste viennent toujours de TMDB, par le relais, quand TMDB connaît l’œuvre.',
@@ -1405,12 +1411,12 @@ export const fr: Dict = {
       also: 'Aussi',
       credits: 'Crédits',
       noCredits: 'Aucun crédit n’est rangé sous cette fiche.',
-      selectWork: (title: string) => `Tous les crédits de ${title}`,
+      selectWork: (title: string) => `Tous les crédits ${de(title)}`,
       selected: (n: number) => plural(n, { one: `${n} crédit choisi`, other: `${n} crédits choisis` }),
       clear: 'N’en choisir aucun',
       splitName: 'À qui ils sont',
       splitHint: (name: string) =>
-        `Une nouvelle fiche, faite à la main, prend les crédits choisis\u202f: au nom de ${name} si ce champ reste vide.`,
+        `Une nouvelle fiche, faite à la main, prend les crédits choisis\u202f: au nom ${de(name)} si ce champ reste vide.`,
       split: 'Scinder',
       splitDone: (n: number, name: string) =>
         plural(n, { one: `${n} crédit est désormais à ${name}.`, other: `${n} crédits sont désormais à ${name}.` }),
@@ -1429,7 +1435,7 @@ export const fr: Dict = {
       found: (n: number) => plural(n, { one: `${n} trouvée`, other: `${n} trouvées` }),
       nobody: 'Personne de ce nom.',
       inPeople: (name: string) => `${name}, parmi les personnes`,
-      fileUnder: (name: string) => `Ranger le crédit de ${name} sous une fiche`,
+      fileUnder: (name: string) => `Ranger le crédit ${de(name)} sous une fiche`,
       filed: (name: string) => `Rangé sous ${name}.`,
       keptAliases: 'Gardés tels quels',
       aliasSources: { credit: 'd’un crédit', tmdb: 'de TMDB', merged: 'd’une fiche fusionnée' },
@@ -2111,7 +2117,7 @@ export const fr: Dict = {
       terms: {
         title: 'Conditions d’utilisation',
         lead: 'Chaque source répond sous ses propres conditions. Ce serveur garde une copie de ce qu’elles ont répondu pour les œuvres qu’il détient et la rafraîchit — et, une fois activés, l’index de TVmaze et les liens de Wikidata en entier, sous leurs licences libres — et n’entraîne rien sur rien de tout cela ; le reste est à elles de le dire, et chaque page publique crédite les sources actives.',
-        read: (name: string) => `Conditions de ${name}`,
+        read: (name: string) => `Conditions ${de(name)}`,
         lines: {
           tmdb: 'Usage non commercial ; la mention montrée aux lecteurs ; rien de gardé plus de six mois, si bien qu’une œuvre est redemandée à TMDB tous les six mois quel que soit l’intervalle de rafraîchissement.',
           tvdb: 'Gratuit sous 50 000 $ de revenus par an, avec un crédit et un lien direct montrés aux lecteurs.',
@@ -2138,7 +2144,7 @@ export const fr: Dict = {
     },
     settings: 'Réglages',
     backToSite: 'Retour au catalogue',
-    signedInAs: (who: string) => `Connecté en tant que ${who}`,
+    signedInAs: (who: string) => `Connecté en tant ${que(who)}`,
     sections: 'Sections',
     inPage: 'Sur cette page',
     up: 'Retour',
@@ -2268,7 +2274,7 @@ export const fr: Dict = {
         },
       },
       issued: {
-        title: (name: string) => `Le secret de signature de ${name}`,
+        title: (name: string) => `Le secret de signature ${de(name)}`,
         onlyOnce: 'Montré maintenant et plus jamais : donnez-le au récepteur, qui vérifie avec lui que ce qu’il reçoit vient d’ici. Perdu, il ne peut qu’être recréé.',
         theSecret: 'Secret de signature',
         verify: 'Le récepteur calcule le HMAC-SHA256 de webhook-id, webhook-timestamp et du corps, joints par des points, sous ce secret — le base64 après whsec_ — et le compare à webhook-signature. Les bibliothèques Standard Webhooks le font en un appel.',
@@ -2844,7 +2850,7 @@ export const fr: Dict = {
       save: 'Enregistrer',
       saving: 'Enregistrement…',
       tmdbLine: (limit: number, kind: string, stretch: string) => `Les ${limit} ${kind} les plus populaires de TMDB sortis dans ${stretch}`,
-      feedLine: (host: string) => `La liste de ${host}`,
+      feedLine: (host: string) => `La liste ${de(host)}`,
     },
 
     editor: {
@@ -2920,7 +2926,7 @@ export const fr: Dict = {
       publicPage: 'Page publique',
       seasons: 'Saisons et épisodes',
       season: 'Saison',
-      rawOf: (provider: string) => `Réponse brute de ${provider}`,
+      rawOf: (provider: string) => `Réponse brute ${de(provider)}`,
       copy: 'Copier',
       copied: 'Copié',
       copyFailed: 'Le navigateur a refusé le presse-papiers : sélectionnez le texte et copiez-le à la main.',
@@ -2991,14 +2997,14 @@ export const fr: Dict = {
           `${list} en ${plural(n, { one: 'donne', other: 'donnent' })} une autre ; ${from} passe en premier.`,
         authority: 'Fait autorité pour le studio : remplace ce que disent les autres.',
         wholeList: 'Liste prise entière, chez la première source qui en a une.',
-        underLock: (from: string) => `Sans le verrou, la valeur viendrait de ${from}.`,
+        underLock: (from: string) => `Sans le verrou, la valeur viendrait ${de(from)}.`,
         images: 'Images',
         imageCount: (n: number) => plural(n, { one: `${n} image`, other: `${n} images` }),
         imagesFrom: (list: string) => `Réunies : ${list}.`,
         episodes: 'Épisodes',
-        episodesFrom: (from: string) => `La liste et sa numérotation, celle de Sonarr, viennent de ${from}.`,
+        episodesFrom: (from: string) => `La liste et sa numérotation, celle de Sonarr, viennent ${de(from)}.`,
         episodesTimes: 'Horaires de diffusion de TVmaze là où ses dates concordent.',
-        episodesFill: (list: string) => `Résumés et images de ${list} là où la liste n’en a pas.`,
+        episodesFill: (list: string) => `Résumés et images ${de(list)} là où la liste n’en a pas.`,
         credits: 'Distribution',
         creditCount: (n: number) => plural(n, { one: `${n} personne`, other: `${n} personnes` }),
         creditsFrom:
@@ -3208,7 +3214,7 @@ export const fr: Dict = {
         },
         shift: {
           open: 'Décaler les dates…',
-          title: (season: string) => `Décaler les dates de ${season}`,
+          title: (season: string) => `Décaler les dates ${de(season)}`,
           days: 'De combien de jours',
           daysHint: 'Plus tard avec un nombre positif, plus tôt avec un négatif : 7 repousse chaque épisode d’une semaine, −1 le ramène d’un jour. Le jour de diffusion se décale, et l’instant de diffusion avec lui quand il est connu.',
           locks: 'Chaque date est verrouillée à sa nouvelle valeur, épisode par épisode : aucun rafraîchissement n’y touche jusqu’à ce que le verrou soit levé.',
@@ -3301,7 +3307,7 @@ export const fr: Dict = {
         title: 'Ordres',
         lead: 'L’ordre de diffusion est celui de l’œuvre, et celui que reçoit chaque client qui n’en demande pas un autre. Sonarr v5 et Plex se voient proposer chaque autre ordre sous sa clé ; l’un d’eux peut aussi être figé comme numérotation de diffusion.',
         aired: 'Ordre de diffusion',
-        airedBy: (source: string) => `Les épisodes de l’œuvre, tels que ${source} les numérote`,
+        airedBy: (source: string) => `Les épisodes de l’œuvre, tels ${que(source)} les numérote`,
         source: { tvdb: 'TheTVDB', tmdb: 'TMDB', local: 'Fait ici' },
         unread: (n: number) =>
           plural(n, { one: `${n} épisode, selon TMDB ; lu au prochain rafraîchissement`, other: `${n} épisodes, selon TMDB ; lus au prochain rafraîchissement` }),
@@ -3325,7 +3331,7 @@ export const fr: Dict = {
         from: 'Fait à partir de',
         fromNothing: 'Rien : un ordre vide',
         made: 'Faire l’ordre',
-        editing: (name: string) => `Écriture de ${name}`,
+        editing: (name: string) => `Écriture ${de(name)}`,
         seasonShown: 'Saison affichée',
         position: 'Place',
         season: 'Saison',
@@ -3374,7 +3380,7 @@ export const fr: Dict = {
         producer: 'Production',
         guest: 'Invité',
         crew: 'Équipe technique',
-        as: (character: string) => `dans le rôle de ${character}`,
+        as: (character: string) => `dans le rôle ${de(character)}`,
         titles: 'Autres titres',
         titlesHint:
           'Sonarr et Radarr comparent les noms de releases à ces titres. Ajouter l’orthographe qu’un groupe de release emploie réellement suffit souvent à faire reconnaître un téléchargement.',
@@ -3436,7 +3442,7 @@ export const fr: Dict = {
           'Ce que donne une source se masque plutôt qu’il ne se retire : un verrou le tient hors de Sonarr, de Radarr, du .nfo et du site à chaque rafraîchissement, jusqu’à ce qu’on le montre de nouveau.',
         corrected: 'Corrigé',
         correct: 'Corriger',
-        correctNamed: (name: string) => `Corriger le crédit de ${name}`,
+        correctNamed: (name: string) => `Corriger le crédit ${de(name)}`,
         order: 'Place',
         orderHint: 'Plus petite d’abord, parmi les crédits du même rôle.',
         backToSource: 'Comme le donne la source',
@@ -3507,7 +3513,7 @@ export const fr: Dict = {
       mcpHint:
         'MCP ouvre le serveur MCP, /mcp, par lequel un agent comme Claude Code lit le catalogue. Seul, il n’ouvre rien d’autre : la clé qu’un agent garde dans sa configuration. Ses outils ne font que lire.',
       issued: 'Clés émises',
-      keyFor: (name: string) => `La clé de ${name}`,
+      keyFor: (name: string) => `La clé ${de(name)}`,
       onlyOnce:
         'Copiez-la maintenant. Seule son empreinte est conservée, et c’est la seule fois qu’elle sera affichée.',
       theKey: 'La clé',
@@ -3799,7 +3805,7 @@ export const fr: Dict = {
         renewed: (until: string) => `Renouvelé ; valable jusqu’au ${until}`,
         certValid: (until: string) => `Valable jusqu’au ${until} ; rien à faire`,
         synced: (list: string) => `Synchronisée depuis ${list}`,
-        noneAnswered: (list: string) => `Aucune réponse de ${list}`,
+        noneAnswered: (list: string) => `Aucune réponse ${de(list)}`,
         newer: (version: string) => `La version ${version} est sortie`,
         seeded: (here: number, imported: number, missing: number, failed: number, of: number) =>
           `Sur ${of} : ${here} déjà là, ${imported} ${plural(imported, { one: 'importée', other: 'importées' })}, ${missing} ${plural(missing, { one: 'introuvable', other: 'introuvables' })}, ${failed} en échec`,
@@ -4309,7 +4315,7 @@ export const fr: Dict = {
     defaultIs: (value: string) => `Par défaut : ${value}`,
     revert: 'Revenir au défaut',
     open: 'Réglages',
-    openFor: (name: string) => `Réglages de ${name}`,
+    openFor: (name: string) => `Réglages ${de(name)}`,
     scopeLead: 'N’apparaît ici que ce qu’un client peut répondre différemment. Tout le reste appartient au serveur, sur la page des réglages.',
     empty: 'Rien ne peut encore être défini pour un seul client.',
     loadFailed: 'Les réglages n’ont pas pu être chargés.',
@@ -4601,10 +4607,10 @@ export const fr: Dict = {
     browse: 'Tout parcourir',
   },
   a11y: {
-    poster: (title: string) => `Affiche de ${title}`,
-    backdrop: (title: string) => `Image de fond de ${title}`,
-    headshot: (name: string) => `Photographie de ${name}`,
-    still: (title: string) => `Image de ${title}`,
+    poster: (title: string) => `Affiche ${de(title)}`,
+    backdrop: (title: string) => `Image de fond ${de(title)}`,
+    headshot: (name: string) => `Photographie ${de(name)}`,
+    still: (title: string) => `Image ${de(title)}`,
     ratingOf: (value: string) => `Noté ${value} sur 10`,
     ratingOn: (value: string, source: string) => `Note ${source} : ${value} sur 10`,
     shelfBack: 'Revenir en arrière',

@@ -26,7 +26,7 @@ use crate::{
         audit::Action,
     },
     domain::{
-        CoverType, MediaItem,
+        Collection, CoverType, MediaItem,
         fields::{Child, Scope},
     },
     error::{AppError, AppResult},
@@ -470,7 +470,7 @@ async fn work_media(
     // told the kind of trouble, since any address can be typed in.
     let admin = identity.is_admin();
 
-    let origins = addresses_of(&item);
+    let origins = addresses(&state, &item).await?;
     let known: HashMap<String, Asset> = repo::asset::by_origins(
         &state.db,
         &origins.iter().map(|(o, _)| o.clone()).collect::<Vec<_>>(),
@@ -610,10 +610,22 @@ pub async fn forget_uploads<'a>(state: &AppState, origins: impl IntoIterator<Ite
     }
 }
 
-/// Every address a work's rows hold, once each, in the order the editor
-/// shows them: the work's pictures, its seasons', its theme, its cast's,
-/// its relations', its episodes'.
-fn addresses_of(item: &MediaItem) -> Vec<(String, Kind)> {
+/// Every address a work points at, as [`repo::asset::work_totals`] counts
+/// them: its rows' ([`addresses_of`]), and the pictures of the collection a
+/// film is part of, kept once for all its films.
+async fn addresses(state: &AppState, item: &MediaItem) -> AppResult<Vec<(String, Kind)>> {
+    let collection = match item.collection_tmdb_id {
+        Some(tmdb_id) => repo::collection::by_tmdb(&state.db, tmdb_id).await?,
+        None => None,
+    };
+    Ok(addresses_of(item, collection.as_ref()))
+}
+
+/// Every address a work's rows hold, once each, in this order: the work's
+/// pictures, its seasons', its theme, its cast's, its characters' and their
+/// voices', its relations', its companies' logos, its collection's, its
+/// episodes'.
+fn addresses_of(item: &MediaItem, collection: Option<&Collection>) -> Vec<(String, Kind)> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     let mut add = |url: &str, kind: Kind| {
@@ -637,8 +649,24 @@ fn addresses_of(item: &MediaItem) -> Vec<(String, Kind)> {
             add(url, Kind::Image);
         }
     }
+    for played in &item.characters {
+        let voices = played.voices.iter().filter_map(|v| v.image.as_ref());
+        for url in played.character.image.iter().chain(voices) {
+            add(url, Kind::Image);
+        }
+    }
     for relation in &item.relations {
         if let Some(url) = &relation.image {
+            add(url, Kind::Image);
+        }
+    }
+    for credited in &item.companies {
+        if let Some(url) = &credited.company.logo {
+            add(url, Kind::Image);
+        }
+    }
+    if let Some(collection) = collection {
+        for url in collection.poster.iter().chain(&collection.backdrop) {
             add(url, Kind::Image);
         }
     }
@@ -937,8 +965,10 @@ async fn upload(
 /// An upload is taken off the work, and deleted unless something else still
 /// names it — another work's lock, say. A provider's copy is forgotten and
 /// deleted — the work keeps pointing at the provider, and the next refresh
-/// fetches it again. Only a copy of the work's own: an address its rows or
-/// its locks hold, or an upload made for it.
+/// fetches it again; a collection's pictures, the next time TMDB is asked
+/// about the collection. Only a copy of the work's own: an address it points
+/// at — its characters', its companies' logos and its collection's pictures
+/// among them —, one its locks hold, or an upload made for it.
 #[utoipa::path(
     delete, path = "/items/{id}/media/{asset_id}", tag = TAG,
     operation_id = "media_forget",
@@ -981,7 +1011,8 @@ async fn forget(
     };
     let uploaded = asset.origin.starts_with("upload:");
     let the_works = (uploaded && asset.wanted_by.as_deref() == Some(id.as_str()))
-        || addresses_of(&item)
+        || addresses(&state, &item)
+            .await?
             .iter()
             .any(|(origin, _)| *origin == asset.origin)
         || locks.iter().any(|locked| names_it(&locked));
@@ -1636,6 +1667,162 @@ mod by_work_tests {
                     limit: None,
                     offset: None,
                 }),
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    /// A work's media list names every address its totals count — its
+    /// characters' pictures and their voices' portraits, its companies'
+    /// logos and its collection's pictures beside its own — and a copy of
+    /// one of them is the work's to forget, as its own pictures' are.
+    #[tokio::test]
+    async fn a_works_media_list_names_what_its_totals_count() {
+        use crate::domain::{
+            Company, CompanyCredit, CompanyRole,
+            person::{Character, CharacterCredit, CharacterVoice},
+        };
+
+        let state = crate::api::native::testing::server().await;
+        let saga = film(&state, "Media List Saga Film", &["https://p/film.jpg"]).await;
+        let mut item = repo::item::get(&state.db, &saga).await.unwrap().unwrap();
+        repo::item::load_children(&state.db, &mut item)
+            .await
+            .unwrap();
+        item.collection_tmdb_id = Some(9_500_002);
+        item.companies = vec![CompanyCredit {
+            company: Company {
+                id: String::new(),
+                kind: CompanyRole::Production.kind(),
+                name: "A Studio With A Logo".into(),
+                tmdb_id: Some(9_500_001),
+                tvdb_id: None,
+                logo: Some("https://p/logo.png".into()),
+                country: None,
+            },
+            role: CompanyRole::Production,
+            sort_order: 0,
+            source: Some("tmdb".into()),
+        }];
+        item.characters = vec![CharacterCredit {
+            character: Character {
+                id: String::new(),
+                name: "A Part With A Picture".into(),
+                native_name: None,
+                image: Some("https://p/part.png".into()),
+                tvdb_id: None,
+                anilist_id: Some(9_500_003),
+                mal_id: None,
+            },
+            role: None,
+            sort_order: 0,
+            credit_id: None,
+            voices: vec![CharacterVoice {
+                language: "jpn".into(),
+                name: "A Voice".into(),
+                native_name: None,
+                image: Some("https://p/voice.jpg".into()),
+                anilist_id: None,
+                mal_id: None,
+                sort_order: 0,
+            }],
+            source: Some("anilist".into()),
+        }];
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+        repo::collection::write(
+            &state.db,
+            &Collection {
+                id: String::new(),
+                tmdb_id: 9_500_002,
+                name: "A Saga".into(),
+                overview: None,
+                poster: Some("https://p/saga.jpg".into()),
+                backdrop: Some("https://p/saga-back.jpg".into()),
+                language: None,
+                translations: Vec::new(),
+                parts: Vec::new(),
+                refreshed_at: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+        kept(&state, "https://p/part.png", 10, "dd").await;
+        kept(&state, "https://p/logo.png", 10, "ee").await;
+        kept(&state, "https://p/saga.jpg", 10, "ff").await;
+
+        let Json(media) = work_media(
+            State(state.clone()),
+            Extension(Identity::Anonymous),
+            Path(saga.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            media
+                .media
+                .iter()
+                .map(|m| m.origin.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "https://p/film.jpg",
+                "https://p/part.png",
+                "https://p/voice.jpg",
+                "https://p/logo.png",
+                "https://p/saga.jpg",
+                "https://p/saga-back.jpg",
+            ]
+        );
+        let stored = media
+            .media
+            .iter()
+            .filter(|m| m.status == MediumStatus::Stored)
+            .count();
+        assert_eq!((stored, media.totals.stored), (3, 3));
+
+        // The logo's copy, forgotten from the work, is gone.
+        let logo = repo::asset::by_origin(&state.db, "https://p/logo.png")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            forget(
+                State(state.clone()),
+                Extension(Identity::Anonymous),
+                ClientIp::NONE,
+                Path((saga.clone(), logo.id)),
+            )
+            .await
+            .unwrap(),
+            StatusCode::NO_CONTENT
+        );
+        assert!(
+            repo::asset::by_origin(&state.db, "https://p/logo.png")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // A copy of a work's character is not another work's to forget.
+        let other = film(&state, "Media List Other Film", &["https://p/other.jpg"]).await;
+        let part = repo::asset::by_origin(&state.db, "https://p/part.png")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            forget(
+                State(state.clone()),
+                Extension(Identity::Anonymous),
+                ClientIp::NONE,
+                Path((other, part.id)),
             )
             .await
             .is_err()
