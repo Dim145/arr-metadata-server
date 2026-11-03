@@ -149,16 +149,19 @@ pub enum Missing {
     Duplicates,
     /// A picture, a photograph or a theme of the work's — its own, its
     /// seasons', its episodes', its cast's, a related work's, its
-    /// characters' and their voices', its companies' logos, its collection's
-    /// — that the media store gave up fetching: what the media page lists as
-    /// failed, found from the works' side, so a poster can be chosen again.
+    /// characters' and their voices' — that the media store gave up
+    /// fetching: what the media page lists as failed, found from the works'
+    /// side, so a poster can be chosen again. Not a company's logo or a
+    /// collection's picture, which many works show: the media page counts
+    /// one given up on once, never as a failure of each of its works.
     MediaFailed,
 }
 
 /// The works one of whose addresses names a media row given up on: each
-/// column a work's rows hold an address in, as the media sweep reads them
-/// (`repo::asset::unknown_origins`). From the failed rows, which are few,
-/// to the works, through the index each column has on its address.
+/// column a work's own rows hold an address in, as the media sweep reads
+/// them (`repo::asset::unknown_origins`) — not the logos and collections
+/// works share. From the failed rows, which are few, to the works, through
+/// the index each column has on its address.
 const MEDIA_FAILED: &str = r"media_item.id IN (
                  SELECT i.media_id FROM media_image i
                    JOIN media_asset a ON a.origin = i.url WHERE a.status = 'failed'
@@ -174,16 +177,7 @@ const MEDIA_FAILED: &str = r"media_item.id IN (
                    JOIN character h ON h.id = l.character_id
                    JOIN media_asset a ON a.origin = h.image WHERE a.status = 'failed'
                  UNION SELECT v.media_id FROM media_character_voice v
-                   JOIN media_asset a ON a.origin = v.image WHERE a.status = 'failed'
-                 UNION SELECT l.media_id FROM media_company l
-                   JOIN company k ON k.id = l.company_id
-                   JOIN media_asset a ON a.origin = k.logo WHERE a.status = 'failed'
-                 UNION SELECT m.id FROM media_item m
-                   JOIN collection s ON s.tmdb_id = m.collection_tmdb_id
-                   JOIN media_asset a ON a.origin = s.poster WHERE a.status = 'failed'
-                 UNION SELECT m.id FROM media_item m
-                   JOIN collection s ON s.tmdb_id = m.collection_tmdb_id
-                   JOIN media_asset a ON a.origin = s.backdrop WHERE a.status = 'failed')";
+                   JOIN media_asset a ON a.origin = v.image WHERE a.status = 'failed')";
 
 /// A work in a pair of duplicates proposed, whose other work the reader may
 /// be shown — of its own still, and not for adults when adult works are

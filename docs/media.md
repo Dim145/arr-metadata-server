@@ -60,7 +60,9 @@ default: nothing is kept until it is asked for.
   the heaviest first, the most kept, or the most given up on, by the switch
   above the table or its column heads — each with how many it keeps, how many
   wait or were given up on, and what those kept weigh with their copies; a
-  picture two works share counts for each, as each one's media list shows it.
+  picture two works share counts for each, as each one's media list shows it —
+  but a company's logo or a collection's picture given up on is no work's
+  failure: the page counts it once, among the media given up on.
   Enter on a row opens the work in the editor. The dashboard names the three
   heaviest. Through the
   API: `GET /api/v1/media/works?sort=space` (or `count`, `failed`), and a
