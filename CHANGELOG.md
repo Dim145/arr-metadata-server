@@ -161,6 +161,10 @@ may change what the API or the configuration means, and says so here.
 - The French interface elides before a name that begins with a vowel:
   « Conditions d’AniList », « Affiche d’Inception », « dans le rôle
   d’Eleven » — no longer « de AniList ».
+- The Access page's switches were named, for a screen reader, "Answer on
+  the TMDB relay API" and « Répondre sur l’API API native »: they are "TMDB
+  relay: answer calls" and « API native : répondre aux appels » now, and the
+  relays' choices say « le relais TMDB » in French.
 
 ## [0.13.0] — 2026-11-02
 
