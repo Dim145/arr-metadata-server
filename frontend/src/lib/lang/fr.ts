@@ -15,6 +15,9 @@ import type { Dict } from './en'
 const agreed = (gender: number | undefined, feminine: string, masculine: string, both: string) =>
   gender === 1 ? feminine : gender === 2 ? masculine : both
 
+/** "de" before a service's name, elided before a vowel: "de TMDB", "d’AniList". */
+const de = (name: string) => (/^[aeiouàâéèêîôû]/i.test(name) ? `d’${name}` : `de ${name}`)
+
 /**
  * The form a count's words take, by French rules, where 0 is singular like
  * 1: "0 œuvre". A word that means exactly one — "un compte" — is asked for
@@ -1283,9 +1286,9 @@ export const fr: Dict = {
         options: { relay: 'Demander au service', 'local-first': 'Le catalogue d’abord' },
         consequence: {
           relay: (service: string) =>
-            `Tout est demandé à ${service}, et les verrous sont écrits dans ses réponses. Une œuvre saisie à la main ici est inconnue des clients de ${service}.`,
+            `Tout est demandé à ${service}, et les verrous sont écrits dans ses réponses. Une œuvre saisie à la main ici est inconnue des clients ${de(service)}.`,
           'local-first': (service: string) =>
-            `Une œuvre que ce serveur détient — corrigée, saisie à la main, ou que ${service} ne connaît pas — reçoit une réponse tirée du catalogue, à la forme de ${service}, sans rien demander à ${service} ni à sa clé ; une recherche liste d’abord les œuvres du catalogue. Le reste est demandé à ${service}, comme avant.`,
+            `Une œuvre que ce serveur détient — corrigée, saisie à la main, ou que ${service} ne connaît pas — reçoit une réponse tirée du catalogue, à la forme ${de(service)}, sans rien demander à ${service} ni à sa clé ; une recherche liste d’abord les œuvres du catalogue. Le reste est demandé à ${service}, comme avant.`,
         },
         answers: {
           tmdb: 'Les films et les séries, leurs saisons et leurs épisodes, une collection dont un film est présent ici, un find par l’un de leurs identifiants, la première page d’une recherche. Où regarder, les critiques et le reste viennent toujours de TMDB, par le relais, quand TMDB connaît l’œuvre.',
