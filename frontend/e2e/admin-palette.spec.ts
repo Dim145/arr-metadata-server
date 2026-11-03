@@ -46,7 +46,16 @@ test.describe('the administration’s palette', () => {
       await page.goto('/admin/catalogue')
       const row = page.locator('tbody tr[data-row]').first()
       await expect(row).toBeVisible()
-      const title = (await row.locator('td[data-column="title"] a').textContent())?.trim() ?? ''
+      // The title alone: the link says the year and the kind after it, and a
+      // short title's first twelve characters would take the year in.
+      const title = await row
+        .locator('td[data-column="title"] a')
+        .evaluate(
+          (link) =>
+            [...link.querySelectorAll('span')]
+              .find((span) => !span.children.length && span.textContent?.trim())
+              ?.textContent?.trim() ?? '',
+        )
       await row.focus()
       await openPalette(page)
       await expect(palette(page)).toBeFocused()

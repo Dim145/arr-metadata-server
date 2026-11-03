@@ -530,9 +530,18 @@ test.describe('settings', () => {
       await given.getByRole('button', { name: /replay|renvoyer/i }).click()
       await expect(log.getByText(/^(replayed|renvoyé)$/i).first()).toBeVisible()
     } finally {
-      // However far it got: the destination goes, with its log.
+      // However far it got: the destination goes, with its log. The list is
+      // read once the page is up, so its row is waited for: counted at once,
+      // it was not there yet, and a destination was left behind each run.
       await page.goto('/admin/notifications')
-      if (await row().count()) {
+      const kept = await row()
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(
+          () => true,
+          () => false,
+        )
+      if (kept) {
         await row().getByRole('button', { name: pattern(`^(delete|supprimer) ${literally(name)}$`, 'i') }).click()
         await page.getByRole('dialog').getByRole('button', { name: /^(delete|supprimer)$/i }).click()
         await expect(row()).toHaveCount(0)
