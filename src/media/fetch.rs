@@ -33,9 +33,8 @@ impl std::fmt::Display for Failure {
     }
 }
 
-/// How each failure begins, as it is written on the row: what an
-/// administrator reads whole, and what [`reason_for_writers`] reads the
-/// kind of trouble from.
+/// How each failure begins, as it is written on the row, for an
+/// administrator to read whole.
 const REFUSED: &str = "not an address this server fetches";
 const REFUSED_NOW: &str = "that address is not reachable from anywhere but this server";
 const UNREACHED: &str = "could not reach the address";
@@ -43,6 +42,15 @@ const ANSWERED_NOTHING: &str = "the address answered nothing";
 const ANSWERED: &str = "the address answered";
 const UNREAD: &str = "could not read the answer";
 const NOT_KEPT: &str = "not kept:";
+
+/// What a writer who is not an administrator is told of any failure, of
+/// whatever kind: that the file could not be fetched, and not why. An
+/// address is whatever a writer types in, and is fetched from inside the
+/// network this server is on: a status, a content type, a connection
+/// refused — and even which of these kinds of trouble it was, however it is
+/// worded — read back for any address one cares to try is a map of whatever
+/// network that address is in.
+pub const FOR_WRITERS: &str = "could not be fetched";
 
 /// Whether an address is one this server would fetch at all: a web address,
 /// not one of its own, not one the guard refuses on sight, and not a kind of
@@ -121,34 +129,6 @@ pub async fn download(state: &AppState, url: &str, kind: Kind) -> Result<Fetched
     })
 }
 
-/// What a writer who is not an administrator is told of a failure: the
-/// kind of trouble, and nothing of what the address answered. A status, a
-/// content type or a connection refused, read back for any address one
-/// cares to type in, is a map of whatever network that address is in.
-pub fn reason_for_writers(error: &str) -> &'static str {
-    const REASONS: &[(&str, &str)] = &[
-        (REFUSED, REFUSED),
-        (REFUSED_NOW, REFUSED),
-        (UNREACHED, "the address could not be reached"),
-        (ANSWERED_NOTHING, ANSWERED_NOTHING),
-        (ANSWERED, "the address answered with an error"),
-        (UNREAD, "the answer could not be read whole"),
-        (NOT_KEPT, "not a picture or a sound this server keeps"),
-        (
-            crate::db::repo::asset::CUT_SHORT,
-            crate::db::repo::asset::CUT_SHORT,
-        ),
-        (
-            crate::db::repo::asset::GIVEN_UP,
-            crate::db::repo::asset::GIVEN_UP,
-        ),
-    ];
-    REASONS
-        .iter()
-        .find(|(start, _)| error.starts_with(start))
-        .map_or("the file could not be kept", |(_, shown)| shown)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,55 +173,5 @@ mod tests {
             "https://image.tmdb.org/t/p/original/a.jpg",
             walled
         ));
-    }
-
-    #[test]
-    fn a_writer_is_told_the_kind_of_trouble_and_nothing_it_answered() {
-        for (written, shown) in [
-            (
-                "could not reach the address: error sending request for url \
-                 (http://192.168.1.7:8080/x.jpg): tcp connect error: Connection refused",
-                "the address could not be reached",
-            ),
-            (
-                "the address answered 401 Unauthorized",
-                "the address answered with an error",
-            ),
-            (
-                "the address answered 404 Not Found",
-                "the address answered with an error",
-            ),
-            (
-                "the address answered nothing",
-                "the address answered nothing",
-            ),
-            (
-                "not kept: text/html is not a picture or a sound this server keeps",
-                "not a picture or a sound this server keeps",
-            ),
-            (
-                "that address is not reachable from anywhere but this server",
-                "not an address this server fetches",
-            ),
-            (
-                "could not read the answer: the answer is larger than 26214400 bytes",
-                "the answer could not be read whole",
-            ),
-            (
-                crate::db::repo::asset::CUT_SHORT,
-                crate::db::repo::asset::CUT_SHORT,
-            ),
-            // Written before the kinds were: nothing of it is repeated.
-            (
-                "text/html is not a picture or a sound this server keeps",
-                "the file could not be kept",
-            ),
-            (
-                "could not store abc.jpg: Generic S3 error: bucket ams-media",
-                "the file could not be kept",
-            ),
-        ] {
-            assert_eq!(reason_for_writers(written), shown, "{written}");
-        }
     }
 }

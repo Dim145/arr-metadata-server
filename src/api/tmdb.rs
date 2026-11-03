@@ -336,9 +336,12 @@ async fn relayed(state: AppState, parts: Parts) -> AppResult<Response> {
         service: relay::Service::Tmdb,
         key: filed_as.clone(),
         path: parts.uri.path().to_string(),
+        // Only a reference list is kept in the database, and only under
+        // what tells it from another there: see `reference_key`.
         reference: filed_as
-            .is_some()
-            .then(|| reference_key(&state, &parts.uri, &parts.headers)),
+            .as_ref()
+            .filter(|_| relay::is_reference(parts.uri.path()))
+            .and_then(|_| reference_key(&state, &parts.uri)),
     };
     let fetched = relay::answer(&state, ask, {
         let (state, parts, asking) = (state.clone(), parts.clone(), asking.clone());
@@ -641,10 +644,20 @@ fn relay_key(state: &AppState, uri: &Uri, headers: &HeaderMap) -> String {
 
 /// What a reference list — TMDB's configuration, its genres, its
 /// certifications — is kept under in the database too ([`relay::Ask`]):
-/// what [`relay_key`] files it under, less the generation, which starts
-/// again with the process; a list kept before a restart is found after it.
-fn reference_key(state: &AppState, uri: &Uri, headers: &HeaderMap) -> String {
-    format!("tmdb:{}", asked_of_tmdb(state, uri, headers))
+/// where TMDB is asked and the word on adult titles this server adds, as
+/// [`relay_key`] files it, then the path and the language and region asked
+/// ([`relay::reference_filing`]) — not the rest of the query, nor the
+/// caller's headers, which would make a row of every spelling a caller
+/// thinks of — and without the generation, which starts again with the
+/// process; a list kept before a restart is found after it. None for a
+/// request the database keeps nothing of.
+fn reference_key(state: &AppState, uri: &Uri) -> Option<String> {
+    relay::reference_filing(uri).map(|filing| {
+        format!(
+            "tmdb:{}:{}:{filing}",
+            state.config.tmdb.upstream, state.config.tmdb.include_adult
+        )
+    })
 }
 
 /// Where TMDB is asked, the word on adult titles this server adds, and
@@ -660,25 +673,13 @@ fn asked_of_tmdb(state: &AppState, uri: &Uri, headers: &HeaderMap) -> String {
 
 /// The path, the query asked — less the parameters this server sets, in a
 /// fixed order ([`relay::sorted_query`]) — and the caller's headers that
-/// travel and may change TMDB's answer, each value escaped so that no value
-/// can pass for another header's.
+/// travel and may change TMDB's answer ([`relay::varies_by`]).
 fn filed_under(uri: &Uri, headers: &HeaderMap) -> String {
-    let varies = VARIES_BY
-        .iter()
-        .map(|name| {
-            let values: Vec<String> = headers
-                .get_all(*name)
-                .iter()
-                .map(|value| url::form_urlencoded::byte_serialize(value.as_bytes()).collect())
-                .collect();
-            format!("{name}={}", values.join(","))
-        })
-        .collect::<Vec<_>>()
-        .join("&");
     format!(
-        "{}?{}#{varies}",
+        "{}?{}#{}",
         uri.path(),
-        relay::sorted_query(uri, OVERRIDDEN_PARAMS)
+        relay::sorted_query(uri, OVERRIDDEN_PARAMS),
+        relay::varies_by(headers, VARIES_BY)
     )
 }
 
@@ -5095,6 +5096,65 @@ mod relayed {
         assert!(stand_in.asked_at("/3/movie/990953").is_empty());
     }
 
+    /// However a list is asked — a parameter of the caller's own, another
+    /// order of its parameters, other headers — it is one row in the
+    /// database, where each spelling used to be a row nothing deleted;
+    /// another language is another row; and a language that is none is
+    /// answered, and filed in the database under none.
+    #[tokio::test]
+    async fn a_reference_list_is_one_row_in_the_database_however_it_is_asked() {
+        let stand_in = StandIn::start(failing).await;
+        let state = testing::server(&stand_in).await;
+        let rows = || async {
+            sqlx::query_scalar::<_, i64>(
+                state
+                    .db
+                    .sql("SELECT COUNT(*) FROM relay_document WHERE relay = ?"),
+            )
+            .bind("tmdb")
+            .fetch_one(state.db.pool())
+            .await
+            .expect("a count")
+        };
+
+        for (asked, headers) in [
+            ("/3/genre/movie/list?language=fr-FR", vec![]),
+            ("/3/genre/movie/list?language=fr-FR&cache_buster=1", vec![]),
+            (
+                "/3/genre/movie/list?cache_buster=2&language=fr-FR&include_adult=true",
+                vec![("accept-language", "de")],
+            ),
+            (
+                "/3/genre/movie/list?language=fr-FR&page=9",
+                vec![("accept", "application/json")],
+            ),
+        ] {
+            let (status, _) = get(&state, asked, &headers).await;
+            assert_eq!(status, StatusCode::OK, "{asked}");
+        }
+        assert_eq!(
+            stand_in.asked_at("/3/genre/movie/list").len(),
+            4,
+            "asked of TMDB as often as it was another request"
+        );
+        assert_eq!(rows().await, 1);
+
+        let (status, _) = get(&state, "/3/genre/movie/list?language=de-DE", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(rows().await, 2, "another language, another row");
+
+        for none in [
+            "/3/genre/movie/list?language=a-language-made-up-for-this",
+            "/3/genre/movie/list?language=a%2Fb",
+            "/3/genre/movie/list?language=",
+            "/3/genre/movie/list?language=fr&language=de",
+        ] {
+            let (status, _) = get(&state, none, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{none}");
+        }
+        assert_eq!(rows().await, 2);
+    }
+
     #[tokio::test]
     async fn a_reference_list_answers_from_the_database_when_the_memory_holds_nothing() {
         use crate::db::repo::relay_document;
@@ -5106,7 +5166,7 @@ mod relayed {
         let (status, genres) = get(&state, asked, &[]).await;
         assert_eq!(status, StatusCode::OK);
         // Kept in the database too, under a key no generation is part of.
-        let filed_as = super::reference_key(&state, &asked.parse().unwrap(), &HeaderMap::new());
+        let filed_as = super::reference_key(&state, &asked.parse().unwrap()).expect("filed");
         assert!(
             relay_document::read(&state.db, "tmdb", &filed_as, &relay_document::cutoff())
                 .await

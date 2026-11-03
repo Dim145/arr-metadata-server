@@ -44,9 +44,26 @@ impl Form {
 /// that it can only be a number in the title.
 const YEARS: std::ops::RangeInclusive<i32> = 1870..=2100;
 
+/// The most characters a term is looked for by: what the list and the search
+/// of the native API take, and what the searches TMDB's, TheTVDB's, Plex's
+/// and Sonarr's clients make are given too, however long the term they send.
+/// A term longer is read by its first characters, folded or not.
+pub const TERM_LENGTH: usize = 200;
+
+/// `text`'s first [`TERM_LENGTH`] characters.
+fn clip(text: &str) -> &str {
+    match text.char_indices().nth(TERM_LENGTH) {
+        Some((at, _)) => &text[..at],
+        None => text,
+    }
+}
+
 impl Term {
     pub fn parse(text: &str) -> Self {
-        let whole = norm(text);
+        // Cut before it is folded, which a text of megabytes is not to cost,
+        // and after, since a character may fold into a dozen.
+        let folded = norm(clip(text));
+        let whole = clip(&folded).trim_end().to_string();
         let dated = whole.rsplit_once(' ').and_then(|(before, last)| {
             let year: i32 = last.parse().ok().filter(|y| YEARS.contains(y))?;
             (last.len() == 4 && !before.is_empty()).then(|| (Form::of(before.to_string()), year))
@@ -280,6 +297,38 @@ mod tests {
         let sequel = score(&term, "blade runner 2049", Some(2017), Some(80.0), true).unwrap();
         let first = score(&term, "blade runner", Some(1982), Some(90.0), true).unwrap();
         assert!(sequel > first, "{sequel} against {first}");
+    }
+
+    /// Whoever sends a term — the interface, TMDB's search, TheTVDB's, Plex,
+    /// Sonarr — it is read by its first two hundred characters, and a text
+    /// of megabytes costs what a long term does.
+    #[test]
+    fn a_term_is_read_by_its_first_two_hundred_characters() {
+        // Under the cap nothing changes.
+        assert_eq!(Term::parse("Dune 2021").whole.norm, "dune 2021");
+        let exact = "a".repeat(TERM_LENGTH);
+        assert_eq!(Term::parse(&exact).whole.norm, exact);
+
+        // One word and a year past the cap: the year is cut with the rest,
+        // and no title is read before it.
+        let long = format!("{exact} 2021");
+        let term = Term::parse(&long);
+        assert_eq!(term.whole.norm, exact);
+        assert!(term.dated.is_none());
+
+        // The cut never leaves a space at the end.
+        let spaced = format!("{} b", "a".repeat(TERM_LENGTH - 1));
+        assert_eq!(Term::parse(&spaced).whole.norm, "a".repeat(TERM_LENGTH - 1));
+
+        // A character that folds into many is cut after it is folded: the
+        // Arabic ligature of a whole invocation is eighteen of them.
+        let ligatures = "\u{FDFA}".repeat(TERM_LENGTH);
+        assert!(Term::parse(&ligatures).whole.norm.chars().count() <= TERM_LENGTH);
+
+        let huge = "ab ".repeat(1_000_000);
+        let term = Term::parse(&huge);
+        assert!(term.whole.norm.chars().count() <= TERM_LENGTH);
+        assert!(!term.is_empty());
     }
 
     #[test]

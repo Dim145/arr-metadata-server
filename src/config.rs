@@ -271,8 +271,11 @@ pub struct Security {
     pub bootstrap_admin: Option<(String, String)>,
     /// Requests per minute per peer on the native API. `0` disables the limiter.
     pub rate_limit_per_minute: u32,
-    /// Failed sign-ins an account takes in fifteen minutes before it is
-    /// refused without being checked. `0` never refuses.
+    /// Failed sign-ins an account takes from one address in fifteen minutes
+    /// (an IPv6 /64 counts as one) before that address is refused without
+    /// being checked; five times as many from every address together, which
+    /// does not apply to an address the account signed in from in the last
+    /// thirty days. `0` never refuses.
     pub sign_in_failures_per_account: u32,
     /// Days of audit history to keep. `0` keeps everything.
     pub audit_retention_days: u32,

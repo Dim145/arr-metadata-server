@@ -8,6 +8,13 @@
 //! e-mail address: an address a person typed into their own profile proves
 //! nothing, and tying on it would hand one person's account to another.
 //!
+//! Nor by a session alone. A session left open, or taken, is not the person:
+//! a tie it made would outlive the password that is then reset, and sign
+//! somebody else in to the account for good. So a tie is asked for with
+//! `POST /account/provider`, which wants the account's password — or, for an
+//! account with none, has the provider sign the person in again — and the
+//! journal says who tied and who untied.
+//!
 //! The answer is a page rather than a redirect: the session cookie is
 //! SameSite=Strict, and a cookie set at the end of a chain of redirects that
 //! began at another site is not sent with the next request of that chain. A
@@ -28,10 +35,11 @@ use crate::{
     api::{
         audit::{self, Event},
         extract::ClientIp,
-        native::{auth, users},
+        native::{account, auth, users},
     },
     auth::{
-        Identity, middleware,
+        Identity,
+        middleware::CurrentSession,
         oidc::{self, Flow, Refusal, Vouched},
     },
     db::repo::{
@@ -56,12 +64,13 @@ pub fn public_router() -> OpenApiRouter<AppState> {
         .routes(routes!(callback))
 }
 
-/// An administrator's.
+/// An administrator's — and what a person does with their own tie.
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(configuration, configure))
         .routes(routes!(test))
         .routes(routes!(unlink))
+        .routes(routes!(tie, untie))
 }
 
 /// Whether the flow's cookies may be `Secure` (and its own, `__Host-`): the
@@ -78,12 +87,13 @@ fn secure(state: &AppState, headers: &HeaderMap, peer: &auth::Peer) -> bool {
 pub struct StartQuery {
     /// The page of this site to come back to.
     pub next: Option<String>,
-    /// Set by a signed-in person tying their account to the provider.
+    /// Refused: a tie is asked for from the account page, with
+    /// `POST /account/provider`, which proves it by the account's password.
     pub link: Option<String>,
 }
 
-/// Go to the identity provider to sign in — or, with `link`, to tie the
-/// signed-in account to the person the provider knows.
+/// Go to the identity provider to sign in. Tying an account to the person the
+/// provider knows is asked for with `POST /account/provider`.
 #[utoipa::path(
     get, path = "/auth/oidc/start", tag = auth::TAG,
     operation_id = "oidc_start",
@@ -116,23 +126,29 @@ async fn begin(
 ) -> Result<(PrivateCookieJar, String), Failure> {
     let provider = state.oidc_provider().ok_or(Failure::Unavailable)?;
 
-    // Tying needs the person to be signed in already, here: the session
-    // cookie is Strict, so another site cannot start this in their name.
-    let link = match query.link.as_deref().filter(|l| !l.is_empty()) {
-        None => None,
-        Some(_) => Some(
-            middleware::session_user(state, headers)
-                .await
-                .map_err(internal)?
-                .ok_or(Failure::SignInFirst)?
-                .id,
-        ),
-    };
+    // Tying is not asked for here: a link that carries a session and no proof
+    // — the password, or the provider's own word that the person signed in
+    // again — would tie whoever holds the session, and the tie would outlive
+    // the password. The account page asks for it with the proof.
+    if query.link.as_deref().is_some_and(|l| !l.is_empty()) {
+        return Err(Failure::SignInFirst);
+    }
 
-    let started = oidc::start(&provider, safe_next(query.next.as_deref()), link)
+    let started = oidc::start(&provider, safe_next(query.next.as_deref()), None, false)
         .await
         .map_err(|e| Failure::Provider(format!("{e:#}")))?;
 
+    let jar = sealed(state, headers, peer, &started)?;
+    Ok((jar, started.url))
+}
+
+/// The flow, sealed into the cookie that carries it to the provider and back.
+fn sealed(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &auth::Peer,
+    started: &oidc::Started,
+) -> Result<PrivateCookieJar, Failure> {
     let secure = secure(state, headers, peer);
     let value = serde_json::to_string(&started.flow).map_err(internal)?;
     let cookie = Cookie::build((oidc::cookie_name(&started.state, secure), value))
@@ -147,10 +163,7 @@ async fn begin(
     // the sign-in could not complete at all.
     let cookie = if secure { cookie.secure(true) } else { cookie }.build();
 
-    Ok((
-        PrivateCookieJar::new(state.cookie_key.clone()).add(cookie),
-        started.url,
-    ))
+    Ok(PrivateCookieJar::new(state.cookie_key.clone()).add(cookie))
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -201,6 +214,12 @@ async fn callback(
         None => jar,
     };
 
+    // Worth a row in the journal only when a sign-in was started here — the
+    // return carries the flow this server sealed — and a provider is set up
+    // to answer it. Anybody can send this request with nothing at all, and a
+    // row for each would be the journal's to hold for ninety days.
+    let started_here = flow.is_some() && state.oidc_provider().is_some();
+
     match complete(&state, &ip, &headers, secure, query, flow).await {
         Ok((session, next)) => (
             jar,
@@ -211,23 +230,28 @@ async fn callback(
             onward(&next),
         )
             .into_response(),
+        Err(failure) if !started_here => {
+            tracing::debug!(
+                reason = failure.code(),
+                "a return from the identity provider that was not started here was refused"
+            );
+            to_login(failure.code(), Some(jar))
+        }
         Err(failure) => {
             tracing::info!(reason = failure.code(), detail = %failure, "a sign-in through the identity provider was refused");
-            audit::record(
+            // The word, and what the provider or the check said: what an
+            // administrator reading the journal needs. A run from one network
+            // is one row at once and one that counts the rest.
+            audit::record_failure(
                 &state,
-                Event {
-                    identity: None,
-                    ip: &ip,
-                    action: Action::SignInFailed,
-                    target: Some("identity provider"),
-                    // The word, and what the provider or the check said:
-                    // what an administrator reading the journal needs.
-                    detail: Some(&format!(
-                        "{}: {}",
-                        failure.code(),
-                        clean(&failure.to_string(), 200)
-                    )),
-                },
+                audit::Failure::Provider,
+                &ip,
+                Some("identity provider"),
+                Some(&format!(
+                    "{}: {}",
+                    failure.code(),
+                    clean(&failure.to_string(), 200)
+                )),
             )
             .await;
 
@@ -368,6 +392,19 @@ async fn account_for(state: &AppState, ip: &ClientIp, vouched: &Vouched) -> Resu
             .await
             .map_err(internal)?
             .ok_or(Failure::NoAccount)?;
+        // What the tie was asked for with — the password, or the provider's
+        // word — was the account's as it stood when the flow began. One that
+        // has changed since, a password reset above all, is not tied by a
+        // flow begun before: whoever began it may be the one the reset was
+        // for, finishing at the provider what would outlive it.
+        if owner
+            .updated_at
+            .as_deref()
+            .and_then(crate::db::parse_rfc3339)
+            .is_some_and(|changed| changed.timestamp() > vouched.began)
+        {
+            return Err(Failure::Expired);
+        }
         match &known {
             Some(other) if other.id != owner.id => return Err(Failure::LinkedElsewhere),
             Some(_) => {}
@@ -379,14 +416,23 @@ async fn account_for(state: &AppState, ip: &ClientIp, vouched: &Vouched) -> Resu
                     .await
                     .map_err(internal)?;
                 state.caches.forget_sessions();
+                // By its owner, who showed it was them — by the password, or
+                // by signing in at the provider again — before they were sent
+                // there: the journal names them, as it names whoever untied.
+                let by = Identity::User(Box::new(owner.clone()));
                 record(
                     state,
                     ip,
-                    None,
+                    Some(&by),
                     Action::UserLinked,
                     &owner.username,
                     &format!(
-                        "at its owner's request · {} · {}",
+                        "by its owner, {} · {} · {}",
+                        if vouched.fresh {
+                            "who signed in at the provider again"
+                        } else {
+                            "who gave their password"
+                        },
                         clean(&vouched.issuer, 120),
                         clean(&vouched.subject, 80)
                     ),
@@ -785,6 +831,8 @@ async fn configure(
             }
             _ => return Err(AppError::BadRequest("the issuer is an https URL".into())),
         }
+        oidc::reachable(&parsed)
+            .map_err(|why| AppError::BadRequest(format!("this server will not ask for {why}")))?;
     }
 
     // Passwords off: only with a provider that is set up and answers, and
@@ -978,6 +1026,176 @@ async fn unlink(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ─── what a person does with their own tie ───────────────────────────────────
+
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TieRequest {
+    /// The account's current password: the proof, from an account that has
+    /// one, that its owner is asking and not a session left open. An account
+    /// with none leaves it out, and is sent to sign in at the provider again
+    /// instead.
+    pub current_password: Option<String>,
+    /// The page of this site to come back to.
+    pub next: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TieStarted {
+    /// Where to send the browser: the identity provider's sign-in. The
+    /// cookie that carries the flow back is set with this answer.
+    pub url: String,
+}
+
+/// Tie your account to the person the identity provider knows, so that you
+/// can sign in through it as well.
+///
+/// A session is not proof enough: one left open, or taken, would tie whoever
+/// holds it, and the tie would outlive the password the account's owner then
+/// resets. So the account's current password is asked for — or, for an account
+/// with none, the provider is asked to have you sign in again, and its answer
+/// must say you did. The answer is the provider's address to send the browser
+/// to; the tie is made when the browser comes back from it.
+#[utoipa::path(
+    post, path = "/account/provider", tag = account::TAG,
+    operation_id = "oidc_tie",
+    request_body = TieRequest,
+    responses(
+        (status = 200, description = "Where to send the browser; the cookie of the flow is set", body = TieStarted),
+        (status = 400, description = "The password was left out, or is too long"),
+        (status = 401, description = "The password was wrong"),
+        (status = 403, description = "A key cannot manage an account"),
+        (status = 409, description = "The account is tied already, or no provider is set up"),
+        (status = 429, description = "Too many wrong passwords lately"),
+        (status = 502, description = "The provider did not answer"),
+    ),
+)]
+async fn tie(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ip: ClientIp,
+    peer: auth::Peer,
+    headers: HeaderMap,
+    Json(request): Json<TieRequest>,
+) -> AppResult<(PrivateCookieJar, Json<TieStarted>)> {
+    let me = identity.require_user()?;
+
+    let provider = state.oidc_provider().ok_or_else(|| {
+        AppError::Conflict("signing in through an identity provider is not set up here".into())
+    })?;
+    if me.oidc_linked {
+        return Err(AppError::Conflict(
+            "this account is tied to the identity provider already".into(),
+        ));
+    }
+
+    // Proof that its owner is asking: the password, counted and checked as a
+    // sign-in is; or, for an account that has none, the provider's word that
+    // the person signed in again.
+    let fresh = if me.has_password {
+        let typed = request
+            .current_password
+            .as_deref()
+            .filter(|typed| !typed.is_empty())
+            .ok_or_else(|| {
+                AppError::BadRequest("your current password is needed to tie this account".into())
+            })?;
+        if typed.len() > auth::MAX_CREDENTIAL {
+            return Err(AppError::BadRequest("that password is too long".into()));
+        }
+        let creds = repo::user::credentials(&state.db, &me.id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        auth::prove_password(&state, me, creds.password_hash, typed, &ip).await?;
+        false
+    } else {
+        true
+    };
+
+    let started = oidc::start(
+        &provider,
+        safe_next(request.next.as_deref()),
+        Some(me.id.clone()),
+        fresh,
+    )
+    .await
+    .map_err(AppError::UpstreamUnavailable)?;
+    let jar = sealed(&state, &headers, &peer, &started)
+        .map_err(|failure| AppError::Internal(anyhow::anyhow!("{failure}")))?;
+
+    Ok((jar, Json(TieStarted { url: started.url })))
+}
+
+/// Whether an account would still be let in with its tie undone: by a
+/// password, which this server asks for — passwords are not switched off, or
+/// the account is the one the environment names, which keeps its door.
+fn keeps_a_way_in(state: &AppState, user: &User) -> bool {
+    user.has_password
+        && (state.password_login()
+            || (state.is_break_glass_name(&user.username)
+                && user.role == Role::Admin
+                && user.status == Status::Active))
+}
+
+/// Untie your account from the identity provider. Not one that would be left
+/// with no way in: a password of its own, which this server asks for, comes
+/// first. Your other sessions are closed — one of them may have been opened
+/// through the tie.
+#[utoipa::path(
+    delete, path = "/account/provider", tag = account::TAG,
+    operation_id = "oidc_untie",
+    responses(
+        (status = 204, description = "Untied; the other sessions are closed"),
+        (status = 403, description = "A key cannot manage an account"),
+        (status = 409, description = "The account is not tied, or would be left with no way in"),
+    ),
+)]
+async fn untie(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    current: Option<Extension<CurrentSession>>,
+    ip: ClientIp,
+) -> AppResult<StatusCode> {
+    let me = identity.require_user()?;
+    let keep = current
+        .map(|Extension(CurrentSession(id))| id)
+        .unwrap_or_default();
+
+    let _held = state.accounts_lock().await;
+    let user = repo::user::get(&state.db, &me.id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if !user.oidc_linked {
+        return Err(AppError::Conflict(
+            "this account is not tied to an identity provider".into(),
+        ));
+    }
+    if !keeps_a_way_in(&state, &user) {
+        return Err(AppError::Conflict(
+            "untied, this account could not sign in again: it needs a password of its own, and \
+             passwords switched on here"
+                .into(),
+        ));
+    }
+
+    state.caches.forget_sessions();
+    repo::user::unlink_oidc(&state.db, &user.id).await?;
+    let closed = repo::user::delete_other_sessions(&state.db, &user.id, &keep).await?;
+    state.caches.forget_sessions();
+    record(
+        &state,
+        &ip,
+        Some(&identity),
+        Action::UserUnlinked,
+        &user.username,
+        &format!("by its owner · {closed} other sessions closed"),
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1010,5 +1228,573 @@ mod tests {
             "access_deniedforged line"
         );
         assert_eq!(clean(&"x".repeat(500), 80).len(), 80);
+    }
+
+    // ─── a person's own tie, and what a return from the provider leaves ──────
+
+    use std::{collections::HashMap, sync::Arc};
+
+    use crate::{
+        arr::client::tests::stand_in,
+        auth::{
+            secrets,
+            testing::{client_at, server},
+        },
+        settings::Scope,
+    };
+
+    async fn account(
+        state: &AppState,
+        name: &str,
+        password_hash: &str,
+        oidc: Option<&str>,
+        role: Role,
+    ) -> User {
+        repo::user::create(
+            &state.db,
+            repo::user::NewUser {
+                username: name,
+                password_hash,
+                role,
+                status: Status::Active,
+                display_name: None,
+                email: None,
+                invited_by: None,
+                oidc: oidc.map(|subject| ("https://idp.example", subject)),
+            },
+        )
+        .await
+        .expect("an account")
+    }
+
+    fn as_user(user: &User) -> Extension<Identity> {
+        Extension(Identity::User(Box::new(user.clone())))
+    }
+
+    async fn provider_at(state: &AppState, issuer: &str) {
+        for (key, value) in [
+            ("oidc.enabled", "true"),
+            ("oidc.issuer", issuer),
+            ("oidc.clientId", "client"),
+        ] {
+            state
+                .settings
+                .set(Scope::Server, "", key, value, None)
+                .await
+                .unwrap_or_else(|e| panic!("{key}: {e:?}"));
+        }
+    }
+
+    /// A provider small enough to read, on loopback: its discovery document,
+    /// and a key set with no key in it. Its address.
+    async fn stand_in_provider() -> String {
+        let at = Arc::new(std::sync::OnceLock::<String>::new());
+        let known = Arc::clone(&at);
+        let (address, _seen) = stand_in(Arc::new(move |request| {
+            let at = known.get().expect("known by the first request");
+            match request.target.as_str() {
+                "/.well-known/openid-configuration" => (
+                    200,
+                    serde_json::json!({
+                        "issuer": at,
+                        "authorization_endpoint": format!("{at}/authorize"),
+                        "token_endpoint": format!("{at}/token"),
+                        "jwks_uri": format!("{at}/keys"),
+                        "response_types_supported": ["code"],
+                        "subject_types_supported": ["public"],
+                        "id_token_signing_alg_values_supported": ["RS256"],
+                    })
+                    .to_string(),
+                ),
+                "/keys" => (200, r#"{"keys":[]}"#.to_string()),
+                _ => (404, "{}".to_string()),
+            }
+        }))
+        .await;
+        at.set(address.clone()).unwrap();
+        address
+    }
+
+    async fn journal(state: &AppState, action: Action) -> Vec<repo::audit::Entry> {
+        repo::audit::list(
+            &state.db,
+            &repo::audit::Query {
+                action: Some(action.as_str().into()),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    fn password() -> String {
+        secrets::generate_session_token().unwrap().0
+    }
+
+    /// A session is not the password. Tying asks for it, and starts nothing
+    /// without; with it, the provider's address and a cookie that carries
+    /// the flow home, naming the account.
+    #[tokio::test]
+    async fn an_account_with_a_password_is_tied_only_by_whoever_gives_it() {
+        let state = server(10).await;
+        let provider = stand_in_provider().await;
+        provider_at(&state, &provider).await;
+        let right = password();
+        let alice = account(
+            &state,
+            "alice",
+            &secrets::hash_password(&right).unwrap(),
+            None,
+            Role::Member,
+        )
+        .await;
+        let ip = client_at(&state, "203.0.113.7").await;
+        let ask = |typed: Option<&str>| {
+            tie(
+                State(state.clone()),
+                as_user(&alice),
+                ip,
+                None,
+                HeaderMap::new(),
+                Json(TieRequest {
+                    current_password: typed.map(str::to_string),
+                    next: Some("/account".into()),
+                }),
+            )
+        };
+
+        assert!(matches!(ask(None).await, Err(AppError::BadRequest(_))));
+        assert!(matches!(ask(Some("")).await, Err(AppError::BadRequest(_))));
+        assert!(matches!(
+            ask(Some(&password())).await,
+            Err(AppError::Unauthorized)
+        ));
+
+        let (jar, Json(started)) = ask(Some(&right)).await.expect("started");
+        assert!(
+            started.url.starts_with(&format!("{provider}/authorize?")),
+            "{}",
+            started.url
+        );
+        let query: HashMap<String, String> = url::Url::parse(&started.url)
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+        assert!(!query.contains_key("prompt") && !query.contains_key("max_age"));
+        let flow = jar
+            .get(&oidc::cookie_name(&query["state"], false))
+            .expect("the flow's cookie");
+        let flow: serde_json::Value = serde_json::from_str(flow.value()).unwrap();
+        assert_eq!(flow["link"], alice.id);
+        assert_eq!(flow["fresh"], false);
+        assert_eq!(flow["next"], "/account");
+    }
+
+    /// An account with no password to give has the provider sign its person
+    /// in again, whatever session it holds, and says so in the flow, so that
+    /// the return is held to it.
+    #[tokio::test]
+    async fn an_account_with_no_password_has_the_provider_sign_its_person_in_again() {
+        let state = server(10).await;
+        let provider = stand_in_provider().await;
+        provider_at(&state, &provider).await;
+        let carol = account(&state, "carol", repo::user::NO_PASSWORD, None, Role::Member).await;
+        let ip = client_at(&state, "203.0.113.8").await;
+
+        let (jar, Json(started)) = tie(
+            State(state.clone()),
+            as_user(&carol),
+            ip,
+            None,
+            HeaderMap::new(),
+            Json(TieRequest {
+                current_password: None,
+                next: None,
+            }),
+        )
+        .await
+        .expect("started");
+        let query: HashMap<String, String> = url::Url::parse(&started.url)
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+        assert_eq!(query["prompt"], "login");
+        assert_eq!(query["max_age"], "0");
+        let flow = jar
+            .get(&oidc::cookie_name(&query["state"], false))
+            .expect("the flow's cookie");
+        let flow: serde_json::Value = serde_json::from_str(flow.value()).unwrap();
+        assert_eq!(flow["fresh"], true);
+        assert_eq!(flow["link"], carol.id);
+    }
+
+    #[tokio::test]
+    async fn tying_is_refused_without_a_provider_to_a_tied_account_and_to_a_key() {
+        let state = server(10).await;
+        let alice = account(&state, "alice", "x", None, Role::Member).await;
+        let ip = client_at(&state, "203.0.113.7").await;
+        let ask = |who: Identity| {
+            tie(
+                State(state.clone()),
+                Extension(who),
+                ip,
+                None,
+                HeaderMap::new(),
+                Json(TieRequest {
+                    current_password: Some(password()),
+                    next: None,
+                }),
+            )
+        };
+
+        // No provider is set up.
+        assert!(matches!(
+            ask(Identity::User(Box::new(alice.clone()))).await,
+            Err(AppError::Conflict(_))
+        ));
+
+        let provider = stand_in_provider().await;
+        provider_at(&state, &provider).await;
+        // One already tied.
+        let tied = account(&state, "tied", "x", Some("sub-tied"), Role::Member).await;
+        assert!(matches!(
+            ask(Identity::User(Box::new(tied))).await,
+            Err(AppError::Conflict(_))
+        ));
+        // A key cannot manage an account.
+        assert!(matches!(
+            ask(Identity::Anonymous).await,
+            Err(AppError::Forbidden)
+        ));
+    }
+
+    /// A tie is its owner's doing, and the journal says so — and how they
+    /// showed it was them.
+    #[tokio::test]
+    async fn a_tie_is_journalled_as_its_owners_doing() {
+        let state = server(10).await;
+        let alice = account(&state, "alice", "x", None, Role::Member).await;
+        let vouched = |fresh: bool, subject: &str| Vouched {
+            issuer: "https://idp.example".into(),
+            subject: subject.into(),
+            email: None,
+            email_verified: false,
+            preferred_username: None,
+            name: None,
+            role: None,
+            next: "/".into(),
+            link: Some(alice.id.clone()),
+            fresh,
+            began: chrono::Utc::now().timestamp(),
+        };
+
+        let tied = account_for(&state, &ClientIp::NONE, &vouched(false, "sub-alice"))
+            .await
+            .expect("tied");
+        assert!(tied.oidc_linked);
+
+        let rows = journal(&state, Action::UserLinked).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].actor.as_deref(), Some("member:alice"));
+        assert_eq!(rows[0].target.as_deref(), Some("alice"));
+        let said = rows[0].detail.as_deref().unwrap_or_default();
+        assert!(said.contains("who gave their password"), "{said}");
+        assert!(said.contains("sub-alice"), "{said}");
+
+        // Another's tie is refused, and tied once more nowhere.
+        let bob = account(&state, "bob", repo::user::NO_PASSWORD, None, Role::Member).await;
+        let mut elsewhere = vouched(true, "sub-alice");
+        elsewhere.link = Some(bob.id.clone());
+        assert!(matches!(
+            account_for(&state, &ClientIp::NONE, &elsewhere).await,
+            Err(Failure::LinkedElsewhere)
+        ));
+        let mut again = vouched(true, "sub-bob");
+        again.link = Some(bob.id.clone());
+        account_for(&state, &ClientIp::NONE, &again)
+            .await
+            .expect("tied");
+        let rows = journal(&state, Action::UserLinked).await;
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows[0]
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("who signed in at the provider again")),
+            "{:?}",
+            rows[0].detail
+        );
+    }
+
+    /// A flow begun before the account was changed — a password reset above
+    /// all — ties nothing: whoever began it may be who the reset was for.
+    #[tokio::test]
+    async fn a_flow_begun_before_the_account_changed_does_not_tie_it() {
+        let state = server(10).await;
+        let alice = account(&state, "alice", "x", None, Role::Member).await;
+        let began = chrono::Utc::now().timestamp();
+        // The reset, a few seconds after the flow began.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        repo::user::set_password(&state.db, &alice.id, "y")
+            .await
+            .unwrap();
+
+        let vouched = Vouched {
+            issuer: "https://idp.example".into(),
+            subject: "sub-attacker".into(),
+            email: None,
+            email_verified: false,
+            preferred_username: None,
+            name: None,
+            role: None,
+            next: "/".into(),
+            link: Some(alice.id.clone()),
+            fresh: false,
+            began,
+        };
+        assert!(matches!(
+            account_for(&state, &ClientIp::NONE, &vouched).await,
+            Err(Failure::Expired)
+        ));
+        let after = repo::user::get(&state.db, &alice.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!after.oidc_linked);
+        assert!(journal(&state, Action::UserLinked).await.is_empty());
+
+        // One begun after is let through.
+        let later = Vouched {
+            began: chrono::Utc::now().timestamp(),
+            ..vouched
+        };
+        account_for(&state, &ClientIp::NONE, &later)
+            .await
+            .expect("tied");
+    }
+
+    /// Untied by its owner, who keeps a password to sign in with: the other
+    /// sessions go, this one stays, and the journal names the owner.
+    #[tokio::test]
+    async fn an_owner_unties_their_account_while_a_password_keeps_them_in() {
+        let state = server(10).await;
+        let alice = account(&state, "alice", "x", Some("sub-alice"), Role::Member).await;
+        for id in ["this-session", "another-session"] {
+            repo::user::create_session(
+                &state.db,
+                id,
+                &alice.id,
+                chrono::Duration::hours(1),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let untied = untie(
+            State(state.clone()),
+            as_user(&alice),
+            Some(Extension(CurrentSession("this-session".into()))),
+            ClientIp::NONE,
+        )
+        .await
+        .expect("untied");
+        assert_eq!(untied, StatusCode::NO_CONTENT);
+
+        let after = repo::user::get(&state.db, &alice.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!after.oidc_linked && after.has_password);
+        let kept = repo::user::list_sessions(&state.db, &alice.id, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            kept.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["this-session"]
+        );
+        let rows = journal(&state, Action::UserUnlinked).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].actor.as_deref(), Some("member:alice"));
+
+        // Not tied any more: nothing to untie.
+        assert!(matches!(
+            untie(State(state.clone()), as_user(&after), None, ClientIp::NONE).await,
+            Err(AppError::Conflict(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_account_is_not_untied_to_be_left_with_no_way_in() {
+        let state = server(10).await;
+        let none = account(
+            &state,
+            "none",
+            repo::user::NO_PASSWORD,
+            Some("sub-n"),
+            Role::Member,
+        )
+        .await;
+        let one = account(&state, "one", "x", Some("sub-o"), Role::Member).await;
+        let untie_as = |who: &User| untie(State(state.clone()), as_user(who), None, ClientIp::NONE);
+
+        // No password of its own.
+        assert!(matches!(untie_as(&none).await, Err(AppError::Conflict(_))));
+
+        // A password that this server does not ask for is none to keep:
+        // passwords are off once a provider is there to sign people in.
+        provider_at(&state, "http://127.0.0.1:9").await;
+        state
+            .settings
+            .set(Scope::Server, "", "auth.passwordLogin", "false", None)
+            .await
+            .unwrap();
+        assert!(matches!(untie_as(&one).await, Err(AppError::Conflict(_))));
+        let still = repo::user::get(&state.db, &one.id).await.unwrap().unwrap();
+        assert!(still.oidc_linked);
+        assert!(journal(&state, Action::UserUnlinked).await.is_empty());
+    }
+
+    /// The Location a response sends the browser to.
+    fn location(answer: &Response) -> &str {
+        answer.headers()[header::LOCATION].to_str().unwrap()
+    }
+
+    /// Anybody can send a return from the provider with nothing at all. A row
+    /// of the journal is for a sign-in that was started here — and for a run
+    /// of those, one row at once and one that counts the rest.
+    #[tokio::test]
+    async fn a_return_nobody_started_here_is_no_row_of_the_journal() {
+        let state = server(10).await;
+        let ip = client_at(&state, "192.0.2.201").await;
+        let come_back = |headers: HeaderMap, query: CallbackQuery| {
+            callback(State(state.clone()), ip, None, headers, Query(query))
+        };
+        let stray = || CallbackQuery {
+            code: Some("code".into()),
+            state: Some("state".into()),
+            error: None,
+        };
+
+        // No provider is set up: not told to anybody.
+        let answer = come_back(HeaderMap::new(), stray()).await;
+        assert_eq!(location(&answer), "/login?sso=unavailable");
+
+        // One is, and this return carries no flow it was started with.
+        provider_at(&state, "http://127.0.0.1:9").await;
+        let answer = come_back(HeaderMap::new(), stray()).await;
+        assert_eq!(location(&answer), "/login?sso=expired");
+        assert!(journal(&state, Action::SignInFailed).await.is_empty());
+
+        // One that carries its flow, refused by the provider, is.
+        let flow: Flow = serde_json::from_value(serde_json::json!({
+            "state": "the-state", "nonce": "n", "verifier": "v", "next": "/",
+            "at": chrono::Utc::now().timestamp(), "link": null, "fresh": false,
+        }))
+        .unwrap();
+        let sealed = PrivateCookieJar::new(state.cookie_key.clone()).add(
+            Cookie::build((
+                oidc::cookie_name("the-state", false),
+                serde_json::to_string(&flow).unwrap(),
+            ))
+            .path(FLOW_PATH),
+        );
+        let set = (sealed, ()).into_response();
+        let carried = set.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+        for _ in 0..5 {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::COOKIE, carried.parse().unwrap());
+            let answer = come_back(
+                headers,
+                CallbackQuery {
+                    code: None,
+                    state: Some("the-state".into()),
+                    error: Some("access_denied".into()),
+                },
+            )
+            .await;
+            assert_eq!(location(&answer), "/login?sso=denied");
+        }
+        // Five of them from one address: one row now, and the rest held.
+        let rows = journal(&state, Action::SignInFailed).await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].target.as_deref(), Some("identity provider"));
+        assert!(
+            rows[0]
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.starts_with("denied:")),
+            "{:?}",
+            rows[0].detail
+        );
+    }
+
+    /// An issuer at an address no provider is at is refused where it is
+    /// saved and where it is tried, before anything is sent to it.
+    #[tokio::test]
+    async fn an_issuer_at_a_metadata_address_is_refused_when_saved_and_when_tried() {
+        let state = server(10).await;
+        let admin = account(&state, "root", "x", None, Role::Admin).await;
+        let nothing = || OidcUpdate {
+            enabled: None,
+            issuer: None,
+            client_id: None,
+            client_secret: None,
+            scopes: None,
+            button_label: None,
+            auto_register: None,
+            role_claim: None,
+            admin_values: None,
+            editor_values: None,
+            password_login: None,
+        };
+
+        let Err(refused) = configure(
+            State(state.clone()),
+            as_user(&admin),
+            ClientIp::NONE,
+            Json(OidcUpdate {
+                issuer: Some("https://169.254.169.254/".into()),
+                ..nothing()
+            }),
+        )
+        .await
+        else {
+            panic!("an issuer at a metadata address was accepted");
+        };
+        assert!(
+            matches!(&refused, AppError::BadRequest(why) if why.contains("169.254.169.254")),
+            "{refused:?}"
+        );
+        assert!(
+            state
+                .settings
+                .resolve("oidc.issuer", None, None)
+                .unwrap_or_default()
+                .is_empty()
+        );
+
+        let Json(tried) = test(
+            State(state.clone()),
+            as_user(&admin),
+            Json(TestRequest {
+                issuer: Some("https://169.254.169.254/".into()),
+            }),
+        )
+        .await
+        .expect("an answer");
+        assert!(!tried.ok);
+        let said = tried.error.unwrap_or_default();
+        assert!(said.contains("no identity provider is at"), "{said}");
     }
 }

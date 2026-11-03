@@ -13,6 +13,11 @@
 //! credential would be let in at all. A work's page carries what a search
 //! engine reads of it too, as schema.org describes a film or a series — only
 //! where the site is public, the one case a search engine is meant to read it.
+//!
+//! Finding what a preview says is the database's work, which anybody may ask
+//! for as often as they like: it is kept a few seconds, and what is not kept
+//! is counted against the caller's allowance as the API's requests are, a
+//! caller who has spent it getting the page without ([`shell`]).
 
 use axum::{
     Router,
@@ -84,13 +89,69 @@ async fn serve(State(state): State<AppState>, request: Request) -> Response {
     let Some(file) = Assets::get("index.html") else {
         return not_found();
     };
-    let mut html = String::from_utf8_lossy(&file.data).into_owned();
-    if let Some(preview) = preview(&state, path).await {
-        html = preview.apply(&html, state.config.server.public_url.as_deref(), path);
-    } else if let Some(public) = state.config.server.public_url.as_deref() {
-        html = absolute_site_image(&html, public);
+    let html = String::from_utf8_lossy(&file.data).into_owned();
+    let peer = crate::auth::ratelimit::peer_of(&state, &request);
+    page(shell(&state, path, peer, &html).await)
+}
+
+/// The longest path a rendered preview is kept under: a path that may have
+/// one is a few dozen characters, and what follows a work's id is a stranger's
+/// to write.
+const KEPT_PATH: usize = 256;
+
+/// The page for a route: the app's own, with the preview of what the route
+/// shows in its head where there is one.
+///
+/// Looking a preview up is the database's work — a work, a list, a genre's
+/// count — which anybody may ask for as often as they like, one address after
+/// another. So a preview rendered lately is kept a few seconds, under the path
+/// and the catalogue's mark; one that is not kept is looked up on the
+/// caller's account, as the API's requests are counted
+/// ([`crate::auth::ratelimit::spend`]); and a caller whose allowance is spent
+/// is given the page without one, as a path that has none is. `peer` is the
+/// caller, as the limiter counts callers ([`crate::auth::ratelimit::peer_of`]).
+async fn shell(state: &AppState, path: &str, peer: std::net::IpAddr, html: &str) -> String {
+    let public = state.config.server.public_url.as_deref();
+    let plain = || match public {
+        Some(public) => absolute_site_image(html, public),
+        None => html.to_string(),
+    };
+
+    let Some(subject) = subject_of(path) else {
+        return plain();
+    };
+    if !open_to_readers(state) {
+        return plain();
     }
-    page(html)
+    let Ok(mark) = state.caches.catalogue_stamp(&state.db).await else {
+        return plain();
+    };
+    let key = format!("{}\n{mark}\n{path}", state.caches.stamp());
+    let kept = path.len() <= KEPT_PATH;
+    if kept && let Some(page) = state.caches.previews.get(&key).await {
+        return page.to_string();
+    }
+
+    if crate::auth::ratelimit::spend(state, peer, path)
+        .await
+        .is_err()
+    {
+        return plain();
+    }
+    let Some(preview) = preview(state, subject).await else {
+        return plain();
+    };
+    let page = preview.apply(html, public, path);
+    // Only what was found is kept: a path that names nothing is looked up
+    // again, on its caller's account, and is never the key of anything.
+    if kept {
+        state
+            .caches
+            .previews
+            .insert(key, std::sync::Arc::from(page.as_str()))
+            .await;
+    }
+    page
 }
 
 fn asset(path: &str) -> Option<Response> {
@@ -241,32 +302,48 @@ fn open_to_readers(state: &AppState) -> bool {
     }
 }
 
-/// The preview a path deserves: a work's, a list's, a page's, or none. The
-/// shape of the id or slug is checked before anything is looked up, so a
-/// stranger walking random addresses is answered from the page alone.
-async fn preview(state: &AppState, path: &str) -> Option<Preview> {
-    if !open_to_readers(state) {
-        return None;
-    }
+/// What a path's preview would be of, once the shape of its id or slug says
+/// it can have one at all.
+#[derive(Debug, PartialEq, Eq)]
+enum Subject<'a> {
+    /// A work, by its id.
+    Work(&'a str),
+    /// A curated list, by its slug or its id.
+    List(&'a str),
+    /// A genre's, a network's, a year's or a decade's page, and the key it is
+    /// asked for by, as written.
+    Page(&'a str, String),
+    /// A company's or a keyword's page, by this server's id for it.
+    Entity(&'a str, &'a str),
+    /// A character, by this server's id for it.
+    Character(&'a str),
+    /// A collection, by TMDB's id for it.
+    Collection(i64),
+}
+
+/// What a path asks a preview of, or nothing: the shape of the id or slug is
+/// checked before anything is looked up, so a stranger walking random
+/// addresses is answered from the page alone.
+fn subject_of(path: &str) -> Option<Subject<'_>> {
     let mut parts = path.trim_start_matches('/').split('/');
     match (parts.next()?, parts.next()?) {
-        ("work", id) if uuid::Uuid::parse_str(id).is_ok() => work_preview(state, id).await,
-        ("lists", key) if is_key(key) && parts.next().is_none() => list_preview(state, key).await,
+        ("work", id) if uuid::Uuid::parse_str(id).is_ok() => Some(Subject::Work(id)),
+        ("lists", key) if is_key(key) && parts.next().is_none() => Some(Subject::List(key)),
         (page @ ("genre" | "network" | "year" | "decade"), key)
             if !key.is_empty() && key.len() <= 128 && parts.next().is_none() =>
         {
             let key = urlencoding::decode(key).ok()?;
-            page_preview(state, page, &key).await
+            Some(Subject::Page(page, key.into_owned()))
         }
         // A company's, a keyword's and a character's pages, by this
         // server's id for them.
         (page @ ("company" | "keyword"), id)
             if uuid::Uuid::parse_str(id).is_ok() && parts.next().is_none() =>
         {
-            entity_preview(state, page, id).await
+            Some(Subject::Entity(page, id))
         }
         ("characters", id) if uuid::Uuid::parse_str(id).is_ok() && parts.next().is_none() => {
-            character_preview(state, id).await
+            Some(Subject::Character(id))
         }
         // A collection's, by TMDB's id for it.
         ("collections", id)
@@ -275,9 +352,22 @@ async fn preview(state: &AppState, path: &str) -> Option<Preview> {
                 && id.bytes().all(|b| b.is_ascii_digit())
                 && parts.next().is_none() =>
         {
-            collection_preview(state, id.parse().ok()?).await
+            Some(Subject::Collection(id.parse().ok()?))
         }
         _ => None,
+    }
+}
+
+/// The preview of what a path asks one of: a work's, a list's, a page's, or
+/// none where the catalogue holds nothing by that name.
+async fn preview(state: &AppState, subject: Subject<'_>) -> Option<Preview> {
+    match subject {
+        Subject::Work(id) => work_preview(state, id).await,
+        Subject::List(key) => list_preview(state, key).await,
+        Subject::Page(page, key) => page_preview(state, page, &key).await,
+        Subject::Entity(page, id) => entity_preview(state, page, id).await,
+        Subject::Character(id) => character_preview(state, id).await,
+        Subject::Collection(tmdb_id) => collection_preview(state, tmdb_id).await,
     }
 }
 
@@ -1257,5 +1347,218 @@ mod tests {
         assert!(!is_key("Soirées"));
         assert!(!is_key("a/b"));
         assert!(!is_key(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn only_a_path_that_can_have_a_preview_is_asked_for_one() {
+        let id = "01a0d073-6ce8-760c-a2cb-113d4cf78503";
+        assert_eq!(subject_of(&format!("/work/{id}")), Some(Subject::Work(id)));
+        // What follows a work's id changes nothing of whose page it is.
+        assert_eq!(
+            subject_of(&format!("/work/{id}/seasons/2")),
+            Some(Subject::Work(id))
+        );
+        assert_eq!(
+            subject_of("/lists/soirees-d-automne"),
+            Some(Subject::List("soirees-d-automne"))
+        );
+        assert_eq!(
+            subject_of("/genre/Dr%C3%A2me"),
+            Some(Subject::Page("genre", "Drâme".into()))
+        );
+        assert_eq!(
+            subject_of("/network/hbo"),
+            Some(Subject::Page("network", "hbo".into()))
+        );
+        assert_eq!(
+            subject_of(&format!("/company/{id}")),
+            Some(Subject::Entity("company", id))
+        );
+        assert_eq!(
+            subject_of(&format!("/keyword/{id}")),
+            Some(Subject::Entity("keyword", id))
+        );
+        assert_eq!(
+            subject_of(&format!("/characters/{id}")),
+            Some(Subject::Character(id))
+        );
+        assert_eq!(subject_of("/collections/10"), Some(Subject::Collection(10)));
+
+        let long = format!("/genre/{}", "a".repeat(129));
+        for path in [
+            "/",
+            "/catalogue",
+            "/work",
+            "/work/not-an-id",
+            "/lists/Soirées",
+            "/lists/a/b",
+            "/genre/",
+            long.as_str(),
+            "/company/nobody",
+            "/characters/1",
+            "/collections/abc",
+            "/collections/1234567890123456789",
+        ] {
+            assert_eq!(subject_of(path), None, "{path}");
+        }
+    }
+
+    /// A server whose pages are offered a link preview whoever reads them,
+    /// and that lets an address make `per_minute` requests a minute.
+    async fn open_server(per_minute: u32) -> AppState {
+        let mut config = crate::config::Config::from_env().expect("a configuration");
+        config.mode = crate::config::Mode::Single;
+        config.database = crate::db::testing::database().await;
+        config.security.bootstrap_admin = None;
+        config.security.native_policy = SurfacePolicy::Open;
+        config.security.rate_limit_per_minute = per_minute;
+        config.cache.redis_url = None;
+        config.media.storage = crate::config::MediaStorage::Off;
+        config.clients = None;
+        config.tmdb.api_key = None;
+        config.tmdb.include_adult = false;
+        config.tvdb.api_key = None;
+        config.tvdb.enabled = false;
+        AppState::bootstrap(config).await.expect("a server")
+    }
+
+    /// Two dramas in the catalogue: the drama page's preview says so.
+    async fn two_dramas(state: &AppState) -> Vec<MediaItem> {
+        let mut works = Vec::new();
+        for title in ["One", "Two"] {
+            let mut work = MediaItem::empty(MediaKind::Movie);
+            work.title = title.into();
+            work.slug = crate::domain::make_slug(title, None);
+            work.genres = vec!["Drama".to_string()];
+            repo::item::upsert(
+                &state.db,
+                repo::item::ItemWrite {
+                    item: &work,
+                    replace_children: true,
+                },
+            )
+            .await
+            .unwrap();
+            works.push(work);
+        }
+        crate::service::listing::relist_stale(&state.db, false, 100)
+            .await
+            .unwrap();
+        works
+    }
+
+    /// The page for a path, as a caller at one address is given it.
+    async fn previewed(state: &AppState, path: &str) -> String {
+        shell(state, path, std::net::IpAddr::from([203, 0, 113, 9]), PAGE).await
+    }
+
+    const TWO: &str = "2 works in the catalogue.";
+
+    /// What a link preview costs the database is asked of whoever asks: kept
+    /// a few seconds, counted against the caller's allowance when it is not
+    /// kept, and not looked up at all once the allowance is spent.
+    #[tokio::test]
+    async fn a_preview_is_looked_up_on_the_callers_account_and_kept_a_few_seconds() {
+        let state = open_server(2).await;
+        two_dramas(&state).await;
+
+        // A page that can have no preview is answered as it always was, and
+        // costs the caller nothing.
+        for _ in 0..5 {
+            let page = previewed(&state, "/catalogue").await;
+            assert!(page.contains("A catalogue."), "{page}");
+        }
+
+        // The first look-up is counted; the same path asked again is answered
+        // from what was kept, however often.
+        for _ in 0..5 {
+            let page = previewed(&state, "/genre/drama").await;
+            assert!(page.contains(TWO), "{page}");
+        }
+        // Another spelling of it is another path: a look-up, the second of
+        // the two the allowance holds.
+        let page = previewed(&state, "/genre/Drama").await;
+        assert!(page.contains(TWO), "{page}");
+
+        // Spent: a path that is not kept is given the page without one…
+        let spent = previewed(&state, "/genre/DRAMA").await;
+        assert!(!spent.contains(TWO), "{spent}");
+        assert!(spent.contains("A catalogue."), "{spent}");
+        // … and what is kept is still served.
+        let page = previewed(&state, "/genre/drama").await;
+        assert!(page.contains(TWO), "{page}");
+    }
+
+    /// A page is kept under the catalogue's mark: a write made here, which
+    /// moves it, is seen at once; a note on the genre, which does not, within
+    /// the seconds a page is kept.
+    #[tokio::test]
+    async fn a_kept_preview_is_looked_up_again_once_the_catalogue_moves() {
+        let state = open_server(600).await;
+        two_dramas(&state).await;
+
+        let first = previewed(&state, "/genre/drama").await;
+        assert!(first.contains(TWO), "{first}");
+
+        repo::editorial::put(
+            &state.db,
+            Scope::Genre,
+            "drama",
+            "en",
+            "The *quiet* ones.",
+            None,
+        )
+        .await
+        .unwrap();
+        let kept = previewed(&state, "/genre/drama").await;
+        assert_eq!(kept, first, "kept: nothing was asked again");
+
+        state.caches.bump_epoch().await;
+        let fresh = previewed(&state, "/genre/drama").await;
+        assert!(fresh.contains("The quiet ones."), "{fresh}");
+        assert!(!fresh.contains(TWO), "{fresh}");
+    }
+
+    /// A path that names nothing is looked up each time, on its caller's
+    /// account, and is never the key of anything kept.
+    #[tokio::test]
+    async fn a_path_that_names_nothing_is_never_kept() {
+        let state = open_server(600).await;
+        let works = two_dramas(&state).await;
+
+        for path in [
+            "/genre/isekai",
+            "/network/nobody",
+            "/lists/no-such-list",
+            "/year/nineteen",
+            "/work/01a0d073-6ce8-760c-a2cb-113d4cf78503",
+        ] {
+            let page = previewed(&state, path).await;
+            assert!(page.contains("A catalogue."), "{path}: {page}");
+        }
+        assert_eq!(state.caches.previews.entries().await, 0);
+
+        // A work found is kept; the same work asked for under a path too long
+        // to be a page's is found, and is not kept under it.
+        let id = &works[0].id;
+        let page = previewed(&state, &format!("/work/{id}")).await;
+        assert!(page.contains("One · Cinémathèque"), "{page}");
+        assert_eq!(state.caches.previews.entries().await, 1);
+        let long = format!("/work/{id}/{}", "x".repeat(KEPT_PATH));
+        let page = previewed(&state, &long).await;
+        assert!(page.contains("One · Cinémathèque"), "{page}");
+        assert_eq!(state.caches.previews.entries().await, 1);
+    }
+
+    /// Where no reader is let in without a credential, there is no preview:
+    /// nothing is looked up, and nothing is counted.
+    #[tokio::test]
+    async fn no_preview_is_looked_up_where_a_reader_is_not_let_in() {
+        let state = crate::api::native::testing::server().await;
+        two_dramas(&state).await;
+        assert!(!open_to_readers(&state));
+        let page = previewed(&state, "/genre/drama").await;
+        assert!(!page.contains(TWO), "{page}");
+        assert_eq!(state.caches.previews.entries().await, 0);
     }
 }

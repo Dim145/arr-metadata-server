@@ -10,10 +10,13 @@
 //! One space is memory alone by design: a session is a credential, and
 //! belongs nowhere but here and in the database.
 
+pub mod brief;
+pub mod gate;
 pub mod redis;
 pub mod tier;
 
 use std::{
+    collections::HashMap,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -24,8 +27,13 @@ use std::{
 use bytes::Bytes;
 use moka::future::Cache as Moka;
 
-use crate::{config, db::repo::user::User};
+use crate::{
+    config,
+    db::{Db, repo::user::User},
+};
 
+pub use brief::Brief;
+pub use gate::Gate;
 pub use redis::Redis;
 pub use tier::{Cached, Space, Tally};
 
@@ -56,6 +64,36 @@ const RELAY_CAPACITY: u64 = 32 * 1024 * 1024;
 /// its service once the service fails ([`relay_stale_for`]). Whether it is
 /// still good is the document's own end, as [`relay_ttl`] set it.
 pub const RELAY_KEEP: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// How long what a [`Brief`] keeps is kept: seconds, so that a flood asks the
+/// database once for what it would ask ten thousand times, and whoever
+/// changed the catalogue is not left waiting to see what they changed.
+const BRIEF: Duration = Duration::from_secs(5);
+
+/// How many pages rendered with a link's preview in their head are kept at
+/// once: a few hundred, a few kilobytes each.
+const PREVIEWS: u64 = 256;
+
+/// How many readings of the networks' and studios' names are kept at once —
+/// each for an adult policy and a mark of the catalogue — and how long: the
+/// mark in the key says when one is out of date, the time only bounds what
+/// the memory holds.
+const NETWORK_NAMES: u64 = 8;
+const NETWORK_NAMES_KEPT: Duration = Duration::from_secs(60);
+
+/// How many reads of the catalogue that no cache answered — a search nobody
+/// has made, the facets of a filter nobody has chosen, a list in an order no
+/// index serves — are made at once, and how long another waits for its turn
+/// before it is turned away. Three of the pool's eight connections (ten on
+/// PostgreSQL): the rest are left to everything else the server does.
+const COLD_READS: usize = 3;
+const COLD_WAIT: Duration = Duration::from_secs(3);
+
+/// How many of TMDB's pictures are handed on from image.tmdb.org at once, and
+/// how long another waits. A library's scan asks for them a dozen at a time;
+/// past that, they queue here rather than in front of TMDB.
+const PICTURES: usize = 16;
+const PICTURE_WAIT: Duration = Duration::from_secs(5);
 
 /// How long a relay keeps a document, by what it is. Far under the six
 /// months TMDB's terms allow, and short where the answer moves: a search,
@@ -302,6 +340,23 @@ pub struct Caches {
     /// for a service that fails, and served fresh only until each
     /// document's own end.
     pub relay: Space<Relayed>,
+    /// Pages rendered with a link's preview in their head, by path and by the
+    /// catalogue's mark, kept a few seconds: what a crawler's burst, or a
+    /// flood of the same links, is answered from.
+    pub previews: Brief<Arc<str>>,
+    /// The names networks and studios go by, each under its slug, for each
+    /// reading of adult titles and each mark of the catalogue: a slug is
+    /// matched in memory, so that one nobody holds is never the key of
+    /// anything.
+    pub network_names: Brief<Arc<HashMap<String, String>>>,
+    /// The mark the catalogue bears, and whether the database answers: each
+    /// asked of the database at most once in a few seconds.
+    catalogue: Brief<String>,
+    readiness: Brief<bool>,
+    /// The reads of the catalogue that no cache answered, a few at a time.
+    pub cold: Gate,
+    /// TMDB's pictures handed on from image.tmdb.org, a few at a time.
+    pub pictures: Gate,
     /// A session's token, hashed, to the person it belongs to: read on every
     /// authenticated request, so kept a few seconds rather than asked of the
     /// database each time. Memory alone.
@@ -370,6 +425,12 @@ impl Caches {
             // The relay's own TTL is by document; the space's is the longest
             // a document may stand in for its service once that fails.
             relay: Space::new("relay", RELAY_CAPACITY, RELAY_KEEP, l2),
+            previews: Brief::new(PREVIEWS, BRIEF),
+            network_names: Brief::new(NETWORK_NAMES, NETWORK_NAMES_KEPT),
+            catalogue: Brief::new(8, BRIEF),
+            readiness: Brief::new(1, BRIEF),
+            cold: Gate::new(COLD_READS, COLD_WAIT),
+            pictures: Gate::new(PICTURES, PICTURE_WAIT),
             sessions: Moka::builder()
                 .max_capacity(10_000)
                 .time_to_live(cfg.session_ttl)
@@ -409,7 +470,10 @@ impl Caches {
     pub async fn flush(&self, space: &str) -> Option<u64> {
         Some(match space {
             "items" => self.items.invalidate_all().await,
-            "searches" => self.searches.invalidate_all().await,
+            "searches" => {
+                self.forget_briefs();
+                self.searches.invalidate_all().await
+            }
             "lists" => {
                 // Memory alone now; what an earlier version filed on the
                 // server under the lists' prefix goes with the flush too.
@@ -426,6 +490,15 @@ impl Caches {
             }
             _ => return None,
         })
+    }
+
+    /// Forget what is kept a few seconds of the pages of the catalogue: with
+    /// the searches, since a flush of those is asked for to see the catalogue
+    /// as it is.
+    fn forget_briefs(&self) {
+        self.previews.forget();
+        self.network_names.forget();
+        self.catalogue.forget();
     }
 
     // ── Sessions ────────────────────────────────────────────────────────
@@ -556,6 +629,29 @@ impl Caches {
         format!("{}.{}", self.generation(), self.epoch())
     }
 
+    /// The catalogue's mark (`repo::item::catalogue_stamp`), asked of the
+    /// database at most once in a few seconds — and again at once after a
+    /// write made here, since it is kept under [`Self::stamp`].
+    ///
+    /// What every page kept under the mark asks first, each time it is asked
+    /// for: a flood of requests for pages nobody had asked for read the whole
+    /// table for every one of them. A change made elsewhere, which moves the
+    /// mark and not the epoch, is seen within the seconds.
+    pub async fn catalogue_stamp(&self, db: &Db) -> anyhow::Result<String> {
+        self.catalogue
+            .try_get_with(self.stamp(), crate::db::repo::item::catalogue_stamp(db))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:#}"))
+    }
+
+    /// Whether the database answers, asked of it at most once in a few
+    /// seconds: what `/ready` says, for anybody who asks.
+    pub async fn database_answers(&self, db: &Db) -> bool {
+        self.readiness
+            .get_with("database".to_string(), async { db.health().await.is_ok() })
+            .await
+    }
+
     /// The catalogue changed: every list drawn so far is of the past.
     pub async fn bump_epoch(&self) {
         self.epoch.fetch_add(1, Ordering::SeqCst);
@@ -627,7 +723,10 @@ impl Caches {
         } else if let Some(space) = message.strip_prefix("flush:") {
             match space {
                 "items" => self.items.forget_local(),
-                "searches" => self.searches.forget_local(),
+                "searches" => {
+                    self.forget_briefs();
+                    self.searches.forget_local();
+                }
                 "lists" => self.lists.forget_local(),
                 "relay" => self.relay.forget_local(),
                 "sessions" => {
@@ -1073,5 +1172,100 @@ mod tests {
             relay_ttl("/3/genre/movie/list"),
             Duration::from_secs(86_400)
         );
+    }
+
+    /// The mark every page kept under it asks first is asked of the database
+    /// once in a few seconds, however many pages ask — and afresh, at once,
+    /// after a write made here.
+    #[tokio::test]
+    async fn the_catalogue_s_mark_is_asked_of_the_database_once_in_a_few_seconds() {
+        use crate::{
+            db::repo::item::{ItemWrite, upsert},
+            domain::{MediaItem, MediaKind, make_slug},
+        };
+
+        let caches = caches();
+        let db = crate::db::testing::sqlite().await;
+        let first = caches.catalogue_stamp(&db).await.expect("a mark");
+        assert!(first.starts_with("0@"), "{first}");
+
+        // A work written behind the caches' back: the mark kept is still the
+        // one asked for first.
+        let mut work = MediaItem::empty(MediaKind::Movie);
+        work.title = "Marked".into();
+        work.slug = make_slug("Marked", None);
+        upsert(
+            &db,
+            ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        assert_eq!(caches.catalogue_stamp(&db).await.unwrap(), first);
+
+        // A write made here moves the epoch the mark is kept under.
+        caches.bump_epoch().await;
+        let fresh = caches.catalogue_stamp(&db).await.unwrap();
+        assert!(fresh.starts_with("1@"), "{fresh}");
+        assert_ne!(fresh, first);
+    }
+
+    #[tokio::test]
+    async fn whether_the_database_answers_is_asked_of_it_once_in_a_few_seconds() {
+        let caches = caches();
+        let db = crate::db::testing::sqlite().await;
+        assert!(caches.database_answers(&db).await);
+
+        // Gone, and not asked again: the answer kept is the one given.
+        db.close().await;
+        assert!(caches.database_answers(&db).await);
+        // Caches that kept nothing ask, and are told.
+        assert!(!self::caches().database_answers(&db).await);
+    }
+
+    /// What is kept a few seconds of the catalogue's pages goes with the
+    /// searches, here and when another instance says so.
+    #[tokio::test]
+    async fn flushing_the_searches_forgets_what_is_kept_a_few_seconds_too() {
+        async fn fill(caches: &Caches) {
+            caches.previews.insert("p".into(), Arc::from("page")).await;
+            let names = HashMap::from([("hbo".to_string(), "HBO".to_string())]);
+            caches
+                .network_names
+                .insert("n".into(), Arc::new(names))
+                .await;
+        }
+
+        let caches = caches();
+        fill(&caches).await;
+        assert!(caches.previews.get("p").await.is_some());
+        caches.flush("searches").await;
+        assert!(caches.previews.get("p").await.is_none());
+        assert!(caches.network_names.get("n").await.is_none());
+
+        fill(&caches).await;
+        caches.apply_message("flush:searches").await;
+        assert!(caches.previews.get("p").await.is_none());
+        assert!(caches.network_names.get("n").await.is_none());
+    }
+
+    /// Reads no cache answered go through three places, and a fourth waits
+    /// its time and is turned away.
+    #[tokio::test]
+    async fn reads_no_cache_answered_are_let_through_a_few_at_a_time() {
+        let caches = caches();
+        caches.cold.wait_at_most(Duration::from_millis(30));
+        let mut held = Vec::new();
+        for _ in 0..COLD_READS {
+            held.push(caches.cold.take().await.expect("a place"));
+        }
+        assert_eq!(caches.cold.free(), 0);
+        assert!(caches.cold.take().await.is_none());
+        // The pictures' places are their own.
+        assert_eq!(caches.pictures.free(), PICTURES);
+        held.pop();
+        assert!(caches.cold.take().await.is_some());
     }
 }

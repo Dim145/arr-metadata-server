@@ -6,7 +6,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use axum::{Extension, Json, extract::State, http::header};
+use axum::{
+    Extension, Json,
+    extract::State,
+    http::header,
+    response::{IntoResponse, Response},
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -74,12 +79,15 @@ pub struct Figures {
 #[utoipa::path(
     get, path = "/figures", tag = TAG,
     operation_id = "figures_figures",
-    responses((status = 200, body = Figures)),
+    responses(
+        (status = 200, body = Figures),
+        (status = 503, description = "As many such reads as the server answers at once are under way; `Retry-After` says when to ask again"),
+    ),
 )]
 async fn figures(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
-) -> AppResult<Json<Figures>> {
+) -> AppResult<Response> {
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
 
     // Read across the whole catalogue, by anyone the site is open to, so
@@ -90,12 +98,19 @@ async fn figures(
     let key = format!(
         "figures:{adult}:{}:{}",
         state.caches.stamp(),
-        repo::item::catalogue_stamp(&state.db).await?
+        state.caches.catalogue_stamp(&state.db).await?
     );
-    if let Some(cached) = state.caches.searches.get(&key).await
-        && let Ok(figures) = serde_json::from_str::<Figures>(&cached)
-    {
-        return Ok(Json(figures));
+    if let Some(kept) = kept_figures(&state, &key).await {
+        return Ok(Json(kept).into_response());
+    }
+
+    // A count of the whole catalogue, made afresh: a few at a time, as the
+    // facets it reads are.
+    let Some(_place) = state.caches.cold.take().await else {
+        return Ok(crate::api::busy());
+    };
+    if let Some(kept) = kept_figures(&state, &key).await {
+        return Ok(Json(kept).into_response());
     }
 
     let query = repo::item::Query {
@@ -165,7 +180,13 @@ async fn figures(
     {
         state.caches.searches.insert(key, encoded).await;
     }
-    Ok(Json(figures))
+    Ok(Json(figures).into_response())
+}
+
+/// The figures kept under a key, when they are.
+async fn kept_figures(state: &AppState, key: &str) -> Option<Figures> {
+    let cached = state.caches.searches.get(key).await?;
+    serde_json::from_str(&cached).ok()
 }
 
 #[derive(Serialize, ToSchema)]
@@ -629,6 +650,54 @@ async fn held(state: &AppState) -> anyhow::Result<Vec<crate::metrics::Metric>> {
 mod tests {
     use super::*;
     use crate::{auth::testing::key, db::repo::user::Role, error::AppError};
+
+    /// The catalogue's figures are counted over the whole of it, a few at a
+    /// time when none is kept: with every place taken, the caller waits, and is
+    /// turned away — told when to come back. Those kept are answered whatever.
+    #[tokio::test]
+    async fn figures_nobody_counted_lately_wait_for_a_place_and_are_turned_away_without_one() {
+        use axum::http::StatusCode;
+
+        let state = super::super::testing::server().await;
+        let mut work = crate::domain::MediaItem::empty(MediaKind::Movie);
+        work.title = "Heat".into();
+        work.slug = crate::domain::make_slug("Heat", None);
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        state
+            .caches
+            .cold
+            .wait_at_most(std::time::Duration::from_millis(30));
+        let counted = async || {
+            figures(State(state.clone()), Extension(Identity::Visitor))
+                .await
+                .expect("answered")
+        };
+
+        assert_eq!(counted().await.status(), StatusCode::OK);
+
+        let mut held = Vec::new();
+        while state.caches.cold.free() > 0 {
+            held.push(state.caches.cold.take().await.expect("a place"));
+        }
+        assert_eq!(counted().await.status(), StatusCode::OK, "kept");
+
+        // The catalogue moved: what was kept is of the past.
+        state.caches.bump_epoch().await;
+        let turned_away = counted().await;
+        assert_eq!(turned_away.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(turned_away.headers().get(header::RETRY_AFTER).is_some());
+
+        held.pop();
+        assert_eq!(counted().await.status(), StatusCode::OK);
+    }
 
     /// The figures are read by whoever manages the server and by a key with
     /// the `metrics` scope — a scraper's — and by nobody else, a key that

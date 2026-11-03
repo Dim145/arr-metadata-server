@@ -41,6 +41,20 @@ const TAG: &str = super::items::TAG;
 /// little for the form around it.
 const UPLOAD_BYTES: usize = file::MAX_AUDIO_BYTES as usize + 64 * 1024;
 
+/// What a writer who is not an administrator may keep in uploads, all told:
+/// room for every poster and theme a catalogue wants, short of filling the
+/// store with whatever a key with the write scope sends.
+const UPLOAD_QUOTA: u64 = 1024 * 1024 * 1024;
+
+/// Whether `adding` more bytes would take uploads that weigh `held` past
+/// [`UPLOAD_QUOTA`].
+fn past_quota(held: i64, adding: usize) -> bool {
+    u64::try_from(held)
+        .unwrap_or(0)
+        .saturating_add(adding as u64)
+        > UPLOAD_QUOTA
+}
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(status))
@@ -467,7 +481,10 @@ async fn work_media(
         .ok_or(AppError::NotFound)?;
     repo::item::load_children(&state.db, &mut item).await?;
     // What an address answered is an administrator's to read; a writer is
-    // told the kind of trouble, since any address can be typed in.
+    // told that the file could not be fetched and not why, nor how many
+    // tries it took: any address can be typed in, and what comes back for
+    // each — the kind of trouble among it — is a map of the network this
+    // server is on.
     let admin = identity.is_admin();
 
     let origins = addresses(&state, &item).await?;
@@ -492,12 +509,12 @@ async fn work_media(
                 bytes: asset.bytes,
                 width: asset.width,
                 height: asset.height,
-                attempts: Some(asset.attempts),
+                attempts: admin.then_some(asset.attempts),
                 error: asset.error.as_deref().map(|error| {
                     if admin {
                         error.to_string()
                     } else {
-                        crate::media::fetch::reason_for_writers(error).to_string()
+                        crate::media::fetch::FOR_WRITERS.to_string()
                     }
                 }),
                 uploaded_by: asset.uploaded_by.clone(),
@@ -688,6 +705,57 @@ pub struct Uploaded {
     pub item: MediaItem,
 }
 
+/// What a form calls a kind of upload: a picture, or a theme.
+fn kind_named(name: &str) -> Option<Kind> {
+    match name {
+        "image" => Some(Kind::Image),
+        "theme" | "audio" => Some(Kind::Audio),
+        _ => None,
+    }
+}
+
+/// The file of an upload, read as it arrives and cut off where its first
+/// bytes say it may end: a picture at [`file::MAX_IMAGE_BYTES`], a sound at
+/// [`file::MAX_AUDIO_BYTES`], rather than at the most any upload may weigh,
+/// once all of it has been held in memory. A file whose first bytes say it
+/// is neither is refused as soon as they have come. `declared` is the kind
+/// the form named before the file, when it did: the interface sends the file
+/// first, so that what its first bytes say is what holds it.
+async fn read_file(
+    mut field: axum::extract::multipart::Field<'_>,
+    declared: Option<Kind>,
+) -> AppResult<Bytes> {
+    let mut body: Vec<u8> = Vec::new();
+    // What it may weigh until its first bytes have come: as a sound may, or
+    // as the form said.
+    let (mut kind, mut limit) = declared.map_or((Kind::Audio, file::MAX_AUDIO_BYTES), |kind| {
+        (kind, file::max_bytes(kind))
+    });
+    let mut known = false;
+    while let Some(chunk) = field.chunk().await.map_err(|e| {
+        if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            AppError::PayloadTooLarge("the file is larger than an upload may be".into())
+        } else {
+            AppError::BadRequest(format!("the file could not be read: {e}"))
+        }
+    })? {
+        body.extend_from_slice(&chunk);
+        if !known && body.len() >= file::HEAD_BYTES {
+            (kind, limit) = file::limit_for_head(&body, declared)
+                .map_err(|e| AppError::BadRequest(e.to_string()))?;
+            known = true;
+        }
+        if body.len() as u64 > limit {
+            return Err(AppError::PayloadTooLarge(format!(
+                "the file is larger than the {} MiB a {} may be",
+                limit / (1024 * 1024),
+                kind.as_str()
+            )));
+        }
+    }
+    Ok(Bytes::from(body))
+}
+
 /// Put a picture or a theme on a work, from a file.
 ///
 /// A form with `file`, and: `kind` (`image`, the default, or `theme`);
@@ -738,14 +806,8 @@ async fn upload(
     {
         let name = field.name().unwrap_or_default().to_string();
         if name == "file" {
-            let bytes = field.bytes().await.map_err(|e| {
-                if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
-                    AppError::PayloadTooLarge("the file is larger than an upload may be".into())
-                } else {
-                    AppError::BadRequest(format!("the file could not be read: {e}"))
-                }
-            })?;
-            file = Some(bytes);
+            let declared = fields.get("kind").and_then(|kind| kind_named(kind));
+            file = Some(read_file(field, declared).await?);
         } else {
             let text = field
                 .text()
@@ -758,19 +820,10 @@ async fn upload(
         return Err(AppError::BadRequest("no file was sent".into()));
     };
 
-    let kind = match fields.get("kind").map(String::as_str).unwrap_or("image") {
-        "image" => Kind::Image,
-        "theme" | "audio" => Kind::Audio,
-        other => {
-            return Err(AppError::BadRequest(format!(
-                "{other} is not a kind of upload"
-            )));
-        }
-    };
-    let limit = match kind {
-        Kind::Image => file::MAX_IMAGE_BYTES,
-        Kind::Audio => file::MAX_AUDIO_BYTES,
-    };
+    let named = fields.get("kind").map_or("image", String::as_str);
+    let kind = kind_named(named)
+        .ok_or_else(|| AppError::BadRequest(format!("{named} is not a kind of upload")))?;
+    let limit = file::max_bytes(kind);
     if bytes.len() as u64 > limit {
         return Err(AppError::PayloadTooLarge(format!(
             "the file is larger than the {} MiB a {} may be",
@@ -841,6 +894,20 @@ async fn upload(
             }
         },
     };
+
+    // A writer's uploads are weighed together, under the label they are
+    // made as; an administrator's are not.
+    if !identity.is_admin() {
+        let by = identity.label();
+        let held = repo::asset::uploaded_bytes(&state.db, &by).await?;
+        if past_quota(held, bytes.len()) {
+            return Err(AppError::PayloadTooLarge(format!(
+                "the uploads made as {by} already weigh {} MiB of the {} MiB a writer may keep",
+                held / (1024 * 1024),
+                UPLOAD_QUOTA / (1024 * 1024)
+            )));
+        }
+    }
 
     let asset_id = crate::db::new_id();
     let origin = format!("upload:{asset_id}");
@@ -1124,6 +1191,17 @@ mod tests {
     /// A change, as these tests read it: why, where, what, what it held and
     /// what it took.
     type Line = (Cause, String, String, Option<Value>, Option<Value>);
+
+    /// A writer's uploads stop at the quota, the last byte under it allowed.
+    #[test]
+    fn a_writer_keeps_no_more_than_the_quota_in_uploads() {
+        let quota = i64::try_from(UPLOAD_QUOTA).unwrap();
+        assert!(!past_quota(0, 25 * 1024 * 1024));
+        assert!(!past_quota(quota - 10, 10));
+        assert!(past_quota(quota - 10, 11));
+        assert!(past_quota(quota, 1));
+        assert!(!past_quota(-1, 0), "a sum that is no weight weighs nothing");
+    }
 
     /// The whole server, on a database of its own, keeping its media in
     /// `dir`: what an upload needs somewhere to go.
@@ -1444,6 +1522,207 @@ mod tests {
             .expect("the status");
         assert!(!now.webp && !now.avif && !now.purging);
         assert_eq!((now.variants.webp, now.variants.avif), (0, 0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A film held here, with a picture of its own.
+    async fn a_film(state: &AppState, title: &str, url: &str) -> String {
+        let mut item = MediaItem::empty(MediaKind::Movie);
+        item.title = title.into();
+        item.slug = crate::domain::make_slug(title, None);
+        item.images = vec![crate::domain::Image {
+            id: crate::db::new_id(),
+            season_number: None,
+            cover_type: CoverType::Poster,
+            url: url.into(),
+            language: None,
+            sort_order: 0,
+            source: None,
+            is_manual: false,
+        }];
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &item,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        item.id
+    }
+
+    /// The form's words as the parts of a request.
+    fn words_as_parts(words: Words<'_>) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (name, value) in words {
+            out.extend_from_slice(
+                format!(
+                    "--edge\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+        out
+    }
+
+    /// The form's words, each a name and a value.
+    type Words<'a> = &'a [(&'a str, &'a str)];
+
+    /// An upload whose file is `head`, then zeros to `total` bytes, sent in
+    /// chunks of 64 KiB, with the form's words before it and after it — the
+    /// interface sends the file first — through the route, with the limit the
+    /// route's body is held to. What it answered, and how many chunks of the
+    /// request were read by then, of how many there were.
+    async fn upload_streamed(
+        state: &AppState,
+        id: &str,
+        (before, after): (Words<'_>, Words<'_>),
+        head: &[u8],
+        total: usize,
+    ) -> (StatusCode, Value, usize, usize) {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering::SeqCst},
+        };
+        use tower::ServiceExt as _;
+
+        let mut first = words_as_parts(before);
+        first.extend_from_slice(
+            b"--edge\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload\"\r\n\
+              Content-Type: application/octet-stream\r\n\r\n",
+        );
+        first.extend_from_slice(head);
+        let mut chunks = vec![Bytes::from(first)];
+        let zeros = Bytes::from(vec![0u8; 64 * 1024]);
+        let mut sent = head.len();
+        while sent < total {
+            let more = (total - sent).min(zeros.len());
+            chunks.push(zeros.slice(..more));
+            sent += more;
+        }
+        let mut last = b"\r\n".to_vec();
+        last.extend_from_slice(&words_as_parts(after));
+        last.extend_from_slice(b"--edge--\r\n");
+        chunks.push(Bytes::from(last));
+
+        // One chunk for each time the body is asked for more, as a socket
+        // gives them: a stream that is always ready is read to its end by
+        // the form's parser in one go, whatever is done with what it gives.
+        let (all, pulled) = (chunks.len(), Arc::new(AtomicUsize::new(0)));
+        let counted = pulled.clone();
+        let body = Body::from_stream(futures::stream::unfold(
+            chunks.into_iter(),
+            move |mut chunks| {
+                let counted = counted.clone();
+                async move {
+                    tokio::task::yield_now().await;
+                    let chunk = chunks.next()?;
+                    counted.fetch_add(1, SeqCst);
+                    Some((Ok::<_, std::io::Error>(chunk), chunks))
+                }
+            },
+        ));
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/items/{id}/media"))
+            .header("content-type", "multipart/form-data; boundary=edge")
+            .body(body)
+            .expect("a request");
+        let response = axum::Router::new()
+            .route("/items/{id}/media", axum::routing::post(upload))
+            .layer(axum::extract::DefaultBodyLimit::max(UPLOAD_BYTES))
+            .layer(Extension(Identity::Anonymous))
+            .with_state(state.clone())
+            .oneshot(request)
+            .await
+            .expect("an answer");
+        let status = response.status();
+        let said = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        let said = serde_json::from_slice(&said).unwrap_or(Value::Null);
+        (status, said, pulled.load(SeqCst), all)
+    }
+
+    /// A picture is cut off at the weight of a picture as it is read, not
+    /// once it has been held to the weight of a theme: the first bytes say
+    /// what it is, and the interface sends the file before it says so. A
+    /// file that is neither, or is not what the form says, is refused as
+    /// soon as they have come; a theme is let run to its own weight.
+    #[tokio::test]
+    async fn an_upload_is_cut_off_as_it_is_read_at_the_weight_of_what_it_is() {
+        let dir = crate::testing::scratch_path("media-streamed");
+        let state = server(&dir).await;
+        let id = a_film(&state, "Streamed Upload Film", "https://p/streamed.jpg").await;
+        let image_cap = file::MAX_IMAGE_BYTES as usize;
+        let picture = png(7);
+
+        // A picture of 26 MiB: stopped a chunk past the cap, the rest of the
+        // request never read.
+        let (status, _, pulled, all) = upload_streamed(
+            &state,
+            &id,
+            (&[("kind", "image")], &[]),
+            &picture,
+            image_cap + 1024 * 1024,
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(
+            pulled <= image_cap / (64 * 1024) + 8 && pulled < all - 8,
+            "{pulled} of {all} chunks read"
+        );
+
+        // The same with the kind sent after the file, as the interface does.
+        let (status, _, pulled, all) = upload_streamed(
+            &state,
+            &id,
+            (&[], &[("coverType", "poster"), ("kind", "image")]),
+            &picture,
+            image_cap + 1024 * 1024,
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(pulled < all - 8, "{pulled} of {all} chunks read");
+
+        // Neither a picture nor a sound: refused with the first bytes.
+        let (status, _, pulled, all) =
+            upload_streamed(&state, &id, (&[], &[]), b"<html><script>", image_cap).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(pulled <= 8 && all > 100, "{pulled} of {all} chunks read");
+
+        // A sound, where the form said a picture was coming: refused the same.
+        let (status, _, pulled, all) = upload_streamed(
+            &state,
+            &id,
+            (&[("kind", "image")], &[]),
+            b"ID3\x03\0\0\0\0\0\0",
+            image_cap,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(pulled <= 8 && all > 100, "{pulled} of {all} chunks read");
+
+        // A theme is held to a theme's weight: a file past a picture's is
+        // read to the end and kept.
+        let (status, kept, pulled, all) = upload_streamed(
+            &state,
+            &id,
+            (&[], &[("kind", "theme")]),
+            b"ID3\x03\0\0\0\0\0\0",
+            image_cap + 1024 * 1024,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{kept}");
+        assert_eq!(pulled, all);
+        assert!(
+            kept["url"]
+                .as_str()
+                .is_some_and(|url| url.ends_with(".mp3")),
+            "{kept}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1827,5 +2106,93 @@ mod by_work_tests {
             .await
             .is_err()
         );
+    }
+
+    /// A writer who is not an administrator is told that a file could not
+    /// be fetched, and not why — nor how many tries it took: any address can
+    /// be typed in, and what comes back for each is a map of the network the
+    /// server is on. An administrator reads what was written on the row.
+    #[tokio::test]
+    async fn a_writer_is_told_a_file_could_not_be_fetched_and_an_administrator_why() {
+        use crate::db::repo::user::Role;
+
+        let state = crate::api::native::testing::server().await;
+        let origins = [
+            "http://192.168.1.7:8080/refused.jpg",
+            "http://192.168.1.8/html.jpg",
+            "http://192.168.1.9/gone.jpg",
+            "http://192.168.1.10/slow.jpg",
+        ];
+        let id = film(&state, "Writer Reasons Film", &origins).await;
+        // Four kinds of trouble, as the worker writes them on the row: a
+        // host that is not there, one that answers with a page, one that
+        // answers it has nothing, and a fetch that was cut short.
+        let written = [
+            (
+                "could not reach the address: error sending request for url \
+                 (http://192.168.1.7:8080/refused.jpg): tcp connect error: Connection refused",
+                false,
+            ),
+            (
+                "not kept: text/html is not a picture or a sound this server keeps",
+                true,
+            ),
+            ("the address answered 404 Not Found", true),
+            (crate::db::repo::asset::CUT_SHORT, false),
+        ];
+        for (origin, (error, unfit)) in origins.iter().zip(written) {
+            repo::asset::enqueue(
+                &state.db,
+                &[Wanted {
+                    origin,
+                    kind: Kind::Image,
+                    wanted_by: None,
+                }],
+            )
+            .await
+            .unwrap();
+            let asset = repo::asset::by_origin(&state.db, origin)
+                .await
+                .unwrap()
+                .unwrap();
+            let again = (!unfit).then_some("2999-01-01T00:00:00Z");
+            repo::asset::mark_failed(&state.db, &asset.id, error, again, unfit)
+                .await
+                .unwrap();
+        }
+
+        let listed = |identity: Identity| {
+            let (state, id) = (state.clone(), id.clone());
+            async move {
+                let Json(media) = work_media(State(state), Extension(identity), Path(id))
+                    .await
+                    .unwrap();
+                media.media
+            }
+        };
+        let admin = listed(crate::auth::testing::key(&["admin"], None)).await;
+        assert_eq!(admin.len(), origins.len());
+        for (medium, (error, _)) in admin.iter().zip(written) {
+            assert_eq!(medium.error.as_deref(), Some(error), "{}", medium.origin);
+            assert!(medium.attempts.is_some(), "{}", medium.origin);
+        }
+        assert!(admin.iter().any(|m| m.attempts == Some(repo::asset::UNFIT)));
+
+        for writer in [
+            crate::auth::testing::key(&["read", "write"], Some(Role::Editor)),
+            crate::auth::testing::key(&["write"], None),
+        ] {
+            let seen = listed(writer).await;
+            assert_eq!(seen.len(), origins.len());
+            for medium in &seen {
+                assert_eq!(
+                    medium.error.as_deref(),
+                    Some("could not be fetched"),
+                    "{}: one reason for every kind of trouble",
+                    medium.origin
+                );
+                assert_eq!(medium.attempts, None, "{}", medium.origin);
+            }
+        }
     }
 }

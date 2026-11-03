@@ -21,7 +21,6 @@ import { RoleChip } from '../components/account/people'
 import { SecretReveal } from '../components/account/SecretReveal'
 import {
   Button,
-  ButtonLink,
   Chip,
   Dialog,
   EmptyState,
@@ -110,11 +109,16 @@ export function Account() {
  * Tying this account to the one its owner has at the identity provider: a
  * sign-in there, started from here while signed in here, so both sides are
  * proved by the same person. Offered only when a provider is set up.
+ *
+ * A session alone is not asked to tie: one left open, or taken, would tie
+ * whoever holds it. The password is given first — an account without one is
+ * sent to sign in at the provider again instead — and the tie is made when
+ * the browser comes back. Untied by its owner, who keeps their password.
  */
 function Provider({ me }: { me: User }) {
   const { t } = useI18n()
   const options = useAuthOptions()
-  const { pathname } = useLocation()
+  const [asking, setAsking] = useState<'tie' | 'untie' | null>(null)
 
   if (!options.data?.oidc && !me.oidcLinked) return null
 
@@ -123,21 +127,142 @@ function Provider({ me }: { me: User }) {
       <PanelHead title={t.account.provider} />
       <div className="space-y-4 p-5">
         {me.oidcLinked ? (
-          <p className="flex items-center gap-2 text-sm text-bone">
-            <Glyph name="link" className="size-4 text-status-ok" />
-            {t.account.providerTied}
-          </p>
+          <>
+            <p className="flex items-center gap-2 text-sm text-bone">
+              <Glyph name="link" className="size-4 text-status-ok" />
+              {t.account.providerTied}
+            </p>
+            {me.hasPassword ? (
+              <Button variant="quiet" className="text-vermillion" onClick={() => setAsking('untie')}>
+                {t.account.providerUntie}
+              </Button>
+            ) : (
+              <p className="text-xs leading-relaxed text-bone-faint">{t.account.providerUntieNeedsPassword}</p>
+            )}
+          </>
         ) : (
           <>
-            <p className="text-sm leading-relaxed text-bone-dim">{t.account.providerLead}</p>
-            <ButtonLink href={`/api/v1/auth/oidc/start?link=1&next=${encodeURIComponent(pathname)}`}>
+            <p className="text-sm leading-relaxed text-bone-dim">
+              {me.hasPassword ? t.account.providerLead : t.account.providerLeadNoPassword}
+            </p>
+            <Button onClick={() => setAsking('tie')}>
               <Glyph name="link" className="size-4" />
               {t.account.providerTie}
-            </ButtonLink>
+            </Button>
           </>
         )}
       </div>
+      {asking === 'tie' ? <TieProvider me={me} onClose={() => setAsking(null)} /> : null}
+      {asking === 'untie' ? <UntieProvider onClose={() => setAsking(null)} /> : null}
     </Panel>
+  )
+}
+
+/** The password, and then the provider's own sign-in. */
+function TieProvider({ me, onClose }: { me: User; onClose: () => void }) {
+  const { t } = useI18n()
+  const { pathname } = useLocation()
+  const [password, setPassword] = useState('')
+
+  const tie = useMutation({
+    mutationFn: () =>
+      api.post<{ url: string }>('/account/provider', {
+        ...(me.hasPassword ? { currentPassword: password } : {}),
+        next: pathname,
+      }),
+    // To the provider, and back here once it has signed them in.
+    onSuccess: ({ url }) => window.location.assign(url),
+  })
+
+  const missing = me.hasPassword && password === ''
+  const wrong = tie.error instanceof ApiError && tie.error.isUnauthorized
+  const waiting = tie.isPending || tie.isSuccess
+  const refusal = tie.isError ? (wrong ? t.admin.config.passwordWrong : tie.error.message) : undefined
+
+  return (
+    <Dialog
+      open
+      title={t.account.providerTieTitle}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>{t.account.cancel}</Button>
+          <Button type="submit" form="tie-provider" variant="primary" disabled={waiting || missing}>
+            {waiting ? <Spinner className="size-4" /> : <Glyph name="link" className="size-4" />}
+            {t.account.providerTie}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id="tie-provider"
+        className="space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (!missing && !waiting) tie.mutate()
+        }}
+      >
+        <p className="text-sm leading-relaxed text-bone-dim">
+          {me.hasPassword ? t.account.providerTieBody : t.account.providerTieBodyNoPassword}
+        </p>
+        {me.hasPassword ? (
+          <FormField label={t.admin.config.currentPassword} htmlFor="tie-password" error={refusal}>
+            <Input
+              id="tie-password"
+              type="password"
+              autoComplete="current-password"
+              required
+              autoFocus
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </FormField>
+        ) : refusal ? (
+          <p role="alert" className="text-xs text-status-error">
+            {refusal}
+          </p>
+        ) : null}
+      </form>
+    </Dialog>
+  )
+}
+
+/** Asked first: what is untied is not tied again without the password. */
+function UntieProvider({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+
+  const untie = useMutation({
+    mutationFn: () => api.delete('/account/provider'),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['account'] })
+      void queryClient.invalidateQueries({ queryKey: ['me'] })
+      onClose()
+    },
+  })
+
+  return (
+    <Dialog
+      open
+      title={t.account.providerUntieTitle}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>{t.account.cancel}</Button>
+          <Button variant="danger" disabled={untie.isPending} onClick={() => untie.mutate()}>
+            {untie.isPending ? <Spinner className="size-4" /> : null}
+            {t.account.providerUntieConfirm}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm leading-relaxed text-bone-dim">{t.account.providerUntieBody}</p>
+      {untie.isError ? (
+        <p role="alert" className="mt-3 text-xs text-status-error">
+          {untie.error.message}
+        </p>
+      ) : null}
+    </Dialog>
   )
 }
 
@@ -686,9 +811,11 @@ function KeyList({
       >
         {confirm?.what === 'rotate' ? t.account.regenerateBody : t.account.revokeBody}
       </Dialog>
-      {rotate.isError || revoke.isError ? (
+      {rotate.isError || revoke.isError || toggle.isError ? (
         <p role="alert" className="text-xs text-status-error">
-          {(rotate.error ?? revoke.error) instanceof ApiError ? (rotate.error ?? revoke.error)?.message : null}
+          {(rotate.error ?? revoke.error ?? toggle.error) instanceof ApiError
+            ? (rotate.error ?? revoke.error ?? toggle.error)?.message
+            : null}
         </p>
       ) : null}
     </div>

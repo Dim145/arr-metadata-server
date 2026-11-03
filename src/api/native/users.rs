@@ -19,6 +19,7 @@ use crate::{
     api::{
         audit::{self, Event},
         extract::ClientIp,
+        native::clients,
     },
     auth::{Identity, secrets},
     db::repo::{
@@ -39,6 +40,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(detail, update, remove))
         .routes(routes!(reset_password))
         .routes(routes!(revoke_sessions))
+        .routes(routes!(lift_keys_pause))
         .routes(routes!(bulk))
 }
 
@@ -219,6 +221,11 @@ pub struct UserDetail {
     pub user: User,
     pub keys: Vec<ApiClient>,
     pub sessions: Vec<Session>,
+    /// Who paused this person's keys, while the pause stands: until an
+    /// administrator lifts it ([`lift_keys_pause`]), they can neither make a
+    /// key nor resume one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keys_paused_by: Option<String>,
 }
 
 #[utoipa::path(
@@ -243,11 +250,13 @@ async fn detail(
         .ok_or(AppError::NotFound)?;
     let keys = repo::client::list(&state.db, repo::client::Owner::User(&id)).await?;
     let sessions = repo::user::list_sessions(&state.db, &id, None).await?;
+    let keys_paused_by = clients::paused_by_admin(&state, &id).await?;
 
     Ok(Json(UserDetail {
         user,
         keys,
         sessions,
+        keys_paused_by,
     }))
 }
 
@@ -538,6 +547,11 @@ async fn delete_one(
         }
     }
 
+    // The pause on their keys goes with them, as the keys do.
+    if let Err(e) = clients::lift_pause(state, &target.id).await {
+        tracing::warn!(user = %target.id, error = %e, "a deleted account's pause was left behind");
+    }
+
     // An invitation made by someone who is no longer an administrator is void
     // already; one made by someone deleted would lose its maker, and with it
     // the check, so it is withdrawn first.
@@ -575,7 +589,10 @@ pub struct ResetPassword {
     pub password: Option<String>,
 }
 
-/// Give an account a new password; its sessions are closed.
+/// Give an account a new password; its sessions are closed, and so is its tie
+/// to the identity provider, if it has one: whoever tied it — the person, or
+/// somebody holding a session of theirs — signed in as them through the
+/// provider, which no password reset would otherwise end.
 #[utoipa::path(
     post, path = "/users/{id}/password", tag = TAG,
     operation_id = "users_reset_password",
@@ -618,6 +635,9 @@ async fn reset_password(
     state.caches.forget_sessions();
     repo::user::set_password(&state.db, &id, &hash).await?;
     repo::user::delete_sessions_for_user(&state.db, &id).await?;
+    if target.oidc_linked {
+        repo::user::unlink_oidc(&state.db, &id).await?;
+    }
     state.caches.forget_sessions();
 
     audit::record(
@@ -627,14 +647,76 @@ async fn reset_password(
             ip: &ip,
             action: Action::UserPasswordReset,
             target: Some(&target.username),
-            detail: Some("sessions closed"),
+            detail: Some(if target.oidc_linked {
+                "sessions closed, identity provider untied"
+            } else {
+                "sessions closed"
+            }),
         },
     )
     .await;
+    if target.oidc_linked {
+        audit::record(
+            &state,
+            Event {
+                identity: Some(&identity),
+                ip: &ip,
+                action: Action::UserUnlinked,
+                target: Some(&target.username),
+                detail: Some("identity provider · by a password reset"),
+            },
+        )
+        .await;
+    }
 
     Ok(Json(ResetPassword {
         password: generated,
     }))
+}
+
+/// Lift the pause an administrator put on a person's keys — by disabling one
+/// of them from **Keys & network** — so that they can make keys and resume
+/// them again. Enabling a key of theirs from there lifts it too; this is for
+/// a person who has deleted theirs, with none left to enable.
+#[utoipa::path(
+    delete, path = "/users/{id}/keys-pause", tag = TAG,
+    operation_id = "users_lift_keys_pause",
+    params(("id" = String, Path)),
+    responses(
+        (status = 204, description = "Lifted, or there was none"),
+        (status = 403, description = "The caller is not an administrator"),
+        (status = 404),
+    ),
+)]
+async fn lift_keys_pause(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ip: ClientIp,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    identity.require_admin()?;
+
+    let target = repo::user::get(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Under the accounts lock, as their own changes to their keys are.
+    let _held = state.accounts_lock().await;
+    if clients::lift_pause(&state, &id).await? {
+        audit::record(
+            &state,
+            Event {
+                identity: Some(&identity),
+                ip: &ip,
+                action: Action::UserUpdated,
+                target: Some(&target.username),
+                detail: Some("the pause on their keys lifted"),
+            },
+        )
+        .await;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Close every session of an account, wherever it is signed in.
@@ -850,5 +932,181 @@ mod tests {
         let password = generated_password().unwrap();
         assert_eq!(password.chars().count(), 20);
         assert!(secrets::hash_password(&password).is_ok());
+    }
+
+    async fn account(state: &AppState, name: &str, role: Role, oidc: Option<&str>) -> User {
+        repo::user::create(
+            &state.db,
+            repo::user::NewUser {
+                username: name,
+                // Any hash: nobody signs in with it here.
+                password_hash: "x",
+                role,
+                status: Status::Active,
+                display_name: None,
+                email: None,
+                invited_by: None,
+                oidc: oidc.map(|subject| ("https://idp.example", subject)),
+            },
+        )
+        .await
+        .expect("an account")
+    }
+
+    fn as_user(user: &User) -> Extension<Identity> {
+        Extension(Identity::User(Box::new(user.clone())))
+    }
+
+    async fn journal(state: &AppState, action: Action) -> Vec<repo::audit::Entry> {
+        repo::audit::list(
+            &state.db,
+            &repo::audit::Query {
+                action: Some(action.as_str().into()),
+                limit: 20,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Whoever tied an account to the provider signed in as its person
+    /// through it, and a new password would not end that: the reset unties it,
+    /// as it closes the sessions, and the journal says who did.
+    #[tokio::test]
+    async fn an_administrators_password_reset_unties_the_provider() {
+        let state = crate::api::native::testing::server().await;
+        let admin = account(&state, "root", Role::Admin, None).await;
+        let alice = account(&state, "alice", Role::Member, Some("sub-alice")).await;
+        assert!(alice.oidc_linked);
+        repo::user::create_session(
+            &state.db,
+            "a-session",
+            &alice.id,
+            chrono::Duration::hours(1),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let Json(reset) = reset_password(
+            State(state.clone()),
+            as_user(&admin),
+            ClientIp::NONE,
+            Path(alice.id.clone()),
+            Json(ResetPasswordRequest { password: None }),
+        )
+        .await
+        .expect("reset");
+        assert!(reset.password.is_some());
+
+        let after = repo::user::get(&state.db, &alice.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!after.oidc_linked && after.has_password);
+        assert!(
+            repo::user::find_by_oidc(&state.db, "https://idp.example", "sub-alice")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            repo::user::list_sessions(&state.db, &alice.id, None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let untied = journal(&state, Action::UserUnlinked).await;
+        assert_eq!(untied.len(), 1);
+        assert_eq!(untied[0].actor.as_deref(), Some("admin:root"));
+        assert_eq!(untied[0].target.as_deref(), Some("alice"));
+        let reset_row = journal(&state, Action::UserPasswordReset).await;
+        assert_eq!(
+            reset_row[0].detail.as_deref(),
+            Some("sessions closed, identity provider untied")
+        );
+
+        // An account with no tie has none to lose, and says so nowhere.
+        let bob = account(&state, "bob", Role::Member, None).await;
+        let _ = reset_password(
+            State(state.clone()),
+            as_user(&admin),
+            ClientIp::NONE,
+            Path(bob.id.clone()),
+            Json(ResetPasswordRequest { password: None }),
+        )
+        .await
+        .expect("reset");
+        assert_eq!(journal(&state, Action::UserUnlinked).await.len(), 1);
+    }
+
+    /// A person who deleted the key an administrator paused has none to enable:
+    /// the pause is shown on their page and lifted from there.
+    #[tokio::test]
+    async fn an_administrator_lifts_the_pause_on_a_person_with_no_key_left() {
+        let state = crate::api::native::testing::server().await;
+        let admin = account(&state, "root", Role::Admin, None).await;
+        let alice = account(&state, "alice", Role::Member, None).await;
+        let key = repo::client::create(
+            &state.db,
+            repo::client::NewClient {
+                name: "Sonarr",
+                key_prefix: "ams_test",
+                key_hash: "hash",
+                scopes: &["read".to_string()],
+                expires_at: None,
+                note: None,
+                owner_id: Some(&alice.id),
+            },
+        )
+        .await
+        .unwrap();
+        let _ = clients::update(
+            State(state.clone()),
+            as_user(&admin),
+            ClientIp::NONE,
+            Path(key.id.clone()),
+            Json(clients::UpdateRequest {
+                is_enabled: Some(false),
+            }),
+        )
+        .await
+        .expect("paused");
+        repo::client::delete(&state.db, &key.id).await.unwrap();
+
+        let shown = |who: &User| detail(State(state.clone()), as_user(who), Path(alice.id.clone()));
+        let Json(held) = shown(&admin).await.expect("their page");
+        assert!(held.keys.is_empty());
+        assert_eq!(held.keys_paused_by.as_deref(), Some("admin:root"));
+
+        // Not anybody's but an administrator's to lift — not their own.
+        let lift = |who: &User| {
+            lift_keys_pause(
+                State(state.clone()),
+                as_user(who),
+                ClientIp::NONE,
+                Path(alice.id.clone()),
+            )
+        };
+        assert!(matches!(lift(&alice).await, Err(AppError::Forbidden)));
+        let Json(held) = shown(&admin).await.unwrap();
+        assert_eq!(held.keys_paused_by.as_deref(), Some("admin:root"));
+
+        assert_eq!(lift(&admin).await.unwrap(), StatusCode::NO_CONTENT);
+        let Json(held) = shown(&admin).await.unwrap();
+        assert_eq!(held.keys_paused_by, None);
+
+        // Said once; lifting what is not there is told to nobody.
+        assert_eq!(lift(&admin).await.unwrap(), StatusCode::NO_CONTENT);
+        let said = journal(&state, Action::UserUpdated).await;
+        assert_eq!(
+            said.iter()
+                .filter(|row| row.detail.as_deref() == Some("the pause on their keys lifted"))
+                .count(),
+            1
+        );
     }
 }

@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -86,13 +87,14 @@ pub struct CatalogueFacets {
     responses(
         (status = 200, body = CatalogueFacets),
         (status = 400, description = "A filter was not one the list understands"),
+        (status = 503, description = "As many such reads as the server answers at once are under way; `Retry-After` says when to ask again"),
     ),
 )]
 async fn facets(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
     Query(query): Query<super::items::ListQuery>,
-) -> AppResult<Json<CatalogueFacets>> {
+) -> AppResult<Response> {
     let mut filters = super::items::to_query(&state, &identity, query)?;
     // The page and its order are the list's; the counts are the same for all.
     filters.sort = repo::item::Sort::default();
@@ -108,13 +110,22 @@ async fn facets(
     let key = format!(
         "facets:{filters:?}:{}:{}",
         state.caches.stamp(),
-        repo::item::catalogue_stamp(&state.db).await?
+        state.caches.catalogue_stamp(&state.db).await?
     );
 
-    if let Some(cached) = state.caches.searches.get(&key).await
-        && let Ok(facets) = serde_json::from_str::<CatalogueFacets>(&cached)
-    {
-        return Ok(Json(facets));
+    if let Some(kept) = kept_facets(&state, &key).await {
+        return Ok(Json(kept).into_response());
+    }
+
+    // Counted over every work the filters leave, for filters nobody has asked
+    // about yet: a few at a time, so that asking for many of them is no way to
+    // take the database from everybody else.
+    let Some(_place) = state.caches.cold.take().await else {
+        return Ok(crate::api::busy());
+    };
+    // Asked and answered meanwhile, perhaps, by a caller that waited too.
+    if let Some(kept) = kept_facets(&state, &key).await {
+        return Ok(Json(kept).into_response());
     }
 
     // The works a misspelt term is taken for, as the list takes it: settled
@@ -132,7 +143,13 @@ async fn facets(
         state.caches.searches.insert(key, encoded).await;
     }
 
-    Ok(Json(found))
+    Ok(Json(found).into_response())
+}
+
+/// The facets kept under a key, when they are.
+async fn kept_facets(state: &AppState, key: &str) -> Option<CatalogueFacets> {
+    let cached = state.caches.searches.get(key).await?;
+    serde_json::from_str(&cached).ok()
 }
 
 // ─── calendar ────────────────────────────────────────────────────────────────
@@ -735,33 +752,54 @@ async fn network(
 }
 
 /// The name of the network or the studio a slug stands for, as the works
-/// name it most often, or none: kept a while under the catalogue's mark,
-/// since every visit to the page asks.
+/// name it most often, or none.
+///
+/// Every visit to the page asks, and the slug is whatever the caller wrote:
+/// so it is matched in memory against the names the catalogue holds, which
+/// are kept — for each reading of adult titles and each mark of the
+/// catalogue — in one place, and never becomes the key of anything.
 pub(crate) async fn network_named(
     state: &AppState,
     slug: &str,
     adult: bool,
 ) -> AppResult<Option<String>> {
+    Ok(network_names(state, adult).await?.get(slug).cloned())
+}
+
+/// Each slug the networks' and studios' names make, and the name the works
+/// give it most often: of two spellings as common, the first in order.
+async fn network_names(
+    state: &AppState,
+    adult: bool,
+) -> AppResult<std::sync::Arc<HashMap<String, String>>> {
     let key = format!(
-        "network-name:{slug}:{adult}:{}",
-        repo::item::catalogue_stamp(&state.db).await?
+        "{adult}:{}:{}",
+        state.caches.stamp(),
+        state.caches.catalogue_stamp(&state.db).await?
     );
-    if let Some(cached) = state.caches.searches.get(&key).await {
-        return Ok(Some(cached).filter(|name| !name.is_empty()));
-    }
-    let named = repo::item::network_names(&state.db, adult)
-        .await?
-        .into_iter()
-        .filter(|(name, _)| slug::slugify(name) == slug)
-        // The most common spelling, and of two as common the first in order.
-        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
-        .map(|(name, _)| name);
     state
         .caches
-        .searches
-        .insert(key, named.clone().unwrap_or_default())
-        .await;
-    Ok(named)
+        .network_names
+        .try_get_with(key, async {
+            let mut best: HashMap<String, (i64, String)> = HashMap::new();
+            for (name, count) in repo::item::network_names(&state.db, adult).await? {
+                let slug = slug::slugify(&name);
+                let better = match best.get(&slug) {
+                    None => true,
+                    Some((held, kept)) => count > *held || (count == *held && name < *kept),
+                };
+                if better {
+                    best.insert(slug, (count, name));
+                }
+            }
+            Ok::<_, anyhow::Error>(std::sync::Arc::new(
+                best.into_iter()
+                    .map(|(slug, (_, name))| (slug, name))
+                    .collect(),
+            ))
+        })
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("{e:#}")))
 }
 
 /// The longest id an entity's address is looked up by: this server's ids
@@ -1797,6 +1835,97 @@ mod tests {
             page_of(&state, FacetKind::Network, "nobody", "en").await,
             Err(AppError::NotFound)
         ));
+    }
+
+    /// A slug is whatever the caller wrote: it is matched in memory, against
+    /// the names the catalogue holds, and one nobody holds costs no read and
+    /// is never the key of anything kept.
+    #[tokio::test]
+    async fn a_network_slug_nobody_holds_is_never_the_key_of_anything() {
+        let state = super::super::testing::server().await;
+        for (title, network, adult) in [
+            ("On Canal", "Canal+", false),
+            ("After Dark", "Night Channel", true),
+        ] {
+            stored(&state, MediaKind::Series, title, |w| {
+                w.network = Some(network.into());
+                w.is_adult = adult;
+            })
+            .await;
+        }
+        crate::service::listing::relist_stale(&state.db, false, 100)
+            .await
+            .expect("listed");
+
+        let named = async |slug: &str, adult: bool| {
+            network_named(&state, slug, adult).await.expect("answered")
+        };
+        assert_eq!(named("canal", false).await.as_deref(), Some("Canal+"));
+        // A title for adults only where adults are counted.
+        assert_eq!(named("night-channel", false).await, None);
+        assert_eq!(
+            named("night-channel", true).await.as_deref(),
+            Some("Night Channel")
+        );
+
+        state.caches.searches.settle().await;
+        let kept = state.caches.searches.l1_entries();
+        let readings = state.caches.network_names.entries().await;
+        assert_eq!(readings, 2, "one for each reading of adult titles");
+        for n in 0..200 {
+            assert_eq!(named(&format!("nobody-{n}"), false).await, None);
+        }
+        state.caches.searches.settle().await;
+        assert_eq!(state.caches.searches.l1_entries(), kept);
+        assert_eq!(state.caches.network_names.entries().await, readings);
+    }
+
+    /// The facets of filters nobody asked about are counted over every work
+    /// they leave, a few at a time: with every place taken, the caller waits,
+    /// and is turned away — told when to come back — when none is free. Those
+    /// kept are answered whatever.
+    #[tokio::test]
+    async fn facets_nobody_asked_for_wait_for_a_place_and_are_turned_away_without_one() {
+        use axum::http::{StatusCode, Uri, header};
+
+        let state = super::super::testing::server().await;
+        stored(&state, MediaKind::Movie, "Heat", |w| {
+            w.genres = vec!["Crime".into()];
+        })
+        .await;
+        crate::service::listing::relist_stale(&state.db, false, 100)
+            .await
+            .expect("listed");
+        state
+            .caches
+            .cold
+            .wait_at_most(std::time::Duration::from_millis(30));
+
+        let counted = async |filters: &str| {
+            let uri: Uri = format!("/facets?{filters}").parse().expect("an address");
+            let Query(query) =
+                Query::<super::super::items::ListQuery>::try_from_uri(&uri).expect("a query");
+            facets(
+                State(state.clone()),
+                Extension(Identity::Visitor),
+                Query(query),
+            )
+            .await
+            .expect("answered")
+        };
+        assert_eq!(counted("genre=Crime").await.status(), StatusCode::OK);
+
+        let mut held = Vec::new();
+        while state.caches.cold.free() > 0 {
+            held.push(state.caches.cold.take().await.expect("a place"));
+        }
+        assert_eq!(counted("genre=Crime").await.status(), StatusCode::OK);
+        let turned_away = counted("genre=Drama").await;
+        assert_eq!(turned_away.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(turned_away.headers().get(header::RETRY_AFTER).is_some());
+
+        held.pop();
+        assert_eq!(counted("genre=Drama").await.status(), StatusCode::OK);
     }
 
     #[tokio::test]

@@ -20,6 +20,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use sha2::{Digest, Sha256};
 
 use crate::{
     auth::secrets,
@@ -38,6 +39,9 @@ pub static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
+        // Nothing is followed, so no address is ever named to another; said
+        // all the same, as it is for every client this server makes.
+        .referer(false)
         .build()
         .unwrap_or_default()
 });
@@ -144,6 +148,91 @@ pub fn sorted_query(uri: &Uri, dropped: &[&str]) -> String {
     url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(pairs)
         .finish()
+}
+
+/// The longest a header's values are written into the key of a kept
+/// document: a longer one is written as its digest.
+const LONGEST_VARIANT: usize = 128;
+
+/// The caller's headers, among `names`, that a kept document is told apart
+/// by, because they travel to the service and may change what it answers: each
+/// written `name=value`, in the order of `names`, so that two callers who
+/// ask with other headers are two entries, and none is answered what the
+/// service said to the other's.
+///
+/// A value is escaped, so that none can pass for another header's. One
+/// longer than [`LONGEST_VARIANT`] is written as `sha256:` and its digest —
+/// a colon an escaped value never holds — so that a caller cannot have a
+/// document filed under a key of kilobytes, and two long values are still two.
+pub fn varies_by(headers: &HeaderMap, names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|name| {
+            let values: Vec<String> = headers
+                .get_all(*name)
+                .iter()
+                .map(|value| url::form_urlencoded::byte_serialize(value.as_bytes()).collect())
+                .collect();
+            let values = values.join(",");
+            if values.len() > LONGEST_VARIANT {
+                let digest: String = Sha256::digest(values.as_bytes())
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                format!("{name}=sha256:{digest}")
+            } else {
+                format!("{name}={values}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// The parameters that tell one reference list ([`is_reference`]) from
+/// another in the database: the language it is written in and the region it
+/// is read for. Nothing else a caller may add changes one — and each value
+/// filed apart is a row of its own.
+const REFERENCE_PARAMS: &[&str] = &["language", "region", "watch_region"];
+
+/// The longest a language or a region is written: `zh-Hans-CN` is ten.
+const LONGEST_CODE: usize = 16;
+
+/// What a reference list is filed under in the database, besides where the
+/// service is asked: its path and the language and region asked, nothing of
+/// the rest of the query and none of the caller's headers — a reference
+/// list is the service's own, and whoever may ask the relay for one may ask
+/// it a thousand ways, each a row nothing deletes but its age. The names are
+/// read as the service reads them, decoded and in any case.
+///
+/// None for a request that would file one apart on a value that is no
+/// language or region — empty, long, spelt with anything but letters,
+/// digits, `-` and `_` — or on a name given twice: the memory keeps its
+/// answer, and the database nothing.
+pub fn reference_filing(uri: &Uri) -> Option<String> {
+    let mut asked: Vec<(String, String)> = Vec::new();
+    for (name, value) in url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes()) {
+        let name = name.to_ascii_lowercase();
+        if !REFERENCE_PARAMS.contains(&name.as_str()) {
+            continue;
+        }
+        let shaped = (1..=LONGEST_CODE).contains(&value.len())
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'));
+        if !shaped || asked.iter().any(|(seen, _)| *seen == name) {
+            return None;
+        }
+        asked.push((name, value.into_owned()));
+    }
+    asked.sort();
+    let path = uri.path().trim_end_matches('/');
+    if asked.is_empty() {
+        return Some(path.to_string());
+    }
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(asked)
+        .finish();
+    Some(format!("{path}?{query}"))
 }
 
 /// How long a relay keeps an answer of this status, when it keeps it at
@@ -740,8 +829,12 @@ mod kept {
         /// [`cache::ANILIST_COLLECTIONS`].
         pub path: String,
         /// What the database keeps a reference list under ([`is_reference`]):
-        /// the key without the generation the memory's keys carry, which starts
-        /// again at every start. None for AniList, which keeps none.
+        /// where the service is asked and the request's path and language and
+        /// region ([`reference_filing`](fn@super::reference_filing)) — not its
+        /// whole key, which a caller makes as many of as it likes — without the
+        /// generation the memory's keys carry, which starts again at every
+        /// start. None for AniList, which keeps none, and for a request the
+        /// database keeps nothing of.
         pub reference: Option<String>,
     }
 
@@ -2141,6 +2234,130 @@ mod tests {
             sorted_query(&fr_last, OUR_PARAMS),
             "language=de&language=fr&page=1"
         );
+    }
+
+    fn headed(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in pairs {
+            headers.append(
+                HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        headers
+    }
+
+    #[test]
+    fn a_document_is_told_apart_by_the_headers_that_travel_and_change_it() {
+        const NAMES: &[&str] = &["accept", "accept-language", "content-type"];
+        let plain = varies_by(&HeaderMap::new(), NAMES);
+        assert_eq!(plain, "accept=&accept-language=&content-type=");
+
+        // Another language, another type, another body type: another entry.
+        for other in [
+            ("accept-language", "de-DE"),
+            ("accept", "application/xml"),
+            ("content-type", "application/graphql"),
+        ] {
+            assert_ne!(varies_by(&headed(&[other]), NAMES), plain, "{other:?}");
+        }
+        // What does not travel, or does not change the answer, files nothing
+        // apart.
+        assert_eq!(
+            varies_by(
+                &headed(&[
+                    ("user-agent", "x"),
+                    ("range", "bytes=0-0"),
+                    ("cookie", "a=b")
+                ]),
+                NAMES
+            ),
+            plain
+        );
+        // A value cannot pass for another header's, nor a header given twice
+        // for one given once.
+        assert_ne!(
+            varies_by(&headed(&[("accept", "x&accept-language=y")]), NAMES),
+            varies_by(&headed(&[("accept", "x"), ("accept-language", "y")]), NAMES)
+        );
+        assert_ne!(
+            varies_by(&headed(&[("accept", "a"), ("accept", "b")]), NAMES),
+            varies_by(&headed(&[("accept", "a,b")]), NAMES)
+        );
+    }
+
+    #[test]
+    fn a_long_header_is_filed_by_its_digest_and_stays_one_of_its_own() {
+        let long = |tail: &str| format!("{}{tail}", "x".repeat(10_000));
+        let a = varies_by(
+            &headed(&[("accept-language", &long("a"))]),
+            &["accept-language"],
+        );
+        let b = varies_by(
+            &headed(&[("accept-language", &long("b"))]),
+            &["accept-language"],
+        );
+        assert!(a.len() < 100, "{}", a.len());
+        assert_ne!(a, b, "two long values are two");
+        assert_eq!(
+            a,
+            varies_by(
+                &headed(&[("accept-language", &long("a"))]),
+                &["accept-language"]
+            )
+        );
+        // A value that spells `sha256:` is escaped, so it is never taken for a digest.
+        let spoofed = varies_by(
+            &headed(&[("accept-language", &format!("sha256:{}", "0".repeat(64)))]),
+            &["accept-language"],
+        );
+        assert!(spoofed.contains("sha256%3A"), "{spoofed}");
+    }
+
+    #[test]
+    fn a_reference_list_is_filed_by_its_path_and_its_language_and_region_alone() {
+        let filed = |target: &str| reference_filing(&target.parse::<Uri>().unwrap());
+        assert_eq!(
+            filed("/3/configuration").as_deref(),
+            Some("/3/configuration")
+        );
+        assert_eq!(
+            filed("/3/genre/movie/list?language=fr-FR").as_deref(),
+            Some("/3/genre/movie/list?language=fr-FR")
+        );
+        // Whatever else is added is not part of what it is filed under: one
+        // row, not one for each spelling.
+        for same in [
+            "/3/genre/movie/list/?language=fr-FR",
+            "/3/genre/movie/list?language=fr-FR&cache_buster=12345",
+            "/3/genre/movie/list?x=1&language=fr-FR&y=2&api_key=k&include_adult=true",
+            "/3/genre/movie/list?LANGUAGE=fr-FR",
+            "/3/genre/movie/list?%6Canguage=fr-FR",
+        ] {
+            assert_eq!(
+                filed(same).as_deref(),
+                Some("/3/genre/movie/list?language=fr-FR"),
+                "{same}"
+            );
+        }
+        assert_eq!(
+            filed("/3/watch/providers/regions?watch_region=FR&language=de").as_deref(),
+            Some("/3/watch/providers/regions?language=de&watch_region=FR"),
+            "in the order of their names"
+        );
+
+        // A language or a region that is none, or one given twice, is filed
+        // nowhere in the database.
+        for kept_nowhere in [
+            "/3/genre/movie/list?language=",
+            "/3/genre/movie/list?language=../../etc",
+            "/3/genre/movie/list?language=fr%0AFR",
+            "/3/genre/movie/list?language=abcdefghijklmnopq",
+            "/3/genre/movie/list?language=fr&language=de",
+            "/3/genre/movie/list?region=a%20b",
+        ] {
+            assert_eq!(filed(kept_nowhere), None, "{kept_nowhere}");
+        }
     }
 
     #[test]

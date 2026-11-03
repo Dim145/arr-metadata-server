@@ -229,6 +229,9 @@ impl Hooks {
             // Webhooks asks, rather than followed: a 3xx is a failure, and
             // the log says where to look.
             .redirect(reqwest::redirect::Policy::none())
+            // Nothing is followed, so no address is ever named to another;
+            // said all the same, as it is for every client this server makes.
+            .referer(false)
             .timeout(TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
             .build()

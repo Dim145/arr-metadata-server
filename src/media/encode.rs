@@ -42,7 +42,8 @@ pub struct Pixels<'a> {
 }
 
 impl Pixels<'_> {
-    fn channels(&self) -> usize {
+    /// How many bytes a pixel takes: three, or four with an alpha channel.
+    pub fn channels(&self) -> usize {
         if self.alpha { 4 } else { 3 }
     }
 

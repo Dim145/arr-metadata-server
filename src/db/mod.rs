@@ -587,18 +587,75 @@ pub fn sqlite_url(path: &Path, create: bool) -> String {
     format!("sqlite://{encoded}?mode={mode}")
 }
 
-/// Strip the password out of a connection URL before it reaches a log line.
+/// The query parameters a connection URL may carry a password in — sqlx
+/// reads `?password=` as the one after the user name.
+const PASSWORD_PARAMETERS: &[&str] = &[
+    "password",
+    "passwd",
+    "pwd",
+    "pass",
+    "sslpassword",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+];
+
+/// Strip the password out of a connection URL before it reaches a log line:
+/// the one after the user name, and the value of any parameter that is one.
+///
+/// The user information ends at the last `@` before the query: a password
+/// that holds an `@`, or a `/`, unescaped — as the ones typed into an
+/// environment variable do — would otherwise leave its tail in the line,
+/// the host beside it. A file's address (`sqlite://`) has none.
 fn redact(url: &str) -> String {
-    match url.split_once("://") {
-        Some((scheme, rest)) => match rest.split_once('@') {
-            Some((creds, host)) => {
-                let user = creds.split(':').next().unwrap_or("");
-                format!("{scheme}://{user}:***@{host}")
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let (location, tail) = rest.split_at(rest.find(['?', '#']).unwrap_or(rest.len()));
+    let location = match location.rfind('@') {
+        Some(at) if !scheme.eq_ignore_ascii_case("sqlite") => {
+            let (userinfo, host) = location.split_at(at);
+            let user = userinfo.split(':').next().unwrap_or("");
+            format!("{user}:***{host}")
+        }
+        _ => location.to_string(),
+    };
+    format!("{scheme}://{location}{}", redact_query(tail))
+}
+
+/// A URL's query, as far as it goes, its password-like parameters' values
+/// masked; what follows a `#` and what is not a query, as it is.
+fn redact_query(tail: &str) -> String {
+    let Some(query) = tail.strip_prefix('?') else {
+        return tail.to_string();
+    };
+    let (query, fragment) = match query.split_once('#') {
+        Some((query, fragment)) => (query, Some(fragment)),
+        None => (query, None),
+    };
+    let pairs: Vec<String> = query
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((name, value)) if !value.is_empty() && is_password(name) => {
+                format!("{name}=***")
             }
-            None => url.to_string(),
-        },
-        None => url.to_string(),
+            _ => pair.to_string(),
+        })
+        .collect();
+    match fragment {
+        Some(fragment) => format!("?{}#{fragment}", pairs.join("&")),
+        None => format!("?{}", pairs.join("&")),
     }
+}
+
+/// Whether a query parameter's name, as written, is one a password goes in.
+fn is_password(name: &str) -> bool {
+    let name =
+        urlencoding::decode(name).map_or_else(|_| name.to_string(), |name| name.into_owned());
+    PASSWORD_PARAMETERS
+        .iter()
+        .any(|known| name.eq_ignore_ascii_case(known))
 }
 
 // ─── row accessors ───────────────────────────────────────────────────────────
@@ -929,5 +986,77 @@ mod tests {
             "postgres://ams:***@db:5432/ams"
         );
         assert_eq!(redact("sqlite://data/ams.db"), "sqlite://data/ams.db");
+    }
+
+    #[test]
+    fn the_whole_password_goes_whatever_it_holds() {
+        // An `@`, a `/`, a `:` in it: the user information ends at the last
+        // `@` before the host, not at the first.
+        for (url, shown) in [
+            (
+                "postgres://ams:p@ssw0rd@db:5432/ams",
+                "postgres://ams:***@db:5432/ams",
+            ),
+            (
+                "postgres://ams:pa/ss@word@db/ams?sslmode=require",
+                "postgres://ams:***@db/ams?sslmode=require",
+            ),
+            (
+                "postgresql://ams:a:b:c@db:5432/ams",
+                "postgresql://ams:***@db:5432/ams",
+            ),
+            // With none, it is written as it always was: the line does not
+            // say whether there was one.
+            ("postgres://ams@db/ams", "postgres://ams:***@db/ams"),
+        ] {
+            assert_eq!(redact(url), shown, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_password_given_as_a_parameter_goes_too() {
+        for (url, shown) in [
+            (
+                "postgres://db/ams?user=ams&password=s3cret&sslmode=require",
+                "postgres://db/ams?user=ams&password=***&sslmode=require",
+            ),
+            (
+                "postgres:///ams?host=/var/run/postgresql&PASSWORD=s3cret",
+                "postgres:///ams?host=/var/run/postgresql&PASSWORD=***",
+            ),
+            (
+                "postgres://db/ams?%70assword=s3cret&sslpassword=k3y",
+                "postgres://db/ams?%70assword=***&sslpassword=***",
+            ),
+            // Both; and a fragment, which is not the query's.
+            (
+                "postgres://ams:a@b@db/ams?pwd=z&sslmode=disable#frag",
+                "postgres://ams:***@db/ams?pwd=***&sslmode=disable#frag",
+            ),
+            // An empty value says nothing; a name that only contains one
+            // is not one.
+            (
+                "postgres://db/ams?password=&compass=north",
+                "postgres://db/ams?password=&compass=north",
+            ),
+        ] {
+            assert_eq!(redact(url), shown, "{url}");
+        }
+        // An `@` in a parameter's value is not where the host begins.
+        assert_eq!(
+            redact("postgres://ams:pw@db/ams?options=-c%20role=a@b"),
+            "postgres://ams:***@db/ams?options=-c%20role=a@b"
+        );
+    }
+
+    #[test]
+    fn what_is_no_connection_url_is_left_as_it_is() {
+        for text in [
+            "not a url",
+            "sqlite://data/user@host/ams.db?mode=rwc",
+            "sqlite::memory:",
+        ] {
+            assert_eq!(redact(text), text);
+        }
     }
 }

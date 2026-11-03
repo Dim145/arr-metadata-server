@@ -163,7 +163,13 @@ impl TmdbClient {
         external_source: &str,
         external_id: &str,
     ) -> Result<models::FindResponse> {
-        let url = format!("{}/find/{external_id}", self.base);
+        // One segment of the path, whatever the id holds: it is read from a
+        // request, a list, a feed, and is no address of anybody's choosing.
+        let url = format!(
+            "{}/find/{}",
+            self.base,
+            crate::providers::segment(external_id)
+        );
         let params = [
             ("external_source", external_source.to_string()),
             ("language", self.language()),
@@ -752,6 +758,57 @@ mod tests {
         assert_eq!(image_languages("fr-FR"), "fr,en,null");
         assert_eq!(image_languages("en-US"), "en,null", "English once");
         assert_eq!(image_languages("ja"), "ja,en,null");
+    }
+
+    /// What an id written into the path of `/find` is asked as: the path
+    /// the stand-in was sent, as it was written on the wire.
+    async fn asked_to_find(id: &str) -> Vec<String> {
+        use std::sync::{Arc, Mutex};
+
+        use axum::{Router, extract::Request};
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&seen);
+        let app = Router::new().fallback(move |request: Request| {
+            let kept = Arc::clone(&kept);
+            async move {
+                kept.lock().unwrap().push(request.uri().path().to_string());
+                axum::Json(serde_json::json!({ "movie_results": [], "tv_results": [] }))
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let at = listener.local_addr().expect("its address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = TmdbClient::new(
+            reqwest::Client::new(),
+            &config::Tmdb {
+                api_key: Some("test".into()),
+                upstream: format!("http://{at}"),
+                language: "en-US".into(),
+                include_adult: false,
+                search_limit: 5,
+                passthrough: true,
+            },
+        );
+        client.find("imdb_id", id).await.expect("answered");
+        seen.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn an_id_asked_for_is_one_segment_of_the_path_whatever_it_holds() {
+        assert_eq!(asked_to_find("tt0903747").await, ["/3/find/tt0903747"]);
+        assert_eq!(asked_to_find("81189").await, ["/3/find/81189"]);
+        // Not a way to another path of TMDB's — nor to a query of its own.
+        assert_eq!(
+            asked_to_find("../account/1?session_id=s#x").await,
+            ["/3/find/..%2Faccount%2F1%3Fsession_id%3Ds%23x"]
+        );
+        assert_eq!(asked_to_find("tt1/../../3/account").await.len(), 1);
     }
 
     #[test]

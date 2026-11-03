@@ -17,17 +17,43 @@
 //! nothing else can be had through the gate. It is guarded as the TMDB relay
 //! is — switched off with it, behind the same address list — but a key
 //! policy reads as the address list: a picture's address carries no key.
+//!
+//! A library's scan asks for pictures in bursts no relay's caller makes, so a
+//! caller the guard lets in is not held to the quota every surface is held to,
+//! but to one of its own, ten times as high ([`Pace`]); and the pictures
+//! handed on from TMDB are so many at a time ([`crate::cache::Caches::pictures`]),
+//! the others waiting for their turn.
+
+use std::{
+    net::IpAddr,
+    num::NonZeroU32,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    middleware::Next,
     response::{IntoResponse, Response},
 };
 use futures::StreamExt as _;
+use governor::{
+    Quota, RateLimiter,
+    clock::{Clock as _, DefaultClock},
+    state::keyed::DefaultKeyedStateStore,
+};
+use tokio::sync::OwnedSemaphorePermit;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{error::AppError, state::AppState};
+use crate::{
+    error::{AppError, AppResult, Throttle},
+    state::AppState,
+};
 
 /// Where the gate is on this server: what TMDB's configuration is given as
 /// the start of its pictures' addresses, a size and a path to follow.
@@ -59,6 +85,98 @@ const KEPT_FOR: &str = "public, max-age=31536000, immutable";
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(picture))
+}
+
+/// How many times the requests an address may make a minute
+/// (`AMS_RATE_LIMIT_PER_MINUTE`) it may ask for pictures in that minute. The
+/// quota every surface is held to would stop a scan halfway through a
+/// library; ten times it stops nobody who is scanning one, and an address that
+/// is not.
+const PICTURES_PER_REQUEST: u32 = 10;
+
+/// How many addresses are counted before those gone quiet are dropped, and the
+/// fewest seconds between two such sweeps: the addresses come from whoever can
+/// reach the gate, and a sweep reads every one of them.
+const SWEEP_ABOVE: usize = 4096;
+const SWEEP_EVERY: u64 = 30;
+
+type Keyed = RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>;
+
+/// What each address has asked of the gate this minute, held to a quota of its
+/// own: kept in this instance's memory, as the quota of requests is when
+/// nothing is shared among several.
+#[derive(Clone)]
+pub struct Pace {
+    state: AppState,
+    per_minute: u32,
+    counts: Option<Arc<Keyed>>,
+    /// When the addresses gone quiet were last dropped, in seconds since the
+    /// epoch.
+    swept: Arc<AtomicU64>,
+}
+
+impl Pace {
+    /// A quota [`PICTURES_PER_REQUEST`] times the surfaces' — none, where
+    /// theirs is none (`AMS_RATE_LIMIT_PER_MINUTE=0`).
+    pub fn new(state: AppState) -> Self {
+        let per_minute = state
+            .config
+            .security
+            .rate_limit_per_minute
+            .saturating_mul(PICTURES_PER_REQUEST);
+        Self {
+            state,
+            per_minute,
+            counts: NonZeroU32::new(per_minute)
+                .map(|quota| Arc::new(RateLimiter::keyed(Quota::per_minute(quota)))),
+            swept: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Drop the addresses gone quiet, once there are many and it has been a
+    /// while: one count is kept for each address ever seen otherwise.
+    fn sweep(&self, counts: &Keyed) {
+        if counts.len() <= SWEEP_ABOVE {
+            return;
+        }
+        let now = crate::cache::now_secs();
+        let last = self.swept.load(Ordering::Relaxed);
+        if now.saturating_sub(last) >= SWEEP_EVERY
+            && self
+                .swept
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            counts.retain_recent();
+            counts.shrink_to_fit();
+        }
+    }
+}
+
+/// Count a picture asked for by a caller the guard let in against its
+/// address's quota of pictures: refused, saying when to come back, once that
+/// is spent. Inside the guard, which counts only those it turns away
+/// ([`crate::auth::middleware::guard_tmdb_images`]), and by the address it
+/// resolved.
+pub async fn pace(State(pace): State<Pace>, request: Request, next: Next) -> AppResult<Response> {
+    if let Some(counts) = &pace.counts {
+        let peer = crate::auth::ratelimit::peer_of(&pace.state, &request);
+        if let Err(refused) = counts.check_key(&peer) {
+            let wait = refused.wait_time_from(counts.clock().now());
+            tracing::warn!(
+                %peer,
+                path = %crate::telemetry::redact_path(request.uri().path()),
+                "rate limited"
+            );
+            return Err(AppError::RateLimited(Throttle::spent(
+                pace.per_minute,
+                Duration::from_secs(60),
+                wait,
+            )));
+        }
+        pace.sweep(counts);
+    }
+    Ok(next.run(request).await)
 }
 
 /// Where TMDB's configuration sends its clients for pictures, when that is
@@ -99,8 +217,9 @@ pub fn base(state: &AppState) -> Option<String> {
         (status = 400, description = "Not one of TMDB's sizes, or not a picture's name as TMDB gives one"),
         (status = 403, description = "The caller's address is not on the list that guards the TMDB relay"),
         (status = 404, description = "TMDB has no such picture at that size"),
+        (status = 429, description = "The caller's quota of pictures is spent for now; `Retry-After` says when to ask again"),
         (status = 502, description = "TMDB's pictures could not be reached"),
-        (status = 503, description = "The TMDB relay is switched off"),
+        (status = 503, description = "The TMDB relay is switched off, or as many pictures as are handed on from TMDB at once are under way (`Retry-After` says when to ask again)"),
     ),
     security(),
 )]
@@ -149,6 +268,12 @@ pub async fn picture(
         }
     }
 
+    // Handed on from TMDB, a few at a time whoever asks: each is bytes read
+    // from image.tmdb.org on this server's account, up to 25 MiB of them, and
+    // held — with the connection to TMDB — until the caller has had the last.
+    let Some(place) = state.caches.pictures.take().await else {
+        return crate::api::busy();
+    };
     relay(
         &state.media.http,
         TMDB_PICTURES,
@@ -158,6 +283,7 @@ pub async fn picture(
         content_type,
         &headers,
         crate::media::file::MAX_IMAGE_BYTES,
+        place,
     )
     .await
 }
@@ -237,6 +363,8 @@ fn side(digits: &str) -> bool {
 /// picture it holds is answered "unchanged"; nothing else of its request
 /// does. TMDB's "no such picture" — a size it does not cut that picture at
 /// is one too — is a `404`; anything else that is not the picture, a `502`.
+/// `place` is the one the picture takes among those handed on at once: held
+/// until the last of its bytes has been read, or the caller is gone.
 #[allow(clippy::too_many_arguments)]
 async fn relay(
     http: &reqwest::Client,
@@ -247,6 +375,7 @@ async fn relay(
     content_type: &'static str,
     asked: &HeaderMap,
     most: u64,
+    place: OwnedSemaphorePermit,
 ) -> Response {
     let url = format!("{from}/{size}/{file}");
     let head = *method == Method::HEAD;
@@ -326,7 +455,7 @@ async fn relay(
         if let Some(length) = response.content_length() {
             headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
         }
-        bounded(response, most)
+        bounded(response, most, place)
     };
     (StatusCode::OK, headers, body).into_response()
 }
@@ -342,10 +471,12 @@ fn validators_of(from: &HeaderMap, to: &mut HeaderMap) {
 }
 
 /// A picture's bytes as they come, cut off past `most`: a picture larger
-/// than any this server keeps is not one it hands on either.
-fn bounded(response: reqwest::Response, most: u64) -> Body {
+/// than any this server keeps is not one it hands on either. The body holds
+/// `place` until it is dropped, read to its end or not.
+fn bounded(response: reqwest::Response, most: u64, place: OwnedSemaphorePermit) -> Body {
     let mut read: u64 = 0;
     let stream = response.bytes_stream().map(move |chunk| {
+        let _held = &place;
         let chunk = chunk.map_err(std::io::Error::other)?;
         read += chunk.len() as u64;
         if read > most {
@@ -608,6 +739,10 @@ mod tests {
             headers.insert(name.clone(), HeaderValue::from_str(value).unwrap());
         }
         let content_type = picture_type(size, file).expect("a picture of TMDB's");
+        let place = crate::cache::Gate::new(1, Duration::from_millis(1))
+            .take()
+            .await
+            .expect("a place");
         relay(
             &reqwest::Client::new(),
             from,
@@ -617,6 +752,7 @@ mod tests {
             content_type,
             &headers,
             most,
+            place,
         )
         .await
     }
@@ -906,7 +1042,8 @@ mod tests {
         };
 
         // An address the gate lets in asks for as many pictures as a scan
-        // of its library takes, past the limit of its requests.
+        // of its library takes, past the limit of its requests: it has a
+        // quota of pictures of its own, ten times as high.
         let mut answers = Vec::new();
         for _ in 0..6 {
             answers.push(from(&state, [127, 0, 0, 1], &picture).await);
@@ -952,6 +1089,152 @@ mod tests {
         assert!(waited);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One request to a router already built, from an address: the count a
+    /// router keeps is its own, so a test of it builds one.
+    async fn routed(router: &Router, address: [u8; 4], uri: &str) -> Response {
+        let mut request = axum::http::Request::get(uri)
+            .body(Body::empty())
+            .expect("a request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from((address, 40_000))));
+        router.clone().oneshot(request).await.expect("an answer")
+    }
+
+    /// A caller the gate lets in is counted, against a quota of pictures of
+    /// its own, ten times the surfaces': told to wait once that is spent, with
+    /// the quota, and with no other address the worse for it.
+    #[tokio::test]
+    async fn a_scan_is_held_to_a_quota_of_pictures_ten_times_the_requests() {
+        let stand_in = StandIn::start(nothing).await;
+        let (state, dir) = testing::server_keeping_media_as(&stand_in, None, |config| {
+            config.security.rate_limit_per_minute = 1;
+        })
+        .await;
+        let file = "gatePacedPoster9Lm.jpg";
+        kept(&state, file, 74).await;
+        let picture = format!("/tmdb-images/w500/{file}");
+        let (router, _) = crate::api::build(state.clone());
+        let router = router.with_state(state.clone());
+
+        for n in 0..10 {
+            let answer = routed(&router, [127, 0, 0, 1], &picture).await;
+            assert_eq!(answer.status(), StatusCode::OK, "picture {n}");
+        }
+        let answer = routed(&router, [127, 0, 0, 1], &picture).await;
+        assert_eq!(answer.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(answer.headers().get(header::RETRY_AFTER).is_some());
+        assert_eq!(
+            answer.headers()["ratelimit-policy"],
+            "\"default\";q=10;w=60"
+        );
+
+        // Another address the gate lets in has its own count.
+        let answer = routed(&router, [10, 0, 0, 5], &picture).await;
+        assert_eq!(answer.status(), StatusCode::OK);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With limiting off, the pictures are not limited either.
+    #[tokio::test]
+    async fn no_quota_of_pictures_where_there_is_none_of_requests() {
+        let stand_in = StandIn::start(nothing).await;
+        let (state, dir) = testing::server_keeping_media_as(&stand_in, None, |config| {
+            config.security.rate_limit_per_minute = 0;
+        })
+        .await;
+        let file = "gateFreePoster2Wn.jpg";
+        kept(&state, file, 75).await;
+        let picture = format!("/tmdb-images/w500/{file}");
+        let (router, _) = crate::api::build(state.clone());
+        let router = router.with_state(state.clone());
+        for _ in 0..30 {
+            let answer = routed(&router, [127, 0, 0, 1], &picture).await;
+            assert_eq!(answer.status(), StatusCode::OK);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Pictures handed on from TMDB are so many at once, and no more: the
+    /// next waits for its turn and is turned away when it does not come. One
+    /// the store keeps is none of that.
+    #[tokio::test]
+    async fn pictures_are_handed_on_a_few_at_a_time() {
+        let stand_in = StandIn::start(nothing).await;
+        let (state, dir) = testing::server_keeping_media(&stand_in, None).await;
+        let kept_file = "gateKeptPoster4Hs.jpg";
+        kept(&state, kept_file, 76).await;
+        state
+            .caches
+            .pictures
+            .wait_at_most(Duration::from_millis(30));
+        let mut held = Vec::new();
+        while state.caches.pictures.free() > 0 {
+            held.push(state.caches.pictures.take().await.expect("a place"));
+        }
+
+        // Not kept here, so asked of TMDB: every place is taken.
+        let answer = asked_of(&state, "w500", "kqjL17yufvn9OVLyXYpvtyrFfak.jpg").await;
+        assert_eq!(answer.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(answer.headers().get(header::RETRY_AFTER).is_some());
+
+        // One kept here takes no place.
+        let answer = asked_of(&state, "w500", kept_file).await;
+        assert_eq!(answer.status(), StatusCode::OK);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        drop(held);
+    }
+
+    /// A picture holds its place until the last of its bytes is read, and
+    /// gives it back then — or when its caller goes without them.
+    #[tokio::test]
+    async fn a_picture_holds_its_place_until_the_last_byte() {
+        let (at, _) = pictures().await;
+        let gate = crate::cache::Gate::new(2, Duration::from_millis(30));
+        let file = "kqjL17yufvn9OVLyXYpvtyrFfak.jpg";
+        let content_type = picture_type("w500", file).expect("a picture of TMDB's");
+        let relayed = async |method: Method, size: &str, file: &str| {
+            let place = gate.take().await.expect("a place");
+            relay(
+                &reqwest::Client::new(),
+                &at,
+                &method,
+                size,
+                file,
+                content_type,
+                &HeaderMap::new(),
+                crate::media::file::MAX_IMAGE_BYTES,
+                place,
+            )
+            .await
+        };
+
+        let answer = relayed(Method::GET, "w500", file).await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        assert_eq!(gate.free(), 1, "held while the bytes are on their way");
+        let body = axum::body::to_bytes(answer.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], &[0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+        assert_eq!(gate.free(), 2, "given back with the last of them");
+
+        // Gone without reading them: given back with the body.
+        let answer = relayed(Method::GET, "w500", file).await;
+        assert_eq!(gate.free(), 1);
+        drop(answer);
+        assert_eq!(gate.free(), 2);
+
+        // Nothing to hand on, nothing held: a question, a refusal.
+        let answer = relayed(Method::HEAD, "w500", file).await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        assert_eq!(gate.free(), 2);
+        let answer = relayed(Method::GET, "original", "absent.jpg").await;
+        assert_eq!(answer.status(), StatusCode::NOT_FOUND);
+        assert_eq!(gate.free(), 2);
     }
 
     #[tokio::test]

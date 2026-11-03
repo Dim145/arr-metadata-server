@@ -113,6 +113,7 @@ actions! {
     DatasetImported => "dataset.imported",
     BackupDeleted => "backup.deleted",
     BackupRestored => "backup.restored",
+    BackupDownloaded => "backup.downloaded",
     // A read, unlike the rest: what an agent asked through `/mcp` is the
     // operator's to see, each call, as nothing else an agent does is.
     McpCalled => "mcp.called",
@@ -165,11 +166,18 @@ pub struct Record<'a> {
 /// error, which is what a handler wants — failing to record an action must not
 /// fail the action.
 pub async fn record(db: &Db, entry: Record<'_>) -> Result<()> {
+    record_returning(db, entry).await.map(|_| ())
+}
+
+/// Write an entry, and say its id: what a row that is to be amended later is
+/// found by ([`amend_detail`]).
+pub async fn record_returning(db: &Db, entry: Record<'_>) -> Result<String> {
+    let id = new_id();
     sqlx::query(db.sql(
         "INSERT INTO audit_log (id, at, actor, action, target, detail, ip)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     ))
-    .bind(new_id())
+    .bind(&id)
     .bind(now())
     .bind(entry.actor)
     .bind(entry.action.as_str())
@@ -179,7 +187,21 @@ pub async fn record(db: &Db, entry: Record<'_>) -> Result<()> {
     .execute(db.pool())
     .await?;
 
-    Ok(())
+    Ok(id)
+}
+
+/// Replace the note of an entry already written: whether there was one to
+/// amend — a row the retention has taken in the meantime is gone. For a row
+/// that stood for one failure when it was written, and for the run of them
+/// it began when that run is over.
+pub async fn amend_detail(db: &Db, id: &str, detail: &str) -> Result<bool> {
+    let result = sqlx::query(db.sql("UPDATE audit_log SET detail = ? WHERE id = ?"))
+        .bind(detail)
+        .bind(id)
+        .execute(db.pool())
+        .await?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 #[derive(Clone, Debug, Default)]

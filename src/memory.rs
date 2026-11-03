@@ -63,6 +63,7 @@ fn count(delta: isize) {
 unsafe impl GlobalAlloc for Counting {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — a GlobalAlloc has to call its allocator's unsafe methods, held by the SAFETY note
         let at = unsafe { mimalloc::MiMalloc.alloc(layout) };
         if !at.is_null() {
             count(layout.size() as isize);
@@ -72,6 +73,7 @@ unsafe impl GlobalAlloc for Counting {
 
     #[inline]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — a GlobalAlloc has to call its allocator's unsafe methods, held by the SAFETY note
         let at = unsafe { mimalloc::MiMalloc.alloc_zeroed(layout) };
         if !at.is_null() {
             count(layout.size() as isize);
@@ -81,12 +83,14 @@ unsafe impl GlobalAlloc for Counting {
 
     #[inline]
     unsafe fn dealloc(&self, at: *mut u8, layout: Layout) {
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — a GlobalAlloc has to call its allocator's unsafe methods, held by the SAFETY note
         unsafe { mimalloc::MiMalloc.dealloc(at, layout) };
         count(-(layout.size() as isize));
     }
 
     #[inline]
     unsafe fn realloc(&self, at: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage — a GlobalAlloc has to call its allocator's unsafe methods, held by the SAFETY note
         let moved = unsafe { mimalloc::MiMalloc.realloc(at, layout, new_size) };
         // A failed realloc leaves the old block where it was, still held.
         if !moved.is_null() {

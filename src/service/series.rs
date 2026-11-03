@@ -214,6 +214,13 @@ pub async fn by_tmdb_id(state: &AppState, tmdb_id: i64) -> Result<Option<MediaIt
 }
 
 pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
+    // As a film's: an id that is none is no series', and never goes into a
+    // provider's address — it is written there, a path of TMDB's — nor into
+    // what is looked for.
+    let Some(imdb_id) = crate::domain::ids::normalize_imdb_id(imdb_id) else {
+        return Ok(None);
+    };
+    let imdb_id = imdb_id.as_str();
     if let Some(item) = local(state, ExternalSource::Imdb, imdb_id).await?
         && item.kind == MediaKind::Series
     {
@@ -1029,6 +1036,31 @@ mod tests {
         .await
         .expect("stored");
         item
+    }
+
+    /// An IMDb id comes from a request's body, a query, a list somebody
+    /// else keeps: one that is none is no series, and asks nobody.
+    #[tokio::test]
+    async fn an_imdb_id_that_is_none_is_no_series_and_goes_into_no_address() {
+        let (state, providers) = crate::service::testing::server().await;
+        for none in [
+            "../account/1?x=1",
+            "tt12345?language=fr",
+            "tt12345/../../3/account/tt",
+            "not an id",
+            "ttabc",
+            "tt",
+            "",
+        ] {
+            let found = by_imdb_id(&state, none).await.expect("answered");
+            assert!(found.is_none(), "{none:?}");
+        }
+        assert_eq!(providers.asked(), 0, "none of them was asked of anybody");
+
+        // What makes it a test: one that is an id, spelt as TMDB's find
+        // takes it, is asked for.
+        let _ = by_imdb_id(&state, "9907240").await;
+        assert!(providers.asked() > 0);
     }
 
     #[tokio::test]

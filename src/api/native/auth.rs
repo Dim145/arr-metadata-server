@@ -20,10 +20,11 @@ use crate::{
     auth::{
         Identity, ip,
         middleware::{self, SESSION_COOKIE},
+        ratelimit::{self, Reserved},
         secrets,
     },
     db::repo::{self, audit::Action},
-    error::{AppError, AppResult},
+    error::{AppError, AppResult, Throttle},
     state::AppState,
 };
 
@@ -104,18 +105,12 @@ async fn login(
         return Err(AppError::Unauthorized);
     }
 
-    // An account that has failed too often lately is not checked at all, from
-    // wherever the attempt comes: guessing one person's password from many
-    // addresses runs out as surely as from one. Asked before anything is
-    // hashed, so a refused attempt costs nothing. Told when the account's
-    // window closes: the failures are no quota of requests, so that alone.
-    if let Err(wait) = state.limiter.sign_in_allowed(&request.username).await {
-        tracing::warn!(
-            username = ?request.username,
-            "sign-in refused: too many failed attempts on this account lately"
-        );
-        return Err(AppError::RateLimited(crate::error::Throttle::after(wait)));
-    }
+    // The attempt is counted before anything is looked up or hashed, and
+    // refused there when the account has taken as many from this address as
+    // it takes lately — or, from addresses it has not been signed in from,
+    // as many from everywhere. Told when the window closes: the failures
+    // are no quota of requests, so that alone.
+    let attempt = begin_attempt(&state, &request.username, &ip, None).await?;
 
     // Passwords switched off: the identity provider signs people in, and only
     // the account the environment names keeps a door — the way back in when
@@ -129,8 +124,13 @@ async fn login(
         message: "this server signs people in through its identity provider".into(),
     };
     if passwords_off && !state.is_break_glass_name(&request.username) {
-        secrets::verify_password_async(request.password.clone(), DUMMY_HASH.to_string()).await?;
-        state.limiter.sign_in_failed(&request.username).await;
+        check_password(
+            &state,
+            attempt,
+            request.password.clone(),
+            DUMMY_HASH.to_string(),
+        )
+        .await?;
         return Err(refused());
     }
 
@@ -144,40 +144,53 @@ async fn login(
         // An account an identity provider made has no password: checked
         // against the dummy all the same, so it takes as long as any other.
         Some(creds) if creds.password_hash == repo::user::NO_PASSWORD => {
-            secrets::verify_password_async(request.password.clone(), DUMMY_HASH.to_string())
-                .await?;
+            check_password(
+                &state,
+                attempt,
+                request.password.clone(),
+                DUMMY_HASH.to_string(),
+            )
+            .await?;
             (Some(creds.user), false)
         }
         Some(creds) => {
-            let ok = secrets::verify_password_async(request.password.clone(), creds.password_hash)
-                .await?;
+            let ok = check_password(
+                &state,
+                attempt,
+                request.password.clone(),
+                creds.password_hash,
+            )
+            .await?;
             (Some(creds.user), ok)
         }
         None => {
-            secrets::verify_password_async(request.password.clone(), DUMMY_HASH.to_string())
-                .await?;
+            check_password(
+                &state,
+                attempt,
+                request.password.clone(),
+                DUMMY_HASH.to_string(),
+            )
+            .await?;
             (None, false)
         }
     };
 
     let (Some(user), true) = (user, ok) else {
-        state.limiter.sign_in_failed(&request.username).await;
-        // Debug-formatted: quoted, its line breaks and control characters
-        // escaped, so a name typed into the form cannot write a line of its
-        // own into the log.
+        // Counted already, before the password was looked at. Debug-formatted:
+        // quoted, its line breaks and control characters escaped, so a name
+        // typed into the form cannot write a line of its own into the log.
         tracing::warn!(username = ?request.username, "failed sign-in attempt");
 
         // Recorded deliberately: a run of these is the one thing in this log
-        // worth alerting on. The attempted username is kept; the password is not.
-        audit::record(
+        // worth alerting on. The attempted username is kept; the password is
+        // not. A run from one network is one row at once and one that counts
+        // the rest — anybody can send these with no credential at all.
+        audit::record_failure(
             &state,
-            Event {
-                identity: None,
-                ip: &ip,
-                action: Action::SignInFailed,
-                target: Some(request.username.trim()),
-                detail: None,
-            },
+            audit::Failure::Password,
+            &ip,
+            Some(request.username.trim()),
+            None,
         )
         .await;
 
@@ -188,7 +201,7 @@ async fn login(
         });
     };
 
-    state.limiter.sign_in_succeeded(&request.username).await;
+    state.limiter.sign_in_succeeded(attempt).await;
 
     if passwords_off
         && !(user.role == repo::user::Role::Admin && user.status == repo::user::Status::Active)
@@ -220,6 +233,97 @@ async fn login(
     Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)], Json(answer)))
 }
 
+/// Count an attempt at `username`'s password from this caller's network
+/// before the password is looked at, and refuse it when it is not to be.
+/// Refused: when the network has made as many attempts on the account as a
+/// window allows, whatever it sends; and when the account has taken more
+/// than its bar from every network together and this one has not been signed
+/// in to it lately ([`ratelimit::address_known`]), so that guessing from
+/// many addresses runs out while the account's owner, from theirs, still
+/// gets in. A refused attempt costs nothing: no password is hashed for it.
+///
+/// `user` is the account's id when it is known; otherwise the account is
+/// looked up by its name, and only once the bar is passed.
+pub(crate) async fn begin_attempt(
+    state: &AppState,
+    username: &str,
+    ip: &ClientIp,
+    user: Option<&str>,
+) -> AppResult<Reserved> {
+    let network = ratelimit::network_of(ip.0);
+    let reserved = match state.limiter.sign_in_begin(username, network).await {
+        Ok(reserved) => reserved,
+        Err(wait) => {
+            tracing::warn!(
+                username = ?username,
+                "sign-in refused: too many failed attempts on this account from this address lately"
+            );
+            return Err(AppError::RateLimited(Throttle::after(wait)));
+        }
+    };
+
+    let Some(wait) = reserved.over_account_bar() else {
+        return Ok(reserved);
+    };
+    let known = match user {
+        Some(id) => ratelimit::address_known(&state.db, id, network).await,
+        None => match repo::user::find_by_username(&state.db, username.trim()).await? {
+            Some(found) => ratelimit::address_known(&state.db, &found.user.id, network).await,
+            None => false,
+        },
+    };
+    if known {
+        return Ok(reserved);
+    }
+
+    state.limiter.sign_in_given_back(reserved).await;
+    tracing::warn!(
+        username = ?username,
+        "sign-in refused: too many failed attempts on this account lately, from addresses it has \
+         not been signed in from"
+    );
+    Err(AppError::RateLimited(Throttle::after(wait)))
+}
+
+/// A password checked within an attempt counted by [`begin_attempt`]: whether
+/// it is right. When every hashing slot stayed taken nothing was checked, and
+/// the attempt is given back; the caller is told to come back.
+pub(crate) async fn check_password(
+    state: &AppState,
+    attempt: Reserved,
+    password: String,
+    hash: String,
+) -> AppResult<bool> {
+    match secrets::verify_password_async(password, hash).await {
+        Ok(ok) => Ok(ok),
+        Err(busy @ secrets::HashError::Busy) => {
+            state.limiter.sign_in_given_back(attempt).await;
+            Err(busy.into())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+/// A signed-in person's password, asked for again as proof that it is them
+/// at the keyboard and not whoever holds a session left open: counted and
+/// checked as a sign-in is, so that guessing it from a session that is not
+/// theirs runs out as guessing it at the form does. A wrong one is
+/// `Unauthorized`.
+pub(crate) async fn prove_password(
+    state: &AppState,
+    user: &repo::user::User,
+    hash: String,
+    typed: &str,
+    ip: &ClientIp,
+) -> AppResult<()> {
+    let attempt = begin_attempt(state, &user.username, ip, Some(&user.id)).await?;
+    if !check_password(state, attempt, typed.to_string(), hash).await? {
+        return Err(AppError::Unauthorized);
+    }
+    state.limiter.sign_in_succeeded(attempt).await;
+    Ok(())
+}
+
 /// Open a session for someone who has shown who they are — by their password,
 /// by signing up, or through the identity provider — and say so in the
 /// journal. Returns the cookie to set and what the interface is told;
@@ -246,6 +350,11 @@ pub(crate) async fn open_session(
     .await?;
 
     repo::user::mark_login(&state.db, &user.id).await?;
+
+    // However they came in: the address a person signs in from is one the
+    // account's own, which what is tried against it from elsewhere does not
+    // shut out ([`begin_attempt`]).
+    ratelimit::remember_address(&state.db, &user.id, ratelimit::network_of(ip.0)).await;
 
     let identity = Identity::User(Box::new(user.clone()));
     audit::record(
@@ -454,11 +563,16 @@ async fn change_password(
         return Err(AppError::BadRequest("that password is too long".into()));
     }
 
-    if !secrets::verify_password_async(request.current_password.clone(), creds.password_hash)
-        .await?
-    {
-        return Err(AppError::Unauthorized);
-    }
+    // Asked as a sign-in is: a session is not the password, and guessing the
+    // password through it is counted as guessing it at the form.
+    prove_password(
+        &state,
+        user,
+        creds.password_hash,
+        &request.current_password,
+        &ip,
+    )
+    .await?;
 
     let hash = secrets::hash_password_async(request.new_password.clone()).await?;
 
@@ -484,4 +598,162 @@ async fn change_password(
     .await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        auth::testing::{client_at, server},
+        db::repo::user::{NewUser, Role, Status, User},
+    };
+
+    /// A password, drawn at random: the tests need none in particular, and one
+    /// written in the code reads as a secret kept there to whoever scans it.
+    fn password() -> String {
+        secrets::generate_session_token().unwrap().0
+    }
+
+    async fn account(state: &AppState, name: &str, password: &str) -> User {
+        repo::user::create(
+            &state.db,
+            NewUser {
+                username: name,
+                password_hash: &secrets::hash_password(password).unwrap(),
+                role: Role::Member,
+                status: Status::Active,
+                display_name: None,
+                email: None,
+                invited_by: None,
+                oidc: None,
+            },
+        )
+        .await
+        .expect("an account")
+    }
+
+    /// The sign-in form, filled in from an address.
+    async fn sign_in(
+        state: &AppState,
+        from: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<StatusCode, AppError> {
+        let ip = client_at(state, from).await;
+        login(
+            State(state.clone()),
+            ip,
+            None,
+            HeaderMap::new(),
+            Json(LoginRequest {
+                username: username.into(),
+                password: password.into(),
+            }),
+        )
+        .await
+        .map(|answer| answer.into_response().status())
+    }
+
+    /// What the lock-out is for is that a burst is held to its limit. Every
+    /// password of a burst was checked, once, when the count was made after
+    /// the check: all of them found it at nothing, and went on to be checked.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_burst_of_wrong_passwords_is_checked_no_more_than_the_limit_allows() {
+        let state = server(3).await;
+        account(&state, "alice", &password()).await;
+        let wrong = password();
+
+        let attempts: Vec<_> = (0..12)
+            .map(|_| {
+                let (state, wrong) = (state.clone(), wrong.clone());
+                tokio::spawn(async move { sign_in(&state, "198.51.100.9", "alice", &wrong).await })
+            })
+            .collect();
+        let (mut checked, mut turned_away) = (0, 0);
+        for attempt in attempts {
+            match attempt.await.unwrap() {
+                Err(AppError::Unauthorized) => checked += 1,
+                Err(AppError::RateLimited(_)) => turned_away += 1,
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!((checked, turned_away), (3, 9));
+    }
+
+    /// Somebody guessing at an account from their own addresses shuts those
+    /// addresses out, and — past a bar for the account as a whole — every
+    /// address that has not signed in to it. Its owner's usual address is not
+    /// one of them: with the right password it gets in, and the guessing
+    /// that was turned away cost nothing to check.
+    #[tokio::test]
+    async fn guessing_at_an_account_shuts_out_the_guessers_and_not_its_owner() {
+        let state = server(1).await;
+        let right = password();
+        account(&state, "alice", &right).await;
+        let (home, away) = ("203.0.113.7", "203.0.113.99");
+
+        // Their usual address, signed in from once: known to the account.
+        assert_eq!(
+            sign_in(&state, home, "alice", &right).await.unwrap(),
+            StatusCode::OK
+        );
+
+        // Five addresses, each its one failure — the account's bar is five
+        // times an address's — and the sixth is turned away unchecked.
+        let wrong = password();
+        for n in 1..=5 {
+            let from = format!("198.51.100.{n}");
+            assert!(matches!(
+                sign_in(&state, &from, "alice", &wrong).await,
+                Err(AppError::Unauthorized)
+            ));
+        }
+        assert!(matches!(
+            sign_in(&state, "198.51.100.6", "alice", &wrong).await,
+            Err(AppError::RateLimited(_))
+        ));
+        // One address, again: its own count is spent.
+        assert!(matches!(
+            sign_in(&state, "198.51.100.1", "alice", &wrong).await,
+            Err(AppError::RateLimited(_))
+        ));
+
+        // The owner, from where they have signed in, gets through; from
+        // somewhere they have not, they wait with the rest.
+        assert_eq!(
+            sign_in(&state, home, "alice", &right).await.unwrap(),
+            StatusCode::OK
+        );
+        assert!(matches!(
+            sign_in(&state, away, "alice", &right).await,
+            Err(AppError::RateLimited(_))
+        ));
+    }
+
+    /// A session is not the password: asking for it again is counted, so that
+    /// guessing it through a session that is not its owner's runs out as at
+    /// the form.
+    #[tokio::test]
+    async fn the_current_password_asked_for_again_is_counted_as_at_the_form() {
+        let state = server(1).await;
+        let right = password();
+        let alice = account(&state, "alice", &right).await;
+        let hash = repo::user::credentials(&state.db, &alice.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash;
+        let ip = client_at(&state, "198.51.100.9").await;
+
+        let wrong = password();
+        assert!(matches!(
+            prove_password(&state, &alice, hash.clone(), &wrong, &ip).await,
+            Err(AppError::Unauthorized)
+        ));
+        // Spent: not even the right one is looked at now.
+        assert!(matches!(
+            prove_password(&state, &alice, hash, &right, &ip).await,
+            Err(AppError::RateLimited(_))
+        ));
+    }
 }

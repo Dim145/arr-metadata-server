@@ -73,8 +73,8 @@ naming the variable. Flags take `true`, `false`, `1`, `0`, `yes`, `no`, `on` and
 | `AMS_ALLOWED_HOSTS` | unset, any name | The host names the interface's door answers to, separated by commas; another is answered `421`, but for `/health`, `/ready`, `/ca.crt` and `/trust-ca.sh`. |
 | `AMS_CORS_ORIGINS` | unset, none | Origins whose pages may call the native API from a browser, separated by commas. `*` is ignored, with a warning. |
 | `AMS_REQUEST_TIMEOUT` | `60` | Seconds a request may take before it is answered `504`; 1 to 86400. |
-| `AMS_MAX_CONNECTIONS` | `1024` | Connections each door holds at once; past it, a new one waits to be accepted. |
-| `AMS_HEADER_READ_TIMEOUT` | `30` | Seconds a connection has to send a request's head, and may sit idle between two requests; 1 to 600. |
+| `AMS_MAX_CONNECTIONS` | `1024` | Connections each door holds at once; past it, a new one waits to be accepted. No one address — an IPv6 /64 as one — holds more than 64 of them, a trusted proxy's and this machine's excepted. |
+| `AMS_HEADER_READ_TIMEOUT` | `30` | Seconds a connection has to send a request's head, and may sit idle between two requests; 1 to 600. A connection with no request in flight for two minutes — an HTTP/2 one too — is closed. |
 | `AMS_LOG` (`RUST_LOG`) | `info` | What is logged, as a `tracing` filter: `debug`, `info,arr_metadata_server=debug`. The administration's **Server log** keeps the same lines. |
 | `AMS_LOG_FORMAT` | unset | `json` writes one JSON object per line, for a log shipper, each with the `trace_id` of the request it was written in. |
 
@@ -125,8 +125,8 @@ OpenTelemetry collector. These are OpenTelemetry's own variables; see
 | `AMS_AUTH_DISABLED` | `false` | Opens every surface. For closed networks and a first setup only. |
 | `AMS_ALLOWLIST` (`AMS_ARR_ALLOWLIST`) | loopback and the private ranges | The first value of the list of allowed addresses, separated by commas; read against an empty list only. The default is `127.0.0.0/8`, `::1/128`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `fc00::/7`. |
 | `AMS_PUBLIC_BROWSE` | unset | `true` gives `site.access` the first value `public`; `false` keeps the site private whatever the setting says. |
-| `AMS_RATE_LIMIT_PER_MINUTE` | `600` | Requests a minute, per address — an IPv6 address by its /64. TMDB's pictures under `/tmdb-images/` are not counted for an address their guard lets in. |
-| `AMS_SIGNIN_FAILURES_PER_ACCOUNT` | `10` | Failed sign-ins an account takes in fifteen minutes before it is refused unchecked until the window closes. |
+| `AMS_RATE_LIMIT_PER_MINUTE` | `600` | Requests a minute, per address — an IPv6 address by its /64. TMDB's pictures under `/tmdb-images/` are counted apart, against ten times as many, for an address their guard lets in. A copy of a picture made on demand under `/media/` counts for one each time it is asked for before it is kept; copies kept and pictures count for none. |
+| `AMS_SIGNIN_FAILURES_PER_ACCOUNT` | `10` | Failed sign-ins an account takes from one address in fifteen minutes (an IPv6 /64 counts as one) before that address is refused unchecked until the window closes; five times as many from every address together, which does not apply to an address the account signed in from in the last thirty days. |
 | `AMS_SIGNUPS_PER_HOUR` | `5` | Sign-ups without an invitation, per address and per hour. |
 | `AMS_SIGNUPS_PER_HOUR_TOTAL` | `100` | The same, for the whole server. |
 | `AMS_OIDC_CLIENT_SECRET` | unset | The identity provider's client secret, which wins over the one stored in the settings. |
@@ -163,7 +163,9 @@ These give a setting its first value, and are not read again once it has one —
 
 Each provider is asked at its own address unless one is given. An address given may be
 anywhere — a mirror on the same machine included; where it redirects is judged as any other
-address the server fetches. See
+address the server fetches, and TMDB, Fanart.tv, TheTVDB and MyAnimeList, which a key or a
+client id travels to, are followed only within the origin first asked: an upstream that
+redirects `http://` to `https://` must be given as `https://`. See
 [If you redirect at the resolver](integration.md#if-you-redirect-at-the-resolver).
 
 | Variable | Default |

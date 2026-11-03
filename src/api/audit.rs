@@ -1,17 +1,25 @@
 //! Recording and reading the audit trail.
 
+use std::{
+    collections::HashMap,
+    net::IpAddr,
+    sync::LazyLock,
+    time::{Duration, Instant},
+};
+
 use axum::{
     Extension, Json,
     extract::{Query as AxumQuery, State},
     response::{IntoResponse, Response},
 };
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     api::extract::ClientIp,
-    auth::Identity,
+    auth::{Identity, ratelimit::network_of},
     db::repo::{
         self,
         audit::{Action, Entry},
@@ -35,13 +43,18 @@ pub struct Event<'a> {
 /// refusing it after the fact because the trail could not be written would be
 /// worse than an incomplete trail.
 pub async fn record(state: &AppState, event: Event<'_>) {
+    record_row(state, event).await;
+}
+
+/// [`record`], and the id of the row it wrote — nothing when it could not.
+async fn record_row(state: &AppState, event: Event<'_>) -> Option<String> {
     let actor = event.identity.map(Identity::label);
     let ip = event.ip.as_text();
 
     let target = event.target.map(clip);
     let detail = event.detail.map(clip);
 
-    let result = repo::audit::record(
+    let result = repo::audit::record_returning(
         &state.db,
         repo::audit::Record {
             actor: actor.as_deref(),
@@ -53,9 +66,13 @@ pub async fn record(state: &AppState, event: Event<'_>) {
     )
     .await;
 
-    if let Err(e) = result {
-        tracing::warn!(action = %event.action, error = %e, "could not write the audit entry");
-    }
+    let row = match result {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!(action = %event.action, error = %e, "could not write the audit entry");
+            None
+        }
+    };
 
     // A lock, an edit, a sync: told to the operator's own Sonarr or Radarr
     // too, when that is asked for.
@@ -73,6 +90,8 @@ pub async fn record(state: &AppState, event: Event<'_>) {
         },
     )
     .await;
+
+    row
 }
 
 /// Who the trail says did what this server does of its own accord.
@@ -111,6 +130,221 @@ pub async fn record_system(state: &AppState, action: Action, target: &str, detai
         },
     )
     .await;
+}
+
+// ─── failures of somebody with no credential ─────────────────────────────────
+
+/// What kind of failure somebody with no credential made, for the trail to
+/// gather them by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Failure {
+    /// A password that was refused at the sign-in form.
+    Password,
+    /// A return from the identity provider that was refused.
+    Provider,
+}
+
+/// How long the failures of one kind from one network are gathered into one
+/// row.
+const GATHERED_FOR: Duration = Duration::from_secs(60);
+
+/// The most networks gathered at once. The addresses come from whoever can
+/// reach the port; past this the rest are gathered with the one every address
+/// that cannot be told shares, so that the rows written stay bounded however
+/// many addresses there are.
+const GATHERED_MOST: usize = 4096;
+
+/// What one network's failures of one kind have come to in the window open.
+struct Gathered {
+    opened: Instant,
+    /// The row the first of them was recorded in, to say how many there were
+    /// when the window closes — none when it could not be written.
+    row: Option<String>,
+    /// Failures since the first, which was recorded at once: counted here,
+    /// and told together when the window closes.
+    held: u32,
+    /// The name and the note of the latest of them, for the row to read by.
+    last: (Option<String>, Option<String>),
+    /// Whether a task is waiting for the window to close to tell them.
+    waiting: bool,
+}
+
+static GATHERING: LazyLock<Mutex<HashMap<(IpAddr, Failure), Gathered>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Record a failed sign-in of somebody who came with no credential — a
+/// refused password, a refused return from the identity provider — and gather
+/// the ones that follow from the same network ([`crate::auth::ip::bucket`])
+/// in the next minute into that one row, which says how many there were.
+///
+/// What anybody can cause by sending requests has to be bounded by who sends
+/// them, not by how many: the sign-in form is reachable with no credential,
+/// and each failure was a row, a notification and a line of the journal's
+/// CSV, six hundred a minute from one address. The first of a run is
+/// recorded at once, as it always was — it is the one somebody is looking
+/// for, and a slip of one's own fingers is then a row, as before — and when
+/// the minute is over the row is amended to carry the number of the run and
+/// what the last of them typed. A minute with only the one stays as it was.
+pub async fn record_failure(
+    state: &AppState,
+    kind: Failure,
+    ip: &ClientIp,
+    target: Option<&str>,
+    detail: Option<&str>,
+) {
+    gather(state, kind, ip, target, detail, GATHERED_FOR).await;
+}
+
+async fn gather(
+    state: &AppState,
+    kind: Failure,
+    ip: &ClientIp,
+    target: Option<&str>,
+    detail: Option<&str>,
+    window: Duration,
+) {
+    let (noted, key) = note(
+        &mut GATHERING.lock(),
+        (network_of(ip.0), kind),
+        Instant::now(),
+        window,
+        GATHERED_MOST,
+        (target, detail),
+    );
+
+    match noted {
+        Noted::First => {
+            let row = record_row(
+                state,
+                Event {
+                    identity: None,
+                    ip,
+                    action: Action::SignInFailed,
+                    target,
+                    detail,
+                },
+            )
+            .await;
+            if let Some(gathered) = GATHERING.lock().get_mut(&key) {
+                gathered.row = row;
+            }
+        }
+        Noted::Held => {}
+        Noted::HeldUntil(wait) => {
+            let (state, ip) = (state.clone(), *ip);
+            tokio::spawn(async move {
+                tokio::time::sleep(wait).await;
+                let Some(closed) = GATHERING.lock().remove(&key) else {
+                    return;
+                };
+                if closed.held > 0 {
+                    tell(&state, &ip, closed, window).await;
+                }
+            });
+        }
+    }
+}
+
+/// Say how many there were of a run that is over: in the row of the first,
+/// which stood for one until now; in a row of its own, for the failures after
+/// the first, when that row could not be written.
+async fn tell(state: &AppState, ip: &ClientIp, run: Gathered, window: Duration) {
+    let (target, last) = run.last;
+    // What the last of them typed, or what the provider said of it.
+    let last = last.or(target.clone());
+    let seconds = window.as_secs().max(1);
+    let after = |last: Option<String>| {
+        last.map(|last| format!(" · the last: {last}"))
+            .unwrap_or_default()
+    };
+
+    if let Some(row) = &run.row {
+        let said = clip(&format!(
+            "{} in all within {seconds} s{}",
+            run.held.saturating_add(1),
+            after(last)
+        ));
+        match repo::audit::amend_detail(&state.db, row, &said).await {
+            // Taken by the retention meanwhile: nothing to say it in.
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "could not amend the audit entry"),
+        }
+        return;
+    }
+
+    let said = format!("{} more within {seconds} s{}", run.held, after(last));
+    record(
+        state,
+        Event {
+            identity: None,
+            ip,
+            action: Action::SignInFailed,
+            target: target.as_deref(),
+            detail: Some(&said),
+        },
+    )
+    .await;
+}
+
+/// What a failure is to the trail.
+#[derive(Debug, PartialEq, Eq)]
+enum Noted {
+    /// The first of a run: recorded now.
+    First,
+    /// One more in a run, to be recorded with the rest.
+    Held,
+    /// The first one more of a run: held, and somebody is to wait this long
+    /// for the window to close and record what has been held.
+    HeldUntil(Duration),
+}
+
+/// Note a failure under `key` — the network and the kind, or the shared
+/// place for every network at once when `most` of them are already being
+/// gathered, which a flood of addresses is the only way to reach. Returns
+/// what it is, and the key it was noted under.
+fn note(
+    gathering: &mut HashMap<(IpAddr, Failure), Gathered>,
+    mut key: (IpAddr, Failure),
+    now: Instant,
+    window: Duration,
+    most: usize,
+    (target, detail): (Option<&str>, Option<&str>),
+) -> (Noted, (IpAddr, Failure)) {
+    if !gathering.contains_key(&key) && gathering.len() >= most {
+        gathering.retain(|_, g| g.waiting || now.duration_since(g.opened) < window);
+        if gathering.len() >= most {
+            key.0 = network_of(None);
+        }
+    }
+
+    // An entry somebody waits to record is held to, a moment past its window
+    // too: replaced, what it held would be lost.
+    let noted = match gathering.get_mut(&key) {
+        Some(g) if g.waiting || now.duration_since(g.opened) < window => {
+            g.held = g.held.saturating_add(1);
+            g.last = (target.map(str::to_string), detail.map(str::to_string));
+            if g.waiting {
+                Noted::Held
+            } else {
+                g.waiting = true;
+                Noted::HeldUntil(window.saturating_sub(now.duration_since(g.opened)))
+            }
+        }
+        _ => {
+            gathering.insert(
+                key,
+                Gathered {
+                    opened: now,
+                    row: None,
+                    held: 0,
+                    last: (None, None),
+                    waiting: false,
+                },
+            );
+            Noted::First
+        }
+    };
+    (noted, key)
 }
 
 /// The most of any one field this trail will hold.
@@ -537,6 +771,7 @@ pub(crate) fn cell_of(value: Option<&serde_json::Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::testing::client_at;
 
     #[test]
     fn every_action_has_a_distinct_name() {
@@ -781,6 +1016,243 @@ mod tests {
                 "{refused}"
             );
         }
+    }
+
+    fn at(address: &str) -> (IpAddr, Failure) {
+        (address.parse().unwrap(), Failure::Password)
+    }
+
+    #[test]
+    fn a_run_from_one_network_is_recorded_once_and_held_for_a_row_that_counts() {
+        let mut gathering = HashMap::new();
+        let window = Duration::from_secs(60);
+        let start = Instant::now();
+        let fail = |gathering: &mut _, key, after: u64, target: &str| {
+            note(
+                gathering,
+                key,
+                start + Duration::from_secs(after),
+                window,
+                8,
+                (Some(target), None),
+            )
+        };
+
+        let key = at("192.0.2.1");
+        assert_eq!(fail(&mut gathering, key, 0, "a").0, Noted::First);
+        // The first held is told to be waited for; the rest only counted.
+        assert_eq!(
+            fail(&mut gathering, key, 10, "b").0,
+            Noted::HeldUntil(Duration::from_secs(50))
+        );
+        assert_eq!(fail(&mut gathering, key, 20, "c").0, Noted::Held);
+        let held = &gathering[&key];
+        assert_eq!(held.held, 2);
+        assert_eq!(held.last.0.as_deref(), Some("c"));
+
+        // Another kind from the same address, and another network, are runs of
+        // their own; an IPv6 network is one.
+        assert_eq!(
+            fail(&mut gathering, (key.0, Failure::Provider), 20, "x").0,
+            Noted::First
+        );
+        assert_eq!(
+            fail(&mut gathering, at("192.0.2.2"), 20, "x").0,
+            Noted::First
+        );
+        let v6 = |tail: &str| at(&format!("2001:db8:1:2::{tail}"));
+        let bucket = |(ip, kind): (IpAddr, Failure)| (crate::auth::ip::bucket(ip), kind);
+        assert_eq!(
+            fail(&mut gathering, bucket(v6("1")), 20, "x").0,
+            Noted::First
+        );
+        assert!(matches!(
+            fail(&mut gathering, bucket(v6("2")), 21, "x").0,
+            Noted::HeldUntil(_)
+        ));
+
+        // Once the flush has taken what was held, the window is another.
+        gathering.remove(&key);
+        assert_eq!(fail(&mut gathering, key, 70, "d").0, Noted::First);
+        // A window that closed and was not flushed yet still takes what comes.
+        assert_eq!(
+            fail(&mut gathering, key, 80, "e").0,
+            Noted::HeldUntil(Duration::from_secs(50))
+        );
+        assert_eq!(fail(&mut gathering, key, 200, "f").0, Noted::Held);
+        assert_eq!(gathering[&key].held, 2);
+    }
+
+    /// Past what is gathered at once, the networks beyond are gathered as one.
+    #[test]
+    fn a_flood_of_addresses_is_gathered_under_one_key() {
+        let mut gathering = HashMap::new();
+        let window = Duration::from_secs(60);
+        let now = Instant::now();
+
+        for n in 0..4 {
+            let key = at(&format!("192.0.2.{n}"));
+            let (noted, used) = note(&mut gathering, key, now, window, 4, (None, None));
+            assert_eq!((noted, used), (Noted::First, key));
+        }
+        // The fifth address is nobody's in particular, and so is the sixth:
+        // one run between them.
+        let (first, used) = note(
+            &mut gathering,
+            at("198.51.100.1"),
+            now,
+            window,
+            4,
+            (None, None),
+        );
+        assert_eq!(first, Noted::First);
+        assert_eq!(used, at("0.0.0.0"));
+        let (second, used) = note(
+            &mut gathering,
+            at("198.51.100.2"),
+            now,
+            window,
+            4,
+            (None, None),
+        );
+        assert!(matches!(second, Noted::HeldUntil(_)));
+        assert_eq!(used, at("0.0.0.0"));
+        assert_eq!(gathering.len(), 5);
+
+        // Windows that closed make room again.
+        let later = now + window;
+        let (noted, used) = note(
+            &mut gathering,
+            at("198.51.100.3"),
+            later,
+            window,
+            4,
+            (None, None),
+        );
+        assert_eq!((noted, used), (Noted::First, at("198.51.100.3")));
+    }
+
+    /// The failed sign-ins of the trail, the oldest first.
+    async fn failed_sign_ins(state: &AppState) -> Vec<Entry> {
+        let mut rows = repo::audit::list(
+            &state.db,
+            &repo::audit::Query {
+                action: Some(Action::SignInFailed.as_str().into()),
+                limit: 100,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        rows.reverse();
+        rows
+    }
+
+    /// What the sign-in form is flooded with is one row, written at once, and
+    /// said to be many when the minute is over — whatever the flood.
+    #[tokio::test]
+    async fn a_flood_of_failed_sign_ins_is_one_row_that_carries_the_count() {
+        let state = crate::api::native::testing::server().await;
+        let window = Duration::from_millis(300);
+        let ip = client_at(&state, "192.0.2.150").await;
+
+        for n in 0..8 {
+            let typed = format!("guess-{n}");
+            gather(&state, Failure::Password, &ip, Some(&typed), None, window).await;
+        }
+        let at_once = failed_sign_ins(&state).await;
+        assert_eq!(at_once.len(), 1);
+        assert_eq!(at_once[0].target.as_deref(), Some("guess-0"));
+        assert_eq!(at_once[0].ip.as_deref(), Some("192.0.2.150"));
+        assert_eq!(at_once[0].detail, None);
+
+        // The window closes, and the one row says how many it stood for.
+        let mut rows = at_once;
+        for _ in 0..200 {
+            if rows[0].detail.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            rows = failed_sign_ins(&state).await;
+        }
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].target.as_deref(), Some("guess-0"));
+        let said = rows[0].detail.as_deref().unwrap_or_default();
+        assert_eq!(said, "8 in all within 1 s · the last: guess-7");
+
+        // A failure after that is the first of another run, recorded at once.
+        gather(&state, Failure::Password, &ip, Some("again"), None, window).await;
+        assert_eq!(failed_sign_ins(&state).await.len(), 2);
+    }
+
+    /// A run of one stays as it was: a row, and nothing said of it later.
+    #[tokio::test]
+    async fn a_single_failure_is_one_row_as_it_always_was() {
+        let state = crate::api::native::testing::server().await;
+        let window = Duration::from_millis(100);
+        let ip = client_at(&state, "192.0.2.170").await;
+
+        gather(&state, Failure::Password, &ip, Some("slip"), None, window).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let rows = failed_sign_ins(&state).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].target.as_deref(), Some("slip"));
+        assert_eq!(rows[0].detail, None);
+    }
+
+    /// Where the first row could not be written there is none to amend: what
+    /// followed it is told in a row of its own.
+    #[tokio::test]
+    async fn a_run_whose_first_row_is_missing_is_told_in_a_row_of_its_own() {
+        let state = crate::api::native::testing::server().await;
+        let ip = client_at(&state, "192.0.2.180").await;
+        let run = Gathered {
+            opened: Instant::now(),
+            row: None,
+            held: 3,
+            last: (Some("guess-3".into()), None),
+            waiting: true,
+        };
+
+        tell(&state, &ip, run, Duration::from_secs(60)).await;
+
+        let rows = failed_sign_ins(&state).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].target.as_deref(), Some("guess-3"));
+        assert_eq!(
+            rows[0].detail.as_deref(),
+            Some("3 more within 60 s · the last: guess-3")
+        );
+    }
+
+    /// One address's failures do not hold another's back.
+    #[tokio::test]
+    async fn each_network_and_kind_is_recorded_at_its_own_first() {
+        let state = crate::api::native::testing::server().await;
+        let window = Duration::from_secs(60);
+        let one = client_at(&state, "192.0.2.160").await;
+        let other = client_at(&state, "192.0.2.161").await;
+
+        gather(&state, Failure::Password, &one, Some("a"), None, window).await;
+        gather(&state, Failure::Password, &other, Some("b"), None, window).await;
+        gather(
+            &state,
+            Failure::Provider,
+            &one,
+            None,
+            Some("expired"),
+            window,
+        )
+        .await;
+        gather(&state, Failure::Password, &one, Some("c"), None, window).await;
+
+        let rows = failed_sign_ins(&state).await;
+        assert_eq!(
+            rows.iter().map(|r| r.target.as_deref()).collect::<Vec<_>>(),
+            [Some("a"), Some("b"), None],
+            "the fourth is held for the row that counts"
+        );
     }
 
     #[test]

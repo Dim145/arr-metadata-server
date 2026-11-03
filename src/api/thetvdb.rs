@@ -35,7 +35,7 @@ use axum::{
     Extension, Json,
     body::{Body, Bytes},
     extract::{Request, State},
-    http::{HeaderValue, Method, StatusCode, Uri, header, request::Parts},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header, request::Parts},
     response::{IntoResponse, Response},
     routing::any,
 };
@@ -54,6 +54,8 @@ use crate::{
     service::{self, language, orders},
     state::AppState,
 };
+
+pub use local::MadeIds;
 
 /// The name TheTVDB's clients call it by.
 pub const HOSTS: &[&str] = &["api4.thetvdb.com"];
@@ -78,6 +80,12 @@ const ANSWER_LIMIT: u64 = 16 * 1024 * 1024;
 
 /// What a relayed request keeps of the caller's headers: what describes it.
 const ASKED_WITH: &[&str] = &["user-agent", "accept", "accept-language", "content-type"];
+
+/// Of those, the headers that may change TheTVDB's answer: what a kept
+/// document is told apart by besides its path and its query — as it travels
+/// asked with them, an answer filed without them would be handed to a caller
+/// that asked otherwise.
+const VARIES_BY: &[&str] = &["accept", "accept-language", "content-type"];
 
 /// The caller's validators, handed on only where they are that caller's
 /// alone to use ([`validators_travel`]).
@@ -584,14 +592,16 @@ async fn from_thetvdb(
     }
 
     let cache_key = (parts.method == Method::GET && matches!(credential, Credential::Ours))
-        .then(|| relay_key(state, &parts.uri));
+        .then(|| relay_key(state, &parts.uri, &parts.headers));
     let validators = validators_travel(cache_key.is_some(), &path);
     let ask = relay::Ask {
         service: relay::Service::Tvdb,
+        // Only a reference list is kept in the database, and only under
+        // what tells it from another there: see `filed_as`.
         reference: cache_key
             .as_ref()
             .filter(|_| relay::is_reference(&path))
-            .map(|_| filed_as(state, &parts.uri)),
+            .and_then(|_| filed_as(state, &parts.uri)),
         key: cache_key,
         path,
     };
@@ -663,27 +673,30 @@ async fn renumber_frozen(state: &AppState, series: i64, document: &mut Value) ->
     }
 }
 
-/// What a relayed document is filed under: the path and the query asked,
-/// the parameters this server takes left out, in a fixed order — and the
-/// generation, so a settings change files what follows elsewhere.
-fn relay_key(state: &AppState, uri: &Uri) -> String {
+/// What a relayed document is filed under: where TheTVDB is asked, the path
+/// and the query asked, the parameters this server takes left out, in a
+/// fixed order — the caller's headers that travel and may change TheTVDB's
+/// answer ([`relay::varies_by`]) — and the generation, so a settings change
+/// files what follows elsewhere.
+fn relay_key(state: &AppState, uri: &Uri, headers: &HeaderMap) -> String {
     format!(
-        "tvdb:{}:{}",
+        "tvdb:{}:{}:{}?{}#{}",
         state.caches.generation(),
-        filed_as(state, uri)
+        state.config.tvdb.upstream,
+        uri.path(),
+        relay::sorted_query(uri, relay::OUR_PARAMS),
+        relay::varies_by(headers, VARIES_BY)
     )
 }
 
 /// What a reference list TheTVDB answered is kept under in the database
-/// ([`relay::Ask::reference`]): the request as [`relay_key`] files it,
-/// without the generation, which starts again at every start.
-fn filed_as(state: &AppState, uri: &Uri) -> String {
-    format!(
-        "{}:{}?{}",
-        state.config.tvdb.upstream,
-        uri.path(),
-        relay::sorted_query(uri, relay::OUR_PARAMS)
-    )
+/// ([`relay::Ask::reference`]): where TheTVDB is asked, the path and the
+/// language and region asked ([`relay::reference_filing`]) — not the rest of
+/// the query, nor the caller's headers, which would make a row of every
+/// spelling a caller thinks of — without the generation, which starts again
+/// at every start. None for a request the database keeps nothing of.
+fn filed_as(state: &AppState, uri: &Uri) -> Option<String> {
+    relay::reference_filing(uri).map(|filing| format!("{}:{filing}", state.config.tvdb.upstream))
 }
 
 /// Where TheTVDB is asked: its address, the path without the segment the
@@ -1937,12 +1950,19 @@ mod updates {
 /// own 404. A search lists the works the catalogue finds before TheTVDB's
 /// own, on its first page.
 mod local {
-    use std::{borrow::Cow, str::FromStr};
+    use std::{
+        borrow::Cow,
+        collections::HashMap,
+        str::FromStr,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use axum::{
         http::{HeaderValue, StatusCode, Uri, header, request::Parts},
         response::{IntoResponse, Response},
     };
+    use futures::TryStreamExt as _;
     use serde_json::{Map, Value, json};
 
     use super::{Credential, PREFIX, TVDB_TYPES, from_thetvdb, take_hidden};
@@ -2403,23 +2423,10 @@ mod local {
             let character = if id > 0 {
                 repo::character::by_tvdb(&self.state.db, id).await?
             } else {
-                let mut found = None;
-                for own in repo::character::ids_without_tvdb(&self.state.db).await? {
-                    let made = wire::character_id(&crate::domain::person::Character {
-                        id: own.clone(),
-                        name: String::new(),
-                        native_name: None,
-                        image: None,
-                        tvdb_id: None,
-                        anilist_id: None,
-                        mal_id: None,
-                    });
-                    if made == id {
-                        found = repo::character::get(&self.state.db, &own).await?;
-                        break;
-                    }
+                match self.state.made_ids.character(self.state, id).await? {
+                    Some(own) => repo::character::get(&self.state.db, &own).await?,
+                    None => None,
                 }
-                found
             };
             let not_held = || (id < 0).then(|| (StatusCode::NOT_FOUND, wire::not_found()));
             let Some(character) = character else {
@@ -2895,8 +2902,8 @@ mod local {
     /// The work holding the season TheTVDB's dialect knows by `id`, and its
     /// number: one of TheTVDB's ids, or one made of what names it.
     async fn season_of(state: &AppState, id: i64) -> anyhow::Result<Option<(String, i32)>> {
-        let db = &state.db;
         if id > 0 {
+            let db = &state.db;
             let row = sqlx::query(db.sql(
                 "SELECT media_id, season_number FROM media_season
                  WHERE tvdb_id = ? ORDER BY media_id LIMIT 1",
@@ -2909,28 +2916,15 @@ mod local {
                 None => None,
             });
         }
-        let rows = sqlx::query(db.sql(
-            "SELECT media_id, season_number, tmdb_id FROM media_season WHERE tvdb_id IS NULL",
-        ))
-        .fetch_all(db.pool())
-        .await?;
-        for row in &rows {
-            let media = row.text("media_id")?;
-            let mut season = repo::child::blank_season(row.int("season_number")?);
-            season.tmdb_id = row.opt_big("tmdb_id")?;
-            if wire::own_season_id(&media, &season) == id {
-                return Ok(Some((media, season.season_number)));
-            }
-        }
-        Ok(None)
+        state.made_ids.season(state, id).await
     }
 
     /// The work holding the episode TheTVDB's dialect knows by `id`: one of
     /// its own, or an order's own record of one, by TheTVDB's id or by one
     /// made of what names it.
     async fn episode_of(state: &AppState, id: i64) -> anyhow::Result<Option<String>> {
-        let db = &state.db;
         if id > 0 {
+            let db = &state.db;
             if let Some(media) = repo::item::find_id_by_episode_tvdb(db, id).await? {
                 return Ok(Some(media));
             }
@@ -2947,25 +2941,237 @@ mod local {
                 None => None,
             });
         }
-        // Made of TMDB's id for it, else of the row it is kept in: read
-        // back by making each again.
-        for sql in [
-            "SELECT media_id, id, tmdb_id FROM media_episode WHERE tvdb_id IS NULL",
-            "SELECT o.media_id AS media_id, e.id AS id, e.tmdb_episode_id AS tmdb_id
-             FROM media_order_episode e JOIN media_order o ON o.id = e.order_id
-             WHERE e.tvdb_episode_id IS NULL",
-        ] {
-            let rows = sqlx::query(db.sql(sql)).fetch_all(db.pool()).await?;
-            for row in &rows {
-                let mut episode = repo::child::blank_episode(0, 0);
-                episode.id = row.text("id")?;
-                episode.tmdb_id = row.opt_big("tmdb_id")?;
-                if orders::own_episode_id(&episode) == id {
-                    return Ok(Some(row.text("media_id")?));
+        state.made_ids.episode(state, id).await
+    }
+
+    /// The longest what was read to find a number made here is kept, whatever
+    /// the catalogue's marks say: a write that moves none of them — a change
+    /// made to the database by something else — is read by then.
+    const MADE_FOR: Duration = Duration::from_secs(300);
+
+    /// The numbers this server made for what TheTVDB gave none — a season of
+    /// the aired order, an episode of an order's own, a character — each led
+    /// back to what it names.
+    ///
+    /// A number made is a hash of what names the thing, so the way back is
+    /// to make each of them again, every season, episode and character that
+    /// holds no id of TheTVDB's: read once for as long as the catalogue stays
+    /// as it was, where every request that asked by one did it again — a
+    /// `/v4/episodes/-1` read every episode there is. Each is read the first
+    /// time it is asked by, so a server nobody asks one of keeps none.
+    #[derive(Default)]
+    pub struct MadeIds {
+        seasons: Kept<HashMap<i64, (Arc<str>, i32)>>,
+        episodes: Kept<HashMap<i64, Arc<str>>>,
+        characters: Kept<HashMap<i64, String>>,
+    }
+
+    impl MadeIds {
+        /// The work holding the season made as `id`, and its number. None at
+        /// once for a number [`ids::own_episode`] cannot make.
+        pub(super) async fn season(
+            &self,
+            state: &AppState,
+            id: i64,
+        ) -> anyhow::Result<Option<(String, i32)>> {
+            if !ids::is_own_episode(id) {
+                return Ok(None);
+            }
+            let held = self.seasons.read(state, seasons_made(state)).await?;
+            Ok(held
+                .get(&id)
+                .map(|(media, number)| (media.to_string(), *number)))
+        }
+
+        /// The work holding the episode made as `id`. None at once for a
+        /// number [`ids::own_episode`] cannot make.
+        pub(super) async fn episode(
+            &self,
+            state: &AppState,
+            id: i64,
+        ) -> anyhow::Result<Option<String>> {
+            if !ids::is_own_episode(id) {
+                return Ok(None);
+            }
+            let held = self.episodes.read(state, episodes_made(state)).await?;
+            Ok(held.get(&id).map(|media| media.to_string()))
+        }
+
+        /// This server's id of the character made as `id`. None at once for
+        /// a number [`ids::own_episode`] cannot make.
+        pub(super) async fn character(
+            &self,
+            state: &AppState,
+            id: i64,
+        ) -> anyhow::Result<Option<String>> {
+            if !ids::is_own_episode(id) {
+                return Ok(None);
+            }
+            let held = self.characters.read(state, characters_made(state)).await?;
+            Ok(held.get(&id).cloned())
+        }
+
+        /// How many times each of the three was read, for a test to say what
+        /// a request cost.
+        #[cfg(test)]
+        pub(super) fn reads(&self) -> [usize; 3] {
+            [
+                self.seasons
+                    .reads
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                self.episodes
+                    .reads
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                self.characters
+                    .reads
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ]
+        }
+    }
+
+    /// What was read of the catalogue, for the catalogue as it was then.
+    struct Kept<T> {
+        slot: tokio::sync::Mutex<Option<Held<T>>>,
+        #[cfg(test)]
+        reads: std::sync::atomic::AtomicUsize,
+    }
+
+    struct Held<T> {
+        mark: String,
+        at: Instant,
+        read: Arc<T>,
+    }
+
+    impl<T> Default for Kept<T> {
+        fn default() -> Self {
+            Self {
+                slot: tokio::sync::Mutex::new(None),
+                #[cfg(test)]
+                reads: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl<T> Kept<T> {
+        /// What `read` makes of the catalogue, kept for as long as the
+        /// catalogue's mark is the one it was read under — the one that
+        /// moves with every list drawn across works (`catalogue_stamp`, and
+        /// the epoch a write to a work moves) — and for [`MADE_FOR`] at the
+        /// most. Read by one request at a time: those that find it moving
+        /// wait for it, and keep what it read.
+        async fn read(
+            &self,
+            state: &AppState,
+            read: impl Future<Output = anyhow::Result<T>>,
+        ) -> anyhow::Result<Arc<T>> {
+            let mark = format!(
+                "{}:{}",
+                state.caches.stamp(),
+                repo::item::catalogue_stamp(&state.db).await?
+            );
+            let mut slot = self.slot.lock().await;
+            if let Some(held) = slot.as_ref()
+                && held.mark == mark
+                && held.at.elapsed() < MADE_FOR
+            {
+                return Ok(Arc::clone(&held.read));
+            }
+            #[cfg(test)]
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let made = Arc::new(read.await?);
+            *slot = Some(Held {
+                mark,
+                at: Instant::now(),
+                read: Arc::clone(&made),
+            });
+            Ok(made)
+        }
+    }
+
+    /// A work's id kept once for all its seasons and episodes: they come in
+    /// the order of their work.
+    #[derive(Default)]
+    struct Works(Option<Arc<str>>);
+
+    impl Works {
+        fn of(&mut self, id: String) -> Arc<str> {
+            match &self.0 {
+                Some(held) if **held == *id => Arc::clone(held),
+                _ => {
+                    let held: Arc<str> = id.into();
+                    self.0 = Some(Arc::clone(&held));
+                    held
                 }
             }
         }
-        Ok(None)
+    }
+
+    /// Every season TheTVDB gave no id, by the number made of what names it,
+    /// and what it names. Two that make one number keep it for the one of the
+    /// work that sorts first.
+    async fn seasons_made(state: &AppState) -> anyhow::Result<HashMap<i64, (Arc<str>, i32)>> {
+        let db = &state.db;
+        let mut rows = sqlx::query(db.sql(
+            "SELECT media_id, season_number, tmdb_id FROM media_season
+              WHERE tvdb_id IS NULL ORDER BY media_id, season_number",
+        ))
+        .fetch(db.pool());
+        let (mut made, mut works) = (HashMap::new(), Works::default());
+        while let Some(row) = rows.try_next().await? {
+            let media = row.text("media_id")?;
+            let mut season = repo::child::blank_season(row.int("season_number")?);
+            season.tmdb_id = row.opt_big("tmdb_id")?;
+            made.entry(wire::own_season_id(&media, &season))
+                .or_insert_with(|| (works.of(media), season.season_number));
+        }
+        Ok(made)
+    }
+
+    /// Every episode TheTVDB gave no id, and every record of one an order
+    /// has of its own, by the number made of TMDB's id for it, else of the
+    /// row it is kept in, and the work holding it. An episode of the series'
+    /// own keeps a number two make before an order's does.
+    async fn episodes_made(state: &AppState) -> anyhow::Result<HashMap<i64, Arc<str>>> {
+        let db = &state.db;
+        let (mut made, mut works) = (HashMap::new(), Works::default());
+        for sql in [
+            "SELECT media_id, id, tmdb_id FROM media_episode
+              WHERE tvdb_id IS NULL ORDER BY media_id, id",
+            "SELECT o.media_id AS media_id, e.id AS id, e.tmdb_episode_id AS tmdb_id
+               FROM media_order_episode e JOIN media_order o ON o.id = e.order_id
+              WHERE e.tvdb_episode_id IS NULL ORDER BY o.media_id, e.id",
+        ] {
+            let mut rows = sqlx::query(db.sql(sql)).fetch(db.pool());
+            while let Some(row) = rows.try_next().await? {
+                let media = row.text("media_id")?;
+                let mut episode = repo::child::blank_episode(0, 0);
+                episode.id = row.text("id")?;
+                episode.tmdb_id = row.opt_big("tmdb_id")?;
+                made.entry(orders::own_episode_id(&episode))
+                    .or_insert_with(|| works.of(media));
+            }
+        }
+        Ok(made)
+    }
+
+    /// This server's id of every character TheTVDB has no id for, by the
+    /// number made of it.
+    async fn characters_made(state: &AppState) -> anyhow::Result<HashMap<i64, String>> {
+        let mut made = HashMap::new();
+        for own in repo::character::ids_without_tvdb(&state.db).await? {
+            let id = wire::character_id(&crate::domain::person::Character {
+                id: own.clone(),
+                name: String::new(),
+                native_name: None,
+                image: None,
+                tvdb_id: None,
+                anilist_id: None,
+                mal_id: None,
+            });
+            made.entry(id).or_insert(own);
+        }
+        Ok(made)
     }
 
     /// A page's address with another page number.
@@ -4463,7 +4669,7 @@ mod relayed {
             .caches
             .relay
             .insert_for(
-                super::relay_key(state, &uri),
+                super::relay_key(state, &uri, &HeaderMap::new()),
                 crate::cache::Relayed {
                     status: 200,
                     content_type: "application/json".into(),
@@ -5860,6 +6066,259 @@ mod relayed {
         );
 
         assert!(stand_in.asked_at("/v4/login").is_empty());
+    }
+
+    /// A series TheTVDB does not know, with a season and two episodes TMDB
+    /// names, stored: its season's and its episodes' numbers are made here.
+    async fn store_tmdb_only(state: &AppState, tmdb: i64, title: &str) -> (MediaItem, i64) {
+        use crate::{
+            db::repo::child::{blank_episode, blank_season},
+            service::ids,
+        };
+
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.title = title.into();
+        item.slug = crate::domain::make_slug(title, None);
+        item.external_ids.tmdb = Some(tmdb);
+        let mut season = blank_season(1);
+        season.is_manual = false;
+        season.tmdb_id = Some(tmdb + 10);
+        item.seasons = vec![season];
+        for number in 1..=2 {
+            let mut episode = blank_episode(1, number);
+            episode.is_manual = false;
+            episode.tmdb_id = Some(tmdb + 20 + i64::from(number));
+            episode.title = format!("Episode {number}");
+            item.episodes.push(episode);
+        }
+        testing::store(state, &item, &[]).await;
+        (item, ids::to_synthetic(tmdb).expect("a number"))
+    }
+
+    /// The numbers made here for what TheTVDB gave none lead back to what
+    /// they name from what was read once, not from every season, episode
+    /// and character again at each request: while the catalogue stays as it
+    /// was, and read anew when a work is stored or written to. One that
+    /// nothing could have made — past the 32-bit column a client keeps it
+    /// in — is answered at once, whatever the catalogue holds.
+    #[tokio::test]
+    async fn the_numbers_made_here_are_read_once_while_the_catalogue_stays_as_it_was() {
+        use crate::{db::repo::child::blank_season, wire::tvdb::own_season_id};
+
+        let stand_in = StandIn::start(tvdb).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        testing::choose(&state, "tvdb.relayMode", "local-first").await;
+
+        let (first, id) = store_tmdb_only(&state, 990_801, "The Quay D1").await;
+        let (_, page) = get(&state, &format!("/v4/series/{id}/episodes/official"), &key).await;
+        let episode = page["data"]["episodes"][0]["id"].as_i64().expect("an id");
+        let (_, record) = get(&state, &format!("/v4/series/{id}/extended"), &key).await;
+        let season = record["data"]["seasons"][0]["id"].as_i64().expect("an id");
+        assert!(episode < 0 && season < 0);
+        assert_eq!(state.made_ids.reads(), [0, 0, 0], "a page asks for none");
+
+        // By their numbers, again and again: each read once.
+        for _ in 0..3 {
+            let (status, found) = get(&state, &format!("/v4/episodes/{episode}"), &key).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(found["data"]["id"], json!(episode));
+            let (status, _) = get(&state, &format!("/v4/seasons/{season}"), &key).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        assert_eq!(state.made_ids.reads(), [1, 1, 0]);
+
+        // A number nothing could have made reads nothing: TheTVDB's to
+        // answer, or, for a character, nobody's.
+        for path in [
+            "/v4/episodes/-2147483648",
+            "/v4/episodes/-9999999999999",
+            "/v4/seasons/-2147483648",
+            "/v4/seasons/-9223372036854775808",
+            "/v4/characters/-2147483648",
+            "/v4/characters/-9223372036854775808",
+        ] {
+            let (status, _) = get(&state, path, &key).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        }
+        assert_eq!(state.made_ids.reads(), [1, 1, 0], "none of them read");
+
+        // One that could have, and was not: the characters are read, once.
+        for _ in 0..3 {
+            let (status, _) = get(&state, "/v4/characters/-5", &key).await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
+        assert_eq!(state.made_ids.reads(), [1, 1, 1]);
+
+        // A work is stored: the catalogue is not as it was, and the next to
+        // ask reads again and finds what the work names.
+        let (_, other) = store_tmdb_only(&state, 990_811, "The Dock D1").await;
+        let (_, page) = get(
+            &state,
+            &format!("/v4/series/{other}/episodes/official"),
+            &key,
+        )
+        .await;
+        let later = page["data"]["episodes"][0]["id"].as_i64().expect("an id");
+        let (status, _) = get(&state, &format!("/v4/episodes/{later}"), &key).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = get(&state, &format!("/v4/episodes/{episode}"), &key).await;
+        assert_eq!(status, StatusCode::OK, "and the first still");
+        let (status, _) = get(&state, &format!("/v4/seasons/{season}"), &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(state.made_ids.reads(), [2, 2, 1]);
+
+        // A season added by hand leaves the table of works as it was, so
+        // that nothing of it moves until the write is told to the caches,
+        // as every write to a work is: then the number made of it is found.
+        let by_hand = blank_season(2);
+        crate::db::repo::child::add_season(&state.db, &first.id, &by_hand)
+            .await
+            .expect("added");
+        let made = own_season_id(&first.id, &by_hand);
+        let path = format!("/v4/seasons/{made}");
+        let (status, _) = get(&state, &path, &key).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "the marks stood");
+        assert_eq!(state.made_ids.reads(), [2, 2, 1]);
+        state.caches.touched(&first.id).await;
+        let (status, found) = get(&state, &path, &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(found["data"]["number"], json!(2));
+        assert_eq!(state.made_ids.reads(), [3, 2, 1]);
+    }
+
+    /// TheTVDB as the stand-in answers with a list: its languages, for a
+    /// caller signed in.
+    fn with_languages(asked: &Asked) -> (StatusCode, Value) {
+        let signed = asked
+            .authorization
+            .as_deref()
+            .is_some_and(|value| value.starts_with("Bearer token-for-"));
+        match asked.path.as_str() {
+            "/v4/languages" if signed => (
+                StatusCode::OK,
+                json!({ "status": "success", "data": [ { "id": "eng", "name": "English" } ] }),
+            ),
+            _ => tvdb(asked),
+        }
+    }
+
+    /// The rows the database keeps for a relay.
+    async fn rows_of(state: &AppState, relay: &str) -> i64 {
+        sqlx::query_scalar(
+            state
+                .db
+                .sql("SELECT COUNT(*) FROM relay_document WHERE relay = ?"),
+        )
+        .bind(relay)
+        .fetch_one(state.db.pool())
+        .await
+        .expect("a count")
+    }
+
+    /// A read with headers of the caller's own, as the client meets it.
+    async fn headed(
+        state: &AppState,
+        path: &str,
+        token: &str,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, Value) {
+        let mut request = Request::get(path).header("authorization", format!("Bearer {token}"));
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = relay(
+            State(state.clone()),
+            Extension(Identity::Network(None)),
+            None,
+            request.body(Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap_or_else(IntoResponse::into_response);
+        answer(response).await
+    }
+
+    /// However a list is asked — a parameter of the caller's own, another
+    /// order of its parameters, other headers — it is one row in the
+    /// database, where each spelling used to be a row nothing deleted.
+    #[tokio::test]
+    async fn a_list_is_one_row_in_the_database_however_it_is_asked() {
+        let stand_in = StandIn::start(with_languages).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+
+        for (path, headers) in [
+            ("/v4/languages", vec![]),
+            ("/v4/languages?cache_buster=1", vec![]),
+            ("/v4/languages?y=2&x=1", vec![("accept-language", "fra")]),
+            ("/v4/languages?x=3", vec![("accept", "application/json")]),
+            ("/v4/languages?language=fra", vec![]),
+            ("/v4/languages?x=4&language=fra", vec![]),
+        ] {
+            let (status, _) = headed(&state, path, &key, &headers).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+        }
+        assert_eq!(
+            stand_in.asked_at("/v4/languages").len(),
+            6,
+            "each was asked of TheTVDB, as each was another request"
+        );
+        assert_eq!(
+            rows_of(&state, "tvdb").await,
+            2,
+            "with a language, and without"
+        );
+
+        // A language that is none is answered, and filed in the database
+        // under none.
+        for path in [
+            "/v4/languages?language=../../x",
+            "/v4/languages?language=",
+            "/v4/languages?language=fra&language=deu",
+        ] {
+            let (status, _) = headed(&state, path, &key, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+        }
+        assert_eq!(rows_of(&state, "tvdb").await, 2);
+    }
+
+    /// What TheTVDB answered is kept for the callers who asked as its first
+    /// did, by the headers that travel to it and may change its answer —
+    /// not for those who asked otherwise, nor for the ones whose headers are
+    /// none of its business.
+    #[tokio::test]
+    async fn a_document_is_kept_for_the_callers_who_asked_as_its_first_did() {
+        let stand_in = StandIn::start(tvdb).await;
+        let state = server(&stand_in).await;
+        let key = issued(&state).await;
+        let path = "/v4/series/81189/extended";
+
+        for (headers, asked_of_thetvdb) in [
+            (vec![("accept-language", "fra")], 1),
+            (vec![("accept-language", "fra")], 1),
+            (vec![("accept-language", "jpn")], 2),
+            (vec![("accept-language", "fra")], 2),
+            (vec![("accept-language", "jpn")], 2),
+            (vec![("accept", "application/xml")], 3),
+            (vec![("content-type", "text/plain")], 4),
+            // None of its business: another agent, another address, the same entry.
+            (
+                vec![("accept-language", "fra"), ("user-agent", "Jellyfin/10.10")],
+                4,
+            ),
+            (
+                vec![("accept-language", "fra"), ("x-forwarded-for", "10.1.2.3")],
+                4,
+            ),
+        ] {
+            let (status, _) = headed(&state, path, &key, &headers).await;
+            assert_eq!(status, StatusCode::OK, "{headers:?}");
+            assert_eq!(
+                stand_in.asked_at(path).len(),
+                asked_of_thetvdb,
+                "{headers:?}"
+            );
+        }
     }
 
     /// A series switched off, and one for adults while the server hides

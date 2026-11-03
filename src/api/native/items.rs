@@ -478,6 +478,7 @@ fn country_code(raw: Option<&str>, what: &str) -> AppResult<Option<String>> {
         (status = 200, description = "Matching works, newest first", body = ListResponse),
         (status = 400, description = "A filter is not one the list takes, or a cursor is not one it gave, or was given beside an offset"),
         (status = 401, description = "No valid credential was presented"),
+        (status = 503, description = "As many such reads as the server answers at once are under way; `Retry-After` says when to ask again"),
     ),
 )]
 async fn list(
@@ -518,13 +519,28 @@ async fn list(
     let cacheable = !query_for_count
         .missing
         .contains(&repo::item::Missing::MediaFailed);
-    if cacheable && let Some(cached) = state.caches.searches.get(&cache_key).await {
-        return Ok((
+    let kept = |cached: String| {
+        (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
             cached,
         )
-            .into_response());
+            .into_response()
+    };
+    if cacheable && let Some(cached) = state.caches.searches.get(&cache_key).await {
+        return Ok(kept(cached));
+    }
+
+    // A page nobody has asked for lately is read from the database — through
+    // the search index, or in an order no index keeps — and asking for one
+    // takes less than answering it: a few at a time, so that asking for many
+    // is no way to take the database from everybody else.
+    let Some(_place) = state.caches.cold.take().await else {
+        return Ok(crate::api::busy());
+    };
+    // Asked and answered meanwhile, perhaps, by a caller that waited too.
+    if cacheable && let Some(cached) = state.caches.searches.get(&cache_key).await {
+        return Ok(kept(cached));
     }
 
     // The page and the count from one look in the search index: a misspelt
@@ -2081,6 +2097,103 @@ mod tests {
             .expect("listed");
         assert_eq!(found.first().map(String::as_str), Some("Breaking Bad"));
         assert_eq!(total, found.len() as i64);
+    }
+
+    /// The list as a caller is answered for `asked`, whatever the status.
+    async fn answered(state: &AppState, asked: &str) -> Response {
+        let uri: Uri = format!("/items?{asked}").parse().expect("an address");
+        let Query(query) = Query::<ListQuery>::try_from_uri(&uri).expect("a query");
+        list(State(state.clone()), admin(), Query(query))
+            .await
+            .expect("answered")
+    }
+
+    /// Every place for the reads no cache answered, taken.
+    async fn all_places_taken(state: &AppState) -> Vec<tokio::sync::OwnedSemaphorePermit> {
+        let mut held = Vec::new();
+        while state.caches.cold.free() > 0 {
+            held.push(state.caches.cold.take().await.expect("a place"));
+        }
+        held
+    }
+
+    /// A page nobody asked for is read from the database a few at a time: a
+    /// caller waits for its turn, and is turned away — told when to come
+    /// back — when none comes. A page the cache holds is answered whatever.
+    #[tokio::test]
+    async fn a_page_nobody_asked_for_waits_for_a_place_and_is_turned_away_without_one() {
+        use std::time::Duration;
+
+        let state = crate::api::native::testing::server().await;
+        stored(&state, 1, "Heat", |_| {}).await;
+        state.caches.cold.wait_at_most(Duration::from_millis(30));
+
+        // A place free: read, and kept.
+        assert_eq!(
+            answered(&state, "limit=10&sort=title").await.status(),
+            StatusCode::OK
+        );
+
+        let mut held = all_places_taken(&state).await;
+        // The page kept is answered with no place at all…
+        assert_eq!(
+            answered(&state, "limit=10&sort=title").await.status(),
+            StatusCode::OK
+        );
+        // …and one that nothing kept is not read: a 503, and when to ask again.
+        let turned_away = answered(&state, "limit=10&sort=release").await;
+        assert_eq!(turned_away.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(turned_away.headers()[header::RETRY_AFTER], "5");
+        let body = axum::body::to_bytes(turned_away.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        let said: Value = serde_json::from_slice(&body).expect("JSON");
+        assert_eq!(said["error"], "busy");
+
+        // A place given back is the next caller's.
+        held.pop();
+        assert_eq!(
+            answered(&state, "limit=10&sort=release").await.status(),
+            StatusCode::OK
+        );
+    }
+
+    /// Two callers asking for the same page when no place is free: the one
+    /// that waits is answered from what the other made, and reads nothing.
+    #[tokio::test]
+    async fn a_caller_that_waited_for_a_place_is_answered_from_what_the_other_made() {
+        use std::time::Duration;
+
+        let state = crate::api::native::testing::server().await;
+        stored(&state, 1, "Heat", |_| {}).await;
+        state.caches.cold.wait_at_most(Duration::from_secs(5));
+
+        // One place left, for one of them: the other waits for it, and finds
+        // the page made when it has it.
+        let mut held = all_places_taken(&state).await;
+        held.pop();
+        let hits = state.caches.searches.l1_tally().hits;
+
+        let (first, second) = tokio::join!(
+            answered(&state, "limit=10&sort=title"),
+            answered(&state, "limit=10&sort=title")
+        );
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(second.status(), StatusCode::OK);
+        let (first, second) = (
+            axum::body::to_bytes(first.into_body(), usize::MAX)
+                .await
+                .expect("a body"),
+            axum::body::to_bytes(second.into_body(), usize::MAX)
+                .await
+                .expect("a body"),
+        );
+        assert_eq!(first, second);
+        assert_eq!(
+            state.caches.searches.l1_tally().hits,
+            hits + 1,
+            "one made the page, the other found it made"
+        );
     }
 
     #[tokio::test]

@@ -38,10 +38,13 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 pub async fn serve(state: AppState) -> Result<()> {
     let bind = state.config.server.bind;
-    let limits = listen::Limits {
-        connections: state.config.server.max_connections,
-        head: state.config.server.header_read_timeout,
-    };
+    let limits = listen::Limits::new(
+        state.config.server.max_connections,
+        state.config.server.header_read_timeout,
+    );
+    // How many connections each network holds at once, but for the proxies
+    // in front of the server, which hold those of everybody behind them.
+    let crowd = || listen::Crowd::new(&state.config.server.trusted_proxies);
 
     // The loops that run for as long as the process does, kept: one that
     // panics or returns when it should not is said so and started again.
@@ -138,7 +141,7 @@ pub async fn serve(state: AppState) -> Result<()> {
                 "listening for the clients (TLS)"
             );
             let served = listen::serve(
-                listen::Door::new(listener, limits.connections),
+                listen::Door::new(listener, limits.connections, crowd()),
                 Some(clients.rustls.clone()),
                 clients_router,
                 handle.clone(),
@@ -208,7 +211,7 @@ pub async fn serve(state: AppState) -> Result<()> {
     });
 
     listen::serve(
-        listen::Door::new(listener, limits.connections),
+        listen::Door::new(listener, limits.connections, crowd()),
         tls,
         router,
         handle,
@@ -399,8 +402,9 @@ fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/ready", get(ready))
         // The media kept, outside every guard: a key is a hash nobody
-        // guesses, and Sonarr fetches a poster with no credential.
-        .route("/media/{key}", get(crate::media::serve::get))
+        // guesses, and Sonarr fetches a poster with no credential. A copy
+        // made on demand counts against its caller, as the API does.
+        .route("/media/{key}", get(crate::media::serve::get_for_caller))
         // The authority the clients are to trust, and the script that makes
         // a container trust it: public, since a client fetches them before
         // it can trust anything.
@@ -800,9 +804,11 @@ struct Ready {
     tmdb_configured: bool,
 }
 
-/// Liveness is `/health`; this is readiness, and it touches the database.
+/// Liveness is `/health`; this is readiness, and it touches the database —
+/// once in a few seconds, however often it is asked, since anybody may ask
+/// under any name and with no credential.
 async fn ready(State(state): State<AppState>) -> (StatusCode, Json<Ready>) {
-    let database = state.db.health().await.is_ok();
+    let database = state.caches.database_answers(&state.db).await;
 
     let status = if database {
         StatusCode::OK
@@ -969,6 +975,54 @@ mod policy_tests {
             assert!(ANY_NAME.contains(&path), "{path}");
         }
         assert!(!ANY_NAME.contains(&"/api/v1/items"));
+    }
+}
+
+#[cfg(test)]
+mod ready_tests {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt as _;
+
+    use super::*;
+
+    /// What `/ready` says, as the status and whether it says the database
+    /// answers.
+    async fn readiness(router: &Router) -> (StatusCode, bool) {
+        let answer = router
+            .clone()
+            .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = answer.status();
+        let body = axum::body::to_bytes(answer.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let said: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        (status, said["database"] == true)
+    }
+
+    /// The database is asked once in a few seconds, however often `/ready` is:
+    /// what was said is said again while the database goes away, and a server
+    /// that has not been asked yet finds out.
+    #[tokio::test]
+    async fn readiness_asks_the_database_once_in_a_few_seconds() {
+        let state = crate::api::native::testing::server().await;
+        let router = build_router(state.clone());
+        assert_eq!(readiness(&router).await, (StatusCode::OK, true));
+
+        state.db.close().await;
+        assert_eq!(
+            readiness(&router).await,
+            (StatusCode::OK, true),
+            "kept: the database was not asked again"
+        );
+
+        let down = crate::api::native::testing::server().await;
+        down.db.close().await;
+        assert_eq!(
+            readiness(&build_router(down)).await,
+            (StatusCode::SERVICE_UNAVAILABLE, false)
+        );
     }
 }
 

@@ -203,6 +203,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/account/provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tie your account to the person the identity provider knows, so that you
+         *     can sign in through it as well.
+         * @description A session is not proof enough: one left open, or taken, would tie whoever
+         *     holds it, and the tie would outlive the password the account's owner then
+         *     resets. So the account's current password is asked for — or, for an account
+         *     with none, the provider is asked to have you sign in again, and its answer
+         *     must say you did. The answer is the provider's address to send the browser
+         *     to; the tie is made when the browser comes back from it.
+         */
+        post: operations["oidc_tie"];
+        /**
+         * Untie your account from the identity provider. Not one that would be left
+         *     with no way in: a password of its own, which this server asks for, comes
+         *     first. Your other sessions are closed — one of them may have been opened
+         *     through the tie.
+         */
+        delete: operations["oidc_untie"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/account/sessions": {
         parameters: {
             query?: never;
@@ -1024,8 +1056,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Go to the identity provider to sign in — or, with `link`, to tie the
-         *     signed-in account to the person the provider knows.
+         * Go to the identity provider to sign in. Tying an account to the person the
+         *     provider knows is asked for with `POST /account/provider`.
          */
         get: operations["oidc_start"];
         put?: never;
@@ -1224,7 +1256,13 @@ export interface paths {
         delete: operations["clients_remove"];
         options?: never;
         head?: never;
-        /** Enable or disable a key without revoking it. */
+        /**
+         * Enable or disable a key without revoking it.
+         * @description A person's key paused from here pauses its owner's keys: its owner can
+         *     neither resume it nor make another, or resume any other of theirs, until an
+         *     administrator enables a key of theirs from here, or lifts the pause
+         *     (`DELETE /users/{id}/keys-pause`).
+         */
         patch: operations["clients_update"];
         trace?: never;
     };
@@ -3672,6 +3710,28 @@ export interface paths {
         patch: operations["users_update"];
         trace?: never;
     };
+    "/api/v1/users/{id}/keys-pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Lift the pause an administrator put on a person's keys — by disabling one
+         *     of them from **Keys & network** — so that they can make keys and resume
+         *     them again. Enabling a key of theirs from there lifts it too; this is for
+         *     a person who has deleted theirs, with none left to enable.
+         */
+        delete: operations["users_lift_keys_pause"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/{id}/oidc": {
         parameters: {
             query?: never;
@@ -3702,7 +3762,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Give an account a new password; its sessions are closed. */
+        /**
+         * Give an account a new password; its sessions are closed, and so is its tie
+         *     to the identity provider, if it has one: whoever tied it — the person, or
+         *     somebody holding a session of theirs — signed in as them through the
+         *     provider, which no password reset would otherwise end.
+         */
         post: operations["users_reset_password"];
         delete?: never;
         options?: never;
@@ -9734,6 +9799,24 @@ export interface components {
             /** @description The issuer to try; the stored one when left out. */
             issuer?: string | null;
         };
+        TieRequest: {
+            /**
+             * @description The account's current password: the proof, from an account that has
+             *     one, that its owner is asking and not a session left open. An account
+             *     with none leaves it out, and is sent to sign in at the provider again
+             *     instead.
+             */
+            currentPassword?: string | null;
+            /** @description The page of this site to come back to. */
+            next?: string | null;
+        };
+        TieStarted: {
+            /**
+             * @description Where to send the browser: the identity provider's sign-in. The
+             *     cookie that carries the flow back is set with this answer.
+             */
+            url: string;
+        };
         TimeOfDay: {
             /** Format: int32 */
             hours: number;
@@ -9925,6 +10008,12 @@ export interface components {
             user: components["schemas"]["User"];
             keys: components["schemas"]["ApiClient"][];
             sessions: components["schemas"]["Session"][];
+            /**
+             * @description Who paused this person's keys, while the pause stands: until an
+             *     administrator lifts it ([`lift_keys_pause`]), they can neither make a
+             *     key nor resume one.
+             */
+            keysPausedBy?: string | null;
         };
         UsersPage: {
             users: components["schemas"]["Listed"][];
@@ -10623,7 +10712,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The key limit is reached, or a key asked */
+            /** @description The key limit is reached, a key asked, or an administrator paused your keys */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10690,6 +10779,13 @@ export interface operations {
             };
             /** @description A field was rejected */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An administrator paused your keys, and only one can resume them */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10832,6 +10928,104 @@ export interface operations {
             };
             /** @description A key cannot manage an account */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    oidc_tie: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TieRequest"];
+            };
+        };
+        responses: {
+            /** @description Where to send the browser; the cookie of the flow is set */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TieStarted"];
+                };
+            };
+            /** @description The password was left out, or is too long */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The password was wrong */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A key cannot manage an account */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The account is tied already, or no provider is set up */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Too many wrong passwords lately */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The provider did not answer */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    oidc_untie: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Untied; the other sessions are closed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A key cannot manage an account */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The account is not tied, or would be left with no way in */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12393,7 +12587,10 @@ export interface operations {
             query?: {
                 /** @description The page of this site to come back to. */
                 next?: string;
-                /** @description Set by a signed-in person tying their account to the provider. */
+                /**
+                 * @description Refused: a tie is asked for from the account page, with
+                 *     `POST /account/provider`, which proves it by the account's password.
+                 */
                 link?: string;
             };
             header?: never;
@@ -13611,6 +13808,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description As many such reads as the server answers at once are under way; `Retry-After` says when to ask again */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     feeds_added_atom: {
@@ -13696,6 +13900,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Figures"];
                 };
+            };
+            /** @description As many such reads as the server answers at once are under way; `Retry-After` says when to ask again */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -14217,6 +14428,13 @@ export interface operations {
             };
             /** @description No valid credential was presented */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description As many such reads as the server answers at once are under way; `Retry-After` says when to ask again */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17819,6 +18037,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description As many such reads as the server answers at once are under way; `Retry-After` says when to ask again */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     seasons_chart: {
@@ -18625,6 +18850,39 @@ export interface operations {
             };
         };
     };
+    users_lift_keys_pause: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Lifted, or there was none */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The caller is not an administrator */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     oidc_unlink: {
         parameters: {
             query?: never;
@@ -19176,6 +19434,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description The caller's quota of pictures is spent for now; `Retry-After` says when to ask again */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description TMDB's pictures could not be reached */
             502: {
                 headers: {
@@ -19183,7 +19448,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The TMDB relay is switched off */
+            /** @description The TMDB relay is switched off, or as many pictures as are handed on from TMDB at once are under way (`Retry-After` says when to ask again) */
             503: {
                 headers: {
                     [name: string]: unknown;

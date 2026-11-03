@@ -397,6 +397,9 @@ fn guarded_builder(guard: Guard) -> reqwest::ClientBuilder {
         .timeout(std::time::Duration::from_secs(60))
         .connect_timeout(std::time::Duration::from_secs(10))
         .redirect(guard.redirect_policy())
+        // A redirect is followed without telling the next host where it
+        // came from: the address left may carry a key in its query.
+        .referer(false)
 }
 
 #[cfg(test)]

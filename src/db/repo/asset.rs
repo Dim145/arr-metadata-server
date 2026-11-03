@@ -515,6 +515,19 @@ pub struct Upload<'a> {
     pub wanted_by: &'a str,
 }
 
+/// What the uploads made under one label weigh, all told — `editor:bob`, or
+/// a key's `client:…`: what a writer's quota is counted against.
+pub async fn uploaded_bytes(db: &Db, uploaded_by: &str) -> Result<i64> {
+    let row = sqlx::query(db.sql(
+        "SELECT CAST(COALESCE(SUM(bytes), 0) AS BIGINT) AS bytes
+           FROM media_asset WHERE uploaded_by = ?",
+    ))
+    .bind(uploaded_by)
+    .fetch_one(db.pool())
+    .await?;
+    Ok(row.big("bytes")?)
+}
+
 pub async fn insert_upload(db: &Db, upload: &Upload<'_>) -> Result<()> {
     sqlx::query(db.sql(
         "INSERT INTO media_asset
@@ -1641,6 +1654,68 @@ mod tests {
 
         let unknown = unknown_origins(&db, true, true).await.unwrap();
         assert!(unknown.is_empty(), "the poster is known already");
+    }
+
+    /// What a writer's uploads weigh is theirs alone, by the label they were
+    /// made under.
+    #[tokio::test]
+    async fn the_uploads_made_under_a_label_are_weighed_together() {
+        let db = db().await;
+        let made = |id: &'static str, origin: &'static str, bytes: i64, by: &'static str| {
+            let db = &db;
+            async move {
+                let key = format!("{SHA}.png");
+                insert_upload(
+                    db,
+                    &Upload {
+                        id,
+                        origin,
+                        kind: Kind::Image,
+                        stored: Stored {
+                            key: &key,
+                            content_type: "image/png",
+                            bytes,
+                            sha256: SHA,
+                            width: Some(2),
+                            height: Some(3),
+                            thumb: Thumb::Png,
+                            color: None,
+                            thumbhash: None,
+                            prepared: 0,
+                        },
+                        uploaded_by: by,
+                        wanted_by: "w",
+                    },
+                )
+                .await
+                .unwrap();
+            }
+        };
+        made(
+            "0190f2a8-7b8f-7c3e-9b1a-3d2f1e0c9b81",
+            "upload:a",
+            1_000,
+            "editor:bob",
+        )
+        .await;
+        made(
+            "0190f2a8-7b8f-7c3e-9b1a-3d2f1e0c9b82",
+            "upload:b",
+            2_500,
+            "editor:bob",
+        )
+        .await;
+        made(
+            "0190f2a8-7b8f-7c3e-9b1a-3d2f1e0c9b83",
+            "upload:c",
+            7_000,
+            "editor:carol",
+        )
+        .await;
+
+        assert_eq!(uploaded_bytes(&db, "editor:bob").await.unwrap(), 3_500);
+        assert_eq!(uploaded_bytes(&db, "editor:carol").await.unwrap(), 7_000);
+        assert_eq!(uploaded_bytes(&db, "editor:nobody").await.unwrap(), 0);
     }
 
     /// The one check made before an upload is deleted: a picture of any

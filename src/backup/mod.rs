@@ -28,6 +28,12 @@
 //! the SQLite database by default — or, among several instances whose media
 //! are in a bucket, in that bucket, under `backups/`, where every instance
 //! finds them.
+//!
+//! What is written for an archive is for the user who runs the server alone,
+//! whatever the umask: the archive is `0600`, the copy of the database it is
+//! put together from is, and the directories the server makes for them — the
+//! archives', the working directories' — are `0700`. A directory already
+//! there keeps the permissions it has.
 
 pub mod archive;
 pub mod lock;
@@ -980,10 +986,16 @@ impl Work {
     /// The directory is made there, under an id, by this process alone (the
     /// making fails rather than take one that is there already), readable by
     /// this user only.
+    ///
+    /// Under `under` the directory is made the same way, and `under` too
+    /// when it is not there yet: the copy of the database put together in it
+    /// holds every account's password hash, and the permissions of the
+    /// directory around it — a volume's, beside the archives — are not this
+    /// server's to count on. A directory already there is left as it is.
     fn new(under: &Path) -> Result<Self> {
         sweep_leftovers(under);
         let dir = under.join(crate::db::new_id());
-        match std::fs::create_dir_all(&dir) {
+        match private_dirs(under).and_then(|()| private_dir(&dir)) {
             Ok(()) => Ok(Self(dir)),
             Err(e) => {
                 // Made there privately, under an id: see the paragraph above.
@@ -1062,6 +1074,36 @@ fn private_dir(dir: &Path) -> std::io::Result<()> {
         builder.mode(0o700);
     }
     builder.create(dir)
+}
+
+/// A directory, with those above it that are missing, readable by this user
+/// only. One that is there already is left as it is: what the server did not
+/// make is not its to change the permissions of.
+fn private_dirs(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// A file made by this process alone — the making fails rather than take one
+/// that is there already, or follow a link put where it goes — open for
+/// writing, readable by this user only whatever the umask says. What an
+/// archive, and the copy of the database it is made of, is written to: both
+/// hold every account's password hash.
+fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 /// Take away, in the system's temporary directory, the working directories
@@ -1196,6 +1238,89 @@ mod tests {
 
         drop(work);
         assert!(!made.exists(), "the working directory goes with its work");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The mode of a file or a directory: the bits that say who may read it.
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// Where the copy of the database is put together is made for the user
+    /// who runs the server alone — the directory that holds it too, when it
+    /// had to be made — whatever the umask would have given.
+    #[cfg(unix)]
+    #[test]
+    fn a_working_directory_is_made_for_its_user_alone_with_the_one_that_holds_it() {
+        let base = scratch();
+        let under = base.join("backups").join(".work");
+        let work = Work::new(&under).expect("a working directory");
+        assert_eq!(mode(work.path()), 0o700);
+        assert_eq!(mode(&under), 0o700);
+        assert_eq!(mode(under.parent().unwrap()), 0o700);
+
+        // One that is there already is left as it is, and so is what holds
+        // it: only what the server makes is made private.
+        let open = base.join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let again = Work::new(&open).expect("a working directory");
+        assert_eq!(mode(&open), 0o755);
+        assert_eq!(mode(again.path()), 0o700);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An archive is written readable by its user alone, in a directory made
+    /// for it the same way — and a directory already there keeps what it had,
+    /// the archive in it as private as any.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_archive_and_the_directory_made_for_it_are_for_the_server_s_user_alone() {
+        let base = scratch();
+        let db = crate::db::testing::sqlite().await;
+        let backups_in = |dir: &Path| {
+            Backups::new(&config_for("sqlite::memory:".into()), db.clone(), None)
+                .unwrap()
+                .with_place(Place::Directory(dir.to_path_buf()))
+        };
+
+        // Neither the directory nor the one above it is there yet.
+        let new = base.join("kept").join("archives");
+        let made = backups_in(&new)
+            .make(Ask::new(Reason::Manual))
+            .await
+            .unwrap();
+        assert_eq!(mode(&new), 0o700, "the directory made for the archives");
+        assert_eq!(mode(&new.join(&made.name)), 0o600, "the archive");
+        assert_eq!(mode(new.parent().unwrap()), 0o700);
+
+        // One that is there already is not made private under its owner.
+        let open = base.join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let made = backups_in(&open)
+            .make(Ask::new(Reason::Manual))
+            .await
+            .unwrap();
+        assert_eq!(mode(&open), 0o755);
+        assert_eq!(mode(&open.join(&made.name)), 0o600);
+
+        // `--out` names a file or a directory of the caller's: the archive
+        // is private there too, and the directory it is put together in.
+        let out = base.join("elsewhere.tar.zst");
+        backups_in(&new)
+            .make(Ask {
+                out: Some(out.clone()),
+                ..Ask::new(Reason::Command)
+            })
+            .await
+            .unwrap();
+        assert_eq!(mode(&out), 0o600);
+        assert_eq!(mode(&base.join(".ams-work")), 0o700);
         let _ = std::fs::remove_dir_all(&base);
     }
 

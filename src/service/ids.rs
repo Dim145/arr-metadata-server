@@ -308,6 +308,14 @@ pub fn own_episode(names: &str) -> i64 {
     -(i64::from(hash % (i32::MAX as u32)) + 1)
 }
 
+/// Whether `id` is a number [`own_episode`] can make: negative, and no
+/// further from nought than the 32-bit column a client keeps it in. Anything
+/// else — a positive number, nought, `-9999999999` — was never made here, so
+/// nothing is looked for under it.
+pub fn is_own_episode(id: i64) -> bool {
+    (-i64::from(i32::MAX)..0).contains(&id)
+}
+
 /// A search term of the form `prefix:value`, which Sonarr and Radarr both use
 /// to look a title up by a specific provider's id.
 #[derive(Debug, PartialEq, Eq)]
@@ -648,6 +656,31 @@ mod tests {
         assert_eq!(own_episode("tmdb:170135"), first);
         assert_ne!(own_episode("tmdb:170132"), first);
         assert!(own_episode("") < 0);
+    }
+
+    #[test]
+    fn only_a_number_an_episode_can_be_given_is_one_made_here() {
+        for names in [
+            "tmdb:170135",
+            "place:abc",
+            "season:tmdb:1",
+            "character:x",
+            "",
+        ] {
+            assert!(is_own_episode(own_episode(names)), "{names}");
+        }
+        // The ends of what it makes, and one past each.
+        assert!(is_own_episode(-1) && is_own_episode(-i64::from(i32::MAX)));
+        for never in [
+            0,
+            1,
+            990_701,
+            -i64::from(i32::MAX) - 1,
+            -9_999_999_999,
+            i64::MIN,
+        ] {
+            assert!(!is_own_episode(never), "{never}");
+        }
     }
 
     #[test]

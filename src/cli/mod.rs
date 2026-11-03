@@ -8,9 +8,11 @@
 //! locks goes through the server's own API, in this process, as an
 //! administrator the journal calls `client:command line`: the same checks,
 //! the same journal, the same webhooks as the interface. Passwords and
-//! passphrases are read from standard input or asked for at the terminal,
-//! never taken as an argument, which a process list and a shell's history
-//! would keep.
+//! passphrases are read from standard input or asked for at the terminal, and
+//! the password of a database address from the environment
+//! (`AMS_TRANSFER_FROM`, `AMS_TRANSFER_TO`): never taken as an argument, which
+//! a process list and a shell's history would keep. An address that carries
+//! one as an argument is refused, saying where to put it.
 
 mod admin;
 mod archive;
@@ -45,13 +47,19 @@ pub enum Command {
     /// Copy a database to another engine, every row of it.
     #[command(
         long_about = "Copy a database to another engine, every row of it.\n\nThe target is \
-                      migrated first and must be empty, unless --force adds to what it holds."
+                      migrated first and must be empty, unless --force adds to what it holds.\n\n\
+                      A URL that carries a password is not an argument, which a process list and \
+                      a shell's history would keep: name the databases in AMS_TRANSFER_FROM and \
+                      AMS_TRANSFER_TO instead. An argument, when there is one, wins over its \
+                      variable."
     )]
     Transfer {
-        /// The database to copy, as a connection URL.
-        from: String,
-        /// The database to copy it into, as a connection URL.
-        to: String,
+        /// The database to copy, as a connection URL: AMS_TRANSFER_FROM names it when this is
+        /// left out.
+        from: Option<String>,
+        /// The database to copy it into, as a connection URL: AMS_TRANSFER_TO names it when
+        /// this is left out.
+        to: Option<String>,
         /// Add to a target that already holds rows.
         #[arg(long)]
         force: bool,
@@ -241,7 +249,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     match command {
         Command::Serve => unreachable!("served above"),
         Command::Healthcheck => healthcheck().await,
-        Command::Transfer { from, to, force } => transfer(&from, &to, force).await,
+        Command::Transfer { from, to, force } => transfer(from, to, force).await,
         Command::Version => {
             version();
             Ok(())
@@ -330,22 +338,85 @@ async fn server(config: config::Config) -> Result<AppState> {
     AppState::bootstrap(config).await
 }
 
+/// Where a transfer's databases are named when they are not arguments: in the
+/// environment, which a process list does not show and a shell's history does
+/// not keep.
+const TRANSFER_FROM: &str = "AMS_TRANSFER_FROM";
+const TRANSFER_TO: &str = "AMS_TRANSFER_TO";
+
+/// The two addresses of a transfer: each the argument when there is one, its
+/// variable otherwise. An argument that carries a password is refused, saying
+/// where to put it: an argument stays in the process list and in a shell's
+/// history, where a variable does not.
+fn transfer_urls(
+    from: Option<String>,
+    to: Option<String>,
+    variable: impl Fn(&str) -> Option<String>,
+) -> Result<(String, String)> {
+    let named = |given: Option<String>, role: &str, name: &str| -> Result<String> {
+        if let Some(url) = given {
+            if carries_password(&url) {
+                anyhow::bail!(
+                    "the {role}'s address carries a password, which an argument would leave in \
+                     the process list and in the shell's history: name the databases in \
+                     {TRANSFER_FROM} and {TRANSFER_TO} instead"
+                );
+            }
+            return Ok(url);
+        }
+        variable(name)
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty())
+            .with_context(|| format!("no {role} is named: give it as an argument, or in {name}"))
+    };
+    Ok((
+        named(from, "source", TRANSFER_FROM)?,
+        named(to, "target", TRANSFER_TO)?,
+    ))
+}
+
+/// Whether a database address holds a password: after the user's name, or as
+/// `?password=` — the two places PostgreSQL's driver reads one from.
+fn carries_password(url: &str) -> bool {
+    match url::Url::parse(url) {
+        Ok(parsed) => {
+            parsed
+                .password()
+                .is_some_and(|password| !password.is_empty())
+                || parsed
+                    .query_pairs()
+                    .any(|(key, value)| key.eq_ignore_ascii_case("password") && !value.is_empty())
+        }
+        // An address the driver cannot read either: the only things left to
+        // look for are the `@` a password is written before and its name.
+        Err(_) => {
+            url.to_ascii_lowercase().contains("password=")
+                || url.split_once("://").is_some_and(|(_, rest)| {
+                    rest.split(['/', '?', '#'])
+                        .next()
+                        .is_some_and(|authority| authority.contains('@'))
+                })
+        }
+    }
+}
+
 /// Copy one database into another.
 ///
 /// Deliberately a separate command rather than something the server does at
 /// startup: moving data is a decision, and doing it implicitly on a config
 /// change would be the kind of surprise nobody wants from a database.
-async fn transfer(from: &str, to: &str, force: bool) -> Result<()> {
+async fn transfer(from: Option<String>, to: Option<String>, force: bool) -> Result<()> {
+    let (from, to) = transfer_urls(from, to, |name| std::env::var(name).ok())?;
     let open = |url: &str| config::Database {
         url: url.to_string(),
         max_connections: 4,
         acquire_timeout: std::time::Duration::from_secs(30),
     };
 
-    let source = db::Db::connect(&open(from))
+    let source = db::Db::connect(&open(&from))
         .await
         .context("cannot open the source")?;
-    let target = db::Db::connect(&open(to))
+    let target = db::Db::connect(&open(&to))
         .await
         .context("cannot open the target")?;
 
@@ -477,15 +548,15 @@ mod tests {
         let Some(Command::Transfer { from, to, force }) = parsed(&[
             "transfer",
             "sqlite://data/ams.db",
-            "postgres://ams:secret@localhost/ams",
+            "postgres://ams@localhost/ams",
         ]) else {
             panic!("a transfer");
         };
         assert_eq!(
-            (from.as_str(), to.as_str(), force),
+            (from.as_deref(), to.as_deref(), force),
             (
-                "sqlite://data/ams.db",
-                "postgres://ams:secret@localhost/ams",
+                Some("sqlite://data/ams.db"),
+                Some("postgres://ams@localhost/ams"),
                 false
             )
         );
@@ -498,6 +569,161 @@ mod tests {
                 parsed(&args),
                 Some(Command::Transfer { force: true, .. })
             ));
+        }
+        // Either address may be left out, for its variable to name.
+        assert!(matches!(
+            parsed(&["transfer"]),
+            Some(Command::Transfer {
+                from: None,
+                to: None,
+                force: false
+            })
+        ));
+        assert!(matches!(
+            parsed(&["transfer", "sqlite://a.db"]),
+            Some(Command::Transfer {
+                from: Some(_),
+                to: None,
+                ..
+            })
+        ));
+    }
+
+    /// The address of a database with a password in it is read from the
+    /// environment, and refused as an argument — which a process list and a
+    /// shell's history would keep — saying where to put it, without saying
+    /// the password.
+    #[test]
+    fn a_transfer_s_password_comes_from_the_environment_and_is_never_an_argument() {
+        let none = |_: &str| None::<String>;
+        let environment = |name: &str| match name {
+            "AMS_TRANSFER_FROM" => Some("sqlite://data/ams.db".to_string()),
+            "AMS_TRANSFER_TO" => Some("  postgres://ams:secret@localhost/ams \n".to_string()),
+            _ => None,
+        };
+
+        // Both from the environment, a password and all, without the blanks
+        // a file or a shell leaves around it.
+        assert_eq!(
+            transfer_urls(None, None, environment).unwrap(),
+            (
+                "sqlite://data/ams.db".to_string(),
+                "postgres://ams:secret@localhost/ams".to_string()
+            )
+        );
+        // An argument without a password is read as it always was, and wins
+        // over its variable; the other address stays its variable's.
+        assert_eq!(
+            transfer_urls(Some("sqlite://other.db".into()), None, environment).unwrap(),
+            (
+                "sqlite://other.db".to_string(),
+                "postgres://ams:secret@localhost/ams".to_string()
+            )
+        );
+        assert_eq!(
+            transfer_urls(
+                Some("sqlite://a.db".into()),
+                Some("postgres://ams@localhost/ams".into()),
+                none
+            )
+            .unwrap(),
+            (
+                "sqlite://a.db".to_string(),
+                "postgres://ams@localhost/ams".to_string()
+            )
+        );
+
+        // One that is named nowhere is said to be missing, and which.
+        let missing = transfer_urls(None, Some("sqlite://b.db".into()), none)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            missing.contains("source") && missing.contains("AMS_TRANSFER_FROM"),
+            "{missing}"
+        );
+        let missing = transfer_urls(Some("sqlite://a.db".into()), None, |name| {
+            (name == "AMS_TRANSFER_TO").then(|| "  ".to_string())
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            missing.contains("target") && missing.contains("AMS_TRANSFER_TO"),
+            "an empty variable names nothing: {missing}"
+        );
+
+        // A password in an argument, in either place, in any of the ways an
+        // address holds one: refused, naming both variables, and the
+        // password is not repeated — with the variables set or not.
+        for url in [
+            "postgres://ams:secret@localhost/ams",
+            "postgresql://:secret@localhost:5432/ams",
+            "postgres://ams:p%40ss@db/ams?sslmode=require",
+            "postgres://localhost/ams?user=ams&password=secret",
+            "postgres://localhost/ams?Password=secret",
+            // Not an address the driver reads either, still not an argument.
+            "postgres://ams:secret@host:not-a-port/ams",
+            "postgres://ams:secret@/ams?host=/run/postgresql",
+            "postgres://host:not-a-port/ams?password=secret",
+        ] {
+            for (from, to) in [
+                (Some(url.to_string()), Some("sqlite://b.db".to_string())),
+                (Some("sqlite://a.db".to_string()), Some(url.to_string())),
+            ] {
+                for variable in [
+                    Box::new(none) as Box<dyn Fn(&str) -> Option<String>>,
+                    Box::new(environment),
+                ] {
+                    let refused = format!(
+                        "{:#}",
+                        transfer_urls(from.clone(), to.clone(), variable).unwrap_err()
+                    );
+                    assert!(
+                        refused.contains("AMS_TRANSFER_FROM")
+                            && refused.contains("AMS_TRANSFER_TO"),
+                        "{url}: {refused}"
+                    );
+                    assert!(!refused.contains("secret"), "{url}: {refused}");
+                }
+            }
+        }
+    }
+
+    /// Where a password goes is said where somebody looks for it: the
+    /// command's own help, and the usage `--help` ends with.
+    #[test]
+    fn the_help_says_where_a_transfer_s_password_goes() {
+        use clap::CommandFactory as _;
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("transfer")
+            .expect("the transfer command")
+            .render_long_help()
+            .to_string();
+        for text in [&help, crate::USAGE] {
+            assert!(
+                text.contains("AMS_TRANSFER_FROM") && text.contains("AMS_TRANSFER_TO"),
+                "{text}"
+            );
+        }
+        // The one example with a URL in it shows none with a password.
+        assert!(!crate::USAGE.contains("secret"), "{}", crate::USAGE);
+    }
+
+    #[test]
+    fn an_address_without_a_password_is_one_an_argument_may_carry() {
+        for url in [
+            "sqlite://data/ams.db",
+            "sqlite:///data/ams.db?mode=rwc",
+            "sqlite::memory:",
+            "postgres://localhost/ams",
+            "postgres://ams@localhost:5432/ams?sslmode=require",
+            // An empty password is none.
+            "postgres://ams:@localhost/ams",
+            "postgres://localhost/ams?password=",
+            // A path with an `@` in it is not a user.
+            "sqlite:///data/a@b/ams.db",
+        ] {
+            assert!(!carries_password(url), "{url}");
         }
     }
 

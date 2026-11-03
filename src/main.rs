@@ -44,11 +44,18 @@ const USAGE: &str = "\
 With no command, the server runs.
 
   transfer takes two connection URLs and copies every row of the first into
-  the second, which must be empty: its migrations are applied first.
+  the second, which must be empty: its migrations are applied first. A URL
+  that carries a password is not an argument, which a process list and a
+  shell's history would keep: it is read from AMS_TRANSFER_FROM or
+  AMS_TRANSFER_TO, which stand in for an argument left out.
 
     arr-metadata-server transfer \\
         'sqlite://data/ams.db' \\
-        'postgres://ams:secret@localhost/ams'
+        'postgres://ams@localhost/ams'
+
+    read -rs AMS_TRANSFER_TO    # the target's URL, typed with nothing shown
+    export AMS_TRANSFER_TO
+    arr-metadata-server transfer 'sqlite://data/ams.db'
 
   backup writes an archive of the database where the server keeps them
   (AMS_BACKUP_DIR, or the bucket among several instances); restore puts one

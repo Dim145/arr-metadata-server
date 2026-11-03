@@ -14,8 +14,9 @@
 # (`shift+mod+enter`, the editor's *Save and open the next*), the fake
 # `api_key=abcdef123456` the log's tests write on purpose, to see it come
 # out masked, and the fake `api_key=0123456789abcdef` the TMDB relay's tests
-# write, to see it kept out of what a client is handed. None is a value that
-# could open anything.
+# write, to see it kept out of what a client is handed. And the interface's
+# list of the services' host names, which the generic-key rule reads as a key
+# behind the word `api`. None is a value that could open anything.
 
 [extend]
 useDefault = true
@@ -28,6 +29,7 @@ regexes = [
   '''keys[=:]\s*["']shift\+mod\+enter["']''',
   '''api_key=abcdef123456''',
   '''api_key=0123456789abcdef''',
+  '''skyhook\.sonarr\.tv, api\.radarr\.video, api\.themoviedb\.org, api4\.thetvdb\.com''',
 ]
 
 [[rules]]

@@ -150,8 +150,10 @@ async fn authorize(
     {
         tracing::warn!(
             %proxy,
-            "a trusted proxy forwarded an X-Forwarded-For this server cannot read; its \
-             client is treated as unknown — refused by every allowlist"
+            "a trusted proxy forwarded a request whose client this server cannot read — an \
+             X-Forwarded-For that is empty or holds no address, or only Forwarded or \
+             X-Real-IP, which are not read; its client is treated as unknown — refused by \
+             every allowlist"
         );
     }
     let client_ip = caller.address();
@@ -499,7 +501,7 @@ fn own_origin(state: &AppState, peer: Option<SocketAddr>, request: &Request) -> 
 /// Something worth a warning in the log once in a while, not on every request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Warning {
-    /// A trusted proxy forwarded a chain that cannot be read.
+    /// A trusted proxy forwarded a request whose client cannot be read.
     Unreadable,
     /// A peer outside `AMS_TRUSTED_PROXIES` forwarded a request.
     Stranger,
@@ -922,18 +924,6 @@ pub(crate) fn key_expiry(text: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 /// is the session's id. Lets a person's device list say which one is theirs.
 #[derive(Clone, Debug)]
 pub struct CurrentSession(pub String);
-
-/// The person a request's session belongs to, for a route outside the guards
-/// that still wants to know — tying an account to the identity provider.
-pub(crate) async fn session_user(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> AppResult<Option<crate::db::repo::user::User>> {
-    Ok(match resolve_session(state, headers).await? {
-        Some((Identity::User(user), _)) => Some(*user),
-        _ => None,
-    })
-}
 
 async fn resolve_session(
     state: &AppState,

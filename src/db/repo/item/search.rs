@@ -1848,6 +1848,59 @@ mod tests {
         }
     }
 
+    /// Whoever sends a term — TMDB's search, TheTVDB's, Plex, Sonarr, the
+    /// interface — it is looked for by its first two hundred characters: a
+    /// term of megabytes is a term of two hundred letters, not a read of the
+    /// whole index for a name that cannot be.
+    #[tokio::test]
+    async fn a_term_far_longer_than_a_title_is_looked_for_by_its_first_letters() {
+        let db = db().await;
+        let mut item = sample();
+        item.id = crate::db::new_id();
+        item.title = "x".repeat(crate::search::rank::TERM_LENGTH);
+        item.slug = "an-x-title".into();
+        upsert(
+            &db,
+            ItemWrite {
+                item: &item,
+                replace_children: false,
+            },
+        )
+        .await
+        .expect("stored");
+
+        let long = "x".repeat(1_000_000);
+        for sort in [Sort::Relevance, Sort::Title] {
+            let found = search(
+                &db,
+                &Query {
+                    term: Some(long.clone()),
+                    sort,
+                    limit: 10,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("searched");
+            assert_eq!(
+                found.len(),
+                1,
+                "{sort:?}: its first 200 letters are the title"
+            );
+        }
+        let (found, total) = search_counted(
+            &db,
+            &Query {
+                term: Some(long),
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("counted");
+        assert_eq!((found.len(), total), (1, 1));
+    }
+
     #[tokio::test]
     async fn a_work_is_found_by_the_name_someone_gave_it() {
         // Renaming a work and then not being able to find it is the kind of gap

@@ -397,7 +397,19 @@ pub fn redact(text: &str) -> String {
 
 const MASK: &str = "***";
 
-/// The parameters whose values are secrets: keys, tokens, passwords.
+/// The parameters whose values are secrets: keys, tokens, passwords — and
+/// what an address carries a credential in besides, each by the name it
+/// is found under somewhere here: `auth`, where a list another server keeps
+/// private is read with a key (an import rule's address); `code`, `state`
+/// and `session_state`, what the identity provider sends a sign-in back with
+/// — a `code` is the one-time right to the person's tokens, and a `state`
+/// the proof the sign-in is the one begun; `session_id`, `guest_session_id`
+/// and `request_token`, the sessions TMDB's clients open, any of which acts
+/// as the account for as long as it lasts.
+///
+/// Every text that is logged, journaled, reported or traced is masked by
+/// this list: the request's span ([`redact_uri`]), the lines the journal
+/// keeps (`journal::masked`) and a server span's `url.query` ([`redact`]).
 const SECRET_PARAMETERS: &[&str] = &[
     "api_key",
     "apikey",
@@ -415,6 +427,13 @@ const SECRET_PARAMETERS: &[&str] = &[
     "signature",
     "x-amz-signature",
     "x-amz-credential",
+    "auth",
+    "code",
+    "state",
+    "session_state",
+    "session_id",
+    "guest_session_id",
+    "request_token",
 ];
 
 /// `api_key=abc&language=fr` is `api_key=***&language=fr`, wherever such a
@@ -638,6 +657,39 @@ mod tests {
     }
 
     #[test]
+    fn what_a_sign_in_a_session_or_a_list_carries_in_an_address_is_masked() {
+        // The identity provider's way back to the callback: the code is
+        // the right to the person's tokens, the state is the sign-in's own.
+        assert_eq!(
+            redact(
+                "GET /api/v1/auth/oidc/callback?code=4/0AbCdEf&state=Xy12Zq&session_state=ab.cd&iss=https://idp.example"
+            ),
+            "GET /api/v1/auth/oidc/callback?code=***&state=***&session_state=***&iss=https://idp.example"
+        );
+        // TMDB's sessions, in any case and wherever the pair stands.
+        assert_eq!(
+            mask_parameters(
+                "language=fr&Session_ID=s3ss10n&guest_session_id=gu3st&request_token=r3qt0k&page=2"
+            ),
+            "language=fr&Session_ID=***&guest_session_id=***&request_token=***&page=2"
+        );
+        // An import rule's address, with the key its list is read with.
+        assert_eq!(
+            redact(
+                "error sending request for url (https://other.example/lists/top/ids.txt?kind=movie&auth=t0pS3cret)"
+            ),
+            "error sending request for url (https://other.example/lists/top/ids.txt?kind=movie&auth=***)"
+        );
+        // A name that only contains one is left alone, and a value that is
+        // none stays none.
+        assert_eq!(
+            mask_parameters("barcode=1&mistate=2&authors=3&postcode=4"),
+            "barcode=1&mistate=2&authors=3&postcode=4"
+        );
+        assert_eq!(mask_parameters("code=&state="), "code=&state=");
+    }
+
+    #[test]
     fn credentials_after_their_scheme_are_masked() {
         assert_eq!(
             redact("Authorization: Bearer eyJhbGciOi.abc_def"),
@@ -700,6 +752,26 @@ mod tests {
         );
         let bare: axum::http::Uri = "/health".parse().unwrap();
         assert_eq!(redact_uri(&bare), "/health");
+    }
+
+    #[test]
+    fn the_request_span_never_holds_what_a_sign_in_or_a_session_carries() {
+        let callback: axum::http::Uri =
+            "/api/v1/auth/oidc/callback?code=authcode&state=csrf&session_state=sess"
+                .parse()
+                .unwrap();
+        assert_eq!(
+            redact_uri(&callback),
+            "/api/v1/auth/oidc/callback?code=***&state=***&session_state=***"
+        );
+        let tmdb: axum::http::Uri =
+            "/3/account/1/lists?session_id=s&guest_session_id=g&request_token=t&language=fr"
+                .parse()
+                .unwrap();
+        assert_eq!(
+            redact_uri(&tmdb),
+            "/3/account/1/lists?session_id=***&guest_session_id=***&request_token=***&language=fr"
+        );
     }
 
     #[test]

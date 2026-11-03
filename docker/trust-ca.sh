@@ -18,6 +18,10 @@
 #      shows — or the risk is accepted, on a network you control, with
 #      AMS_CA_INSECURE=1.
 #
+# What is fetched, or pinned, is one certificate and nothing else: a file
+# with a second PEM block is refused, since update-ca-certificates would
+# install every block of it.
+#
 # The same script is served by the server at /trust-ca.sh, and its
 # authority at /ca.crt, so a deployment from the image alone has both.
 # Mounted on purpose and finding nothing to install, it fails loudly: a
@@ -28,6 +32,9 @@ set -eu
 CA_NAME="arr-metadata.crt"
 CA_PATH="/usr/local/share/ca-certificates/${CA_NAME}"
 CA_FILE="${AMS_CA_FILE:-/arr-metadata/tls/ca.crt}"
+
+# Set once the authority is fetched from AMS_CA_URL rather than found here.
+FETCHED=""
 
 if [ -s "${CA_PATH}" ]; then
     echo "[trust-ca] using the authority mounted at ${CA_PATH}"
@@ -55,6 +62,7 @@ elif [ -n "${AMS_CA_URL:-}" ]; then
             ;;
     esac
     echo "[trust-ca] fetching the authority from ${AMS_CA_URL}"
+    FETCHED=1
     mkdir -p "$(dirname "${CA_PATH}")"
     if command -v curl >/dev/null 2>&1; then
         curl -fsS --retry 10 --retry-delay 3 --retry-connrefused -o "${CA_PATH}" "${AMS_CA_URL}"
@@ -72,6 +80,22 @@ fi
 if ! grep -q "BEGIN CERTIFICATE" "${CA_PATH}"; then
     echo "[trust-ca] ${CA_PATH} is not a PEM certificate" >&2
     exit 1
+fi
+
+# A file that was fetched, or that a fingerprint is given for, is one
+# certificate. The fingerprint below is taken of the file's base64 text as one
+# stream, and a decoder is more lenient than OpenSSL: GNU's stops at a tab that
+# OpenSSL skips, so a second certificate behind one goes unhashed, and
+# update-ca-certificates installs every block of the file all the same. Any
+# kind of PEM marker is counted — a TRUSTED CERTIFICATE block is a root to
+# OpenSSL too — and the one let through is a CERTIFICATE.
+if [ -n "${FETCHED}" ] || [ -n "${AMS_CA_FINGERPRINT:-}" ]; then
+    BLOCKS="$(grep -o -e '-----BEGIN' "${CA_PATH}" | wc -l | tr -d ' ')"
+    if [ "${BLOCKS}" != 1 ] || ! grep -q -e '^-----BEGIN CERTIFICATE-----' "${CA_PATH}"; then
+        echo "[trust-ca] ERROR: ${CA_PATH} holds ${BLOCKS} PEM blocks, or its one block is not a CERTIFICATE: an authority that is fetched or pinned is exactly one certificate, since a second block would be installed without being pinned; not installed" >&2
+        rm -f "${CA_PATH}" 2>/dev/null || true
+        exit 1
+    fi
 fi
 
 # Pinned, when a fingerprint was given: the SHA-256 of the certificate's DER,

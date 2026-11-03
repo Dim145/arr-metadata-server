@@ -346,10 +346,8 @@ fn take_apart(
         let mut entry = entry.context("could not read the archive")?;
         let path = entry.path()?.to_string_lossy().to_string();
         if path == manifest::DATABASE {
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(database)
+            // For this user alone, as every file of the work is.
+            let mut file = super::private_file(database)
                 .with_context(|| format!("could not write {}", database.display()))?;
             let hashed = archive::copy_hashed(&mut entry, &mut file)
                 .context("could not take the database out of the archive")?;
@@ -929,6 +927,63 @@ mod tests {
             .await
             .unwrap();
         same_rows(&source, &postgres).await;
+    }
+
+    /// What a restore takes out of an archive is the database, and everything
+    /// in it: it is written for the server's user alone, and never over a
+    /// file that is there already.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_database_taken_out_of_an_archive_is_for_its_user_alone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = scratch();
+        let database = dir.join("database.sqlite");
+        std::fs::write(&database, b"SQLite format 3\0 and the rest").unwrap();
+        let (size, sha256) = archive::hash_file(&database).unwrap();
+        let mut bytes = Vec::new();
+        archive::write(
+            &mut bytes,
+            None,
+            &Manifest {
+                format: manifest::FORMAT,
+                server: env!("CARGO_PKG_VERSION").into(),
+                migration: 1,
+                created_at: crate::db::now(),
+                engine: "sqlite".into(),
+                reason: "manual".into(),
+                upgrade_to: None,
+                files: vec![manifest::File {
+                    path: manifest::DATABASE.into(),
+                    size,
+                    sha256,
+                }],
+                media: manifest::Media {
+                    included: false,
+                    store: "off".into(),
+                    files: 0,
+                    bytes: 0,
+                    note: None,
+                },
+            },
+            &database,
+            &[],
+        )
+        .unwrap();
+
+        let taken = dir.join("taken.sqlite");
+        let read = |into: PathBuf| {
+            let bytes = bytes.clone();
+            tokio::task::spawn_blocking(move || {
+                take_apart(Box::new(std::io::Cursor::new(bytes)), None, &into, None)
+            })
+        };
+        read(taken.clone()).await.unwrap().expect("taken apart");
+        let mode = std::fs::metadata(&taken).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // Not written over a file that is there.
+        assert!(read(taken).await.unwrap().is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -26,7 +26,7 @@ pub mod tmdb_images;
 use axum::{
     Router,
     extract::Request,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     middleware::from_fn_with_state,
     response::{IntoResponse, Response},
 };
@@ -36,7 +36,29 @@ use utoipa::{
 };
 use utoipa_axum::router::OpenApiRouter;
 
-use crate::{auth::middleware as guards, state::AppState};
+use crate::{auth::middleware as guards, error::AppError, state::AppState};
+
+/// Seconds a caller turned away from work that takes a place
+/// ([`crate::cache::Gate`]) is told to wait: past those it waited for one,
+/// and long enough for what held them to finish.
+const BUSY_RETRY: u64 = 5;
+
+/// What a caller is answered when every place for a kind of work stayed taken
+/// as long as it waits — a read no cache answered, a picture handed on from
+/// TMDB: a 503, in the API's own shape, and when to come back.
+pub(crate) fn busy() -> Response {
+    let mut response = AppError::Disabled {
+        code: "busy",
+        message: "this server is answering as many such requests as it can; try again in a few \
+                  seconds"
+            .into(),
+    }
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from(BUSY_RETRY));
+    response
+}
 
 /// Spec metadata. Paths and schemas are collected from the handlers themselves,
 /// so this cannot drift from what the server actually serves.
@@ -284,10 +306,16 @@ fn tmdb_surface(state: AppState, tmdb: Router<AppState>) -> Router<AppState> {
 /// key policy read as the address list — a picture's address, built by the
 /// client from TMDB's configuration, carries no key. Held to the limit of
 /// requests an address may make only where its guard turns the caller
-/// away: a library's scan asks for pictures in bursts no relay's caller
-/// makes ([`guards::guard_tmdb_images`]).
+/// away — a library's scan asks for pictures in bursts no relay's caller
+/// makes ([`guards::guard_tmdb_images`]) — and, where it lets the caller in,
+/// to a quota of pictures ten times as high ([`tmdb_images::Pace`]).
 fn tmdb_images_surface(state: AppState, images: Router<AppState>) -> Router<AppState> {
     images
+        // Inside the guard, which has let the caller in and left it uncounted.
+        .layer(from_fn_with_state(
+            tmdb_images::Pace::new(state.clone()),
+            tmdb_images::pace,
+        ))
         .layer(from_fn_with_state(state.clone(), guards::guard_tmdb_images))
         .layer(from_fn_with_state(state, guards::reject_self_calls))
 }
@@ -987,6 +1015,21 @@ mod tests {
             Some(0),
             "Plex's matches should carry no security requirement"
         );
+    }
+
+    /// Work turned away for want of a place is told so in the API's shape,
+    /// as a 503, with when to come back.
+    #[tokio::test]
+    async fn a_caller_turned_away_from_a_place_is_told_when_to_come_back() {
+        let response = busy();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "5");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let said: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(said["error"], "busy");
+        assert!(said["message"].as_str().is_some_and(|m| !m.is_empty()));
     }
 
     /// The interface's types are generated from a copy of the spec kept in
