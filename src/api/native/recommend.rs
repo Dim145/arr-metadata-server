@@ -415,6 +415,7 @@ async fn collection(
             None
         }
     };
+    let picture = |url: Option<&String>| url.map(|url| state.media.localized(url));
     let mut parts: Vec<CollectionPart> = named
         .iter()
         .flat_map(|c| c.parts.iter())
@@ -422,7 +423,9 @@ async fn collection(
             tmdb_id: part.tmdb_id,
             title: part.title.clone(),
             year: part.year(),
-            poster: part.poster.clone(),
+            // The copy kept here where there is one: a film the catalogue
+            // holds has its poster kept as the film's.
+            poster: picture(part.poster.as_ref()),
             held: None,
         })
         .collect();
@@ -434,7 +437,6 @@ async fn collection(
             .map(|i| i.id.clone());
     }
     let texts = named.as_ref().map(|c| c.texts_in(&language));
-    let picture = |url: Option<&String>| url.map(|url| state.media.localized(url));
 
     Ok(Json(CollectionPage {
         tmdb_id,
