@@ -10,6 +10,7 @@ mod db;
 mod domain;
 mod error;
 mod export;
+mod graphql;
 mod jobs;
 mod mcp;
 mod media;

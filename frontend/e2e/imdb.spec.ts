@@ -121,7 +121,14 @@ test.describe('IMDb’s lists, for whoever keeps the catalogue', () => {
       on: boolean
       imported?: { rows: number } | null
     }[]
-    expect(lists.map((list) => list.id)).toEqual(['imdb-ratings', 'imdb-akas', 'imdb-episodes', 'anime-lists'])
+    expect(lists.map((list) => list.id)).toEqual([
+      'imdb-ratings',
+      'imdb-akas',
+      'imdb-episodes',
+      'anime-lists',
+      'tvmaze-index',
+      'wikidata-ids',
+    ])
 
     const panel = page.locator('#datasets')
     await expect(panel).toBeVisible()

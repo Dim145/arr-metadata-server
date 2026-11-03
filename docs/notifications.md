@@ -54,7 +54,9 @@ Each destination ticks its own events:
   a theme whose every fetch failed; `update.available`, once per version, while the
   check for a newer version (`updates.check`) is on; `numbering.fallback`, once, when
   TMDB starts numbering a series TheTVDB stopped answering for
-  ([who numbers a series](sonarr-radarr.md#who-numbers-a-series));
+  ([who numbers a series](sonarr-radarr.md#who-numbers-a-series)), or when the
+  numbering of a series TheTVDB no longer knows is kept as it was served
+  ([a series TheTVDB no longer knows](sonarr-radarr.md#a-series-thetvdb-no-longer-knows));
   `backup.completed` and `backup.failed`, each time the scheduled task, or a
   backup asked for on the Backups page, ends ([backups](install.md#backups)).
 - **Any action of the audit trail**: `item.imported`, `item.created`, `item.deleted`,

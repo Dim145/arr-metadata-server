@@ -14,6 +14,11 @@
 //! TVmaze id is known, three the first time. The data is CC BY-SA, which asks
 //! for a link back to TVmaze wherever it is shown — the interface carries one
 //! when this source is on.
+//!
+//! Its index of every series it lists is read here too, for the copy each
+//! instance keeps of it (`tvmaze.index`, see `jobs::tvmaze_index`): its pages
+//! once, then the series it says changed. Through the same pacer as the
+//! series fetched one by one, so that the two together keep to TVmaze's limit.
 
 use std::time::Duration;
 
@@ -27,6 +32,96 @@ use crate::{
     domain::{Episode, ExternalIds, MediaItem, MediaKind},
     providers::{PATIENCE, Pacer, plain_text},
 };
+
+/// How long a reading of the index waits for one answer. A page is a third of
+/// a megabyte, and nobody waits on the reading.
+const INDEX_ANSWER: Duration = Duration::from_secs(60);
+
+/// How many times one request of a reading of the index is made before the
+/// reading gives up: TVmaze asking to be left alone, failing, or not
+/// answering in time.
+const INDEX_TRIES: u32 = 6;
+
+/// The longest pause between two of those tries.
+const INDEX_PAUSE: Duration = Duration::from_secs(60);
+
+/// The most one answer of the index may weigh: a page is a third of a
+/// megabyte, the list of the series changed in a month two thirds of one.
+const MAX_INDEX_ANSWER: u64 = 16 * 1024 * 1024;
+
+/// How far back TVmaze's list of the series it changed goes: the last day,
+/// week or month.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Since {
+    Day,
+    Week,
+    Month,
+}
+
+impl Since {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+        }
+    }
+}
+
+/// A series as TVmaze's index lists it, as far as this server keeps it: what
+/// names it and places it, its ids elsewhere, and how popular TVmaze says it
+/// is.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct IndexShow {
+    /// TVmaze's id.
+    pub id: i64,
+    pub name: String,
+    /// TVmaze's `type`: `Scripted`, `Animation`, `Reality`…
+    pub kind: Option<String>,
+    /// Named in English, as TVmaze writes it: `English`, `Japanese`.
+    pub language: Option<String>,
+    /// `Running`, `Ended`, `To Be Determined`, `In Development`.
+    pub status: Option<String>,
+    /// When it first aired, and when it last did: `2008-01-20`.
+    pub premiered: Option<String>,
+    pub ended: Option<String>,
+    /// Its network, else the web channel it streams on.
+    pub network: Option<String>,
+    /// That one's country, ISO 3166-1 alpha-2.
+    pub country: Option<String>,
+    /// Whether `network` is a web channel.
+    pub web: bool,
+    pub tvdb_id: Option<i64>,
+    /// `tt0903747`.
+    pub imdb_id: Option<String>,
+    pub tvrage_id: Option<i64>,
+    /// How popular TVmaze says it is, from 0 to 100.
+    pub weight: Option<i32>,
+    /// When TVmaze last changed it, in seconds since 1970.
+    pub updated: Option<i64>,
+}
+
+/// One page of TVmaze's index, as read.
+#[derive(Debug, Default)]
+pub struct IndexPage {
+    /// The series read.
+    pub shows: Vec<IndexShow>,
+    /// How many of its entries could not be read.
+    pub unread: usize,
+    /// The ids of those, where their id could be: series TVmaze still lists,
+    /// which a reading of the whole index does not forget.
+    pub unread_ids: Vec<i64>,
+}
+
+/// One series of the index, read alone.
+#[derive(Debug, PartialEq)]
+pub enum Indexed {
+    Listed(Box<IndexShow>),
+    /// TVmaze gave something for it that does not read.
+    Unreadable,
+    /// TVmaze no longer lists it: 404.
+    Gone,
+}
 
 /// How long TVmaze is given for an answer while a client waits on this
 /// server: it is cut at `AMS_REQUEST_TIMEOUT`, sixty seconds by default, and
@@ -196,6 +291,136 @@ impl TvmazeClient {
             .map(Some)
             .with_context(|| format!("TVmaze returned a body this server could not read: {url}"))
     }
+
+    // ─── the index ───────────────────────────────────────────────────────────
+
+    /// One page of TVmaze's index — the series it still lists of those it
+    /// numbered from 250 × `page` to 250 × `page` + 249 — with what of it
+    /// could not be read; `None` past the last page, which TVmaze answers
+    /// 404.
+    pub async fn index_page(&self, page: u32) -> Result<Option<IndexPage>> {
+        let url = format!("{}/shows", self.base);
+        let page = page.to_string();
+        let Some(body) = self.fetch_index(&url, &[("page", page.as_str())]).await? else {
+            return Ok(None);
+        };
+        let entries: Vec<Value> = serde_json::from_slice(&body)
+            .with_context(|| format!("TVmaze's index page {page} is not a list"))?;
+
+        // An entry that does not read is passed over rather than costing the
+        // page: the other series on it are no less TVmaze's. Its id, where
+        // that reads, says TVmaze still lists it.
+        let mut read = IndexPage {
+            shows: Vec::with_capacity(entries.len()),
+            ..IndexPage::default()
+        };
+        for entry in &entries {
+            match Listed::deserialize(entry) {
+                Ok(show) => read.shows.push(show.indexed()),
+                Err(_) => {
+                    read.unread += 1;
+                    read.unread_ids
+                        .extend(entry.get("id").and_then(Value::as_i64));
+                }
+            }
+        }
+        Ok(Some(read))
+    }
+
+    /// The series TVmaze changed within `since`, each with when it last
+    /// changed, in seconds since 1970.
+    pub async fn changed(&self, since: Since) -> Result<Vec<(i64, i64)>> {
+        let url = format!("{}/updates/shows", self.base);
+        let body = self
+            .fetch_index(&url, &[("since", since.as_str())])
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("TVmaze has no list of the series it changed"))?;
+        let listed: std::collections::HashMap<String, Value> = serde_json::from_slice(&body)
+            .context("TVmaze's list of the series it changed is not one")?;
+
+        let mut changed: Vec<(i64, i64)> = listed
+            .into_iter()
+            .filter_map(|(id, at)| Some((id.parse().ok()?, at.as_i64()?)))
+            .collect();
+        changed.sort_unstable();
+        Ok(changed)
+    }
+
+    /// One series of the index, as TVmaze has it now: gone once TVmaze no
+    /// longer lists it, and unreadable — passed over, not the reading's end
+    /// — when what it gives for it does not read.
+    pub async fn indexed(&self, id: i64) -> Result<Indexed> {
+        let url = format!("{}/shows/{id}", self.base);
+        let Some(body) = self.fetch_index(&url, &[]).await? else {
+            return Ok(Indexed::Gone);
+        };
+        Ok(match serde_json::from_slice::<Listed>(&body) {
+            Ok(show) => Indexed::Listed(Box::new(show.indexed())),
+            Err(e) => {
+                tracing::debug!(id, error = %e, "TVmaze gave a series this server could not read");
+                Indexed::Unreadable
+            }
+        })
+    }
+
+    /// One request of a reading of the index, its body whole, or `None` for a
+    /// 404. Nobody waits on the reading: its turn among every request to
+    /// TVmaze — the series fetched one by one included — is waited for however
+    /// long the queue, and a request TVmaze asked to be left alone over, failed
+    /// or never answered is made again after a pause, a few times: for as long
+    /// as its `Retry-After` asks, else longer each time.
+    async fn fetch_index(&self, url: &str, query: &[(&str, &str)]) -> Result<Option<Vec<u8>>> {
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            let pause = (self.again_after * 2u32.saturating_pow(tries - 1)).min(INDEX_PAUSE);
+            if !self.pacer.turn(1, Duration::from_secs(3600)).await {
+                anyhow::bail!("TVmaze's queue is an hour long; the reading of its index stops");
+            }
+            let sent = self
+                .gate
+                .send(|| self.http.get(url).query(query).timeout(INDEX_ANSWER))
+                .await;
+            let (response, permit) = match sent {
+                Ok(answered) => answered,
+                Err(e) if tries < INDEX_TRIES => {
+                    let wait = crate::providers::closed_for(&e).unwrap_or(pause);
+                    tracing::debug!(
+                        url,
+                        error = format_args!("{e:#}"),
+                        "TVmaze's index was not read; asking again"
+                    );
+                    tokio::time::sleep(wait).await;
+                    continue;
+                }
+                Err(e) => anyhow::bail!("TVmaze request failed: {url}: {e:#}"),
+            };
+
+            let status = response.status();
+            if status == reqwest::StatusCode::NOT_FOUND {
+                return Ok(None);
+            }
+            // A 429 has closed its door for as long as it asked: waited out.
+            if (status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error())
+                && tries < INDEX_TRIES
+            {
+                drop(permit);
+                let wait = self.gate.quiet_for().unwrap_or(pause);
+                tracing::debug!(url, %status, "TVmaze did not give its index; asking again");
+                tokio::time::sleep(wait).await;
+                continue;
+            }
+            if !status.is_success() {
+                let reason = crate::providers::error_text(response).await;
+                anyhow::bail!("TVmaze returned {status} for {url}: {reason}");
+            }
+            let body = crate::providers::read_body(response, MAX_INDEX_ANSWER)
+                .await
+                .with_context(|| format!("TVmaze's answer could not be read: {url}"));
+            drop(permit);
+            return body.map(Some);
+        }
+    }
 }
 
 // ─── the wire ────────────────────────────────────────────────────────────────
@@ -217,6 +442,108 @@ struct Show {
 struct Externals {
     thetvdb: Option<i64>,
     imdb: Option<String>,
+}
+
+/// A series as the index reads it: the same document as [`Show`], read for
+/// other fields, and apart from it so that the series fetched one by one are
+/// read as they always were.
+#[derive(Debug, Deserialize)]
+struct Listed {
+    id: i64,
+    #[serde(default)]
+    name: String,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    language: Option<String>,
+    status: Option<String>,
+    premiered: Option<String>,
+    ended: Option<String>,
+    network: Option<Channel>,
+    #[serde(rename = "webChannel")]
+    web_channel: Option<Channel>,
+    #[serde(default)]
+    externals: ListedExternals,
+    /// A whole number from 0 to 100; read as any number, and rounded.
+    weight: Option<f64>,
+    updated: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ListedExternals {
+    thetvdb: Option<i64>,
+    imdb: Option<String>,
+    tvrage: Option<i64>,
+}
+
+/// A network, or a web channel.
+#[derive(Debug, Deserialize)]
+struct Channel {
+    name: Option<String>,
+    country: Option<Country>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Country {
+    code: Option<String>,
+}
+
+/// A text TVmaze gives, unless it is blank.
+fn given(text: Option<&String>) -> Option<String> {
+    text.map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+}
+
+/// A channel by its name, when it has one.
+fn named(channel: Option<&Channel>) -> Option<(String, &Channel)> {
+    channel.and_then(|c| given(c.name.as_ref()).map(|name| (name, c)))
+}
+
+impl Listed {
+    /// The series as the index keeps it: its network, else the web channel it
+    /// streams on, each by its name.
+    fn indexed(&self) -> IndexShow {
+        let placed = named(self.network.as_ref())
+            .map(|(name, channel)| (name, channel, false))
+            .or_else(|| {
+                named(self.web_channel.as_ref()).map(|(name, channel)| (name, channel, true))
+            });
+
+        let mut show = IndexShow {
+            id: self.id,
+            name: self.name.trim().to_string(),
+            kind: given(self.kind.as_ref()),
+            language: given(self.language.as_ref()),
+            status: given(self.status.as_ref()),
+            premiered: given(self.premiered.as_ref()),
+            ended: given(self.ended.as_ref()),
+            tvdb_id: self.externals.thetvdb.filter(|id| *id > 0),
+            imdb_id: given(self.externals.imdb.as_ref()),
+            tvrage_id: self.externals.tvrage.filter(|id| *id > 0),
+            weight: self
+                .weight
+                .filter(|w| w.is_finite())
+                .map(|w| w.round().clamp(0.0, 100.0) as i32),
+            updated: self.updated,
+            ..IndexShow::default()
+        };
+        if let Some((name, channel, web)) = placed {
+            show.network = Some(name);
+            show.country = channel_country(channel);
+            show.web = web;
+        }
+        show
+    }
+}
+
+/// A channel's country, as two upper-case letters.
+fn channel_country(channel: &Channel) -> Option<String> {
+    channel
+        .country
+        .as_ref()
+        .and_then(|c| given(c.code.as_ref()))
+        .filter(|code| code.len() == 2 && code.chars().all(|c| c.is_ascii_alphabetic()))
+        .map(|code| code.to_ascii_uppercase())
 }
 
 #[derive(Debug, Deserialize)]
@@ -513,5 +840,52 @@ mod tests {
             Some("2024-03-11T01:30:00Z")
         );
         assert_eq!(instant("garbage"), None);
+    }
+
+    #[test]
+    fn the_index_keeps_a_series_network_else_its_web_channel_and_nothing_blank() {
+        let listed: Listed = serde_json::from_value(json!({
+            "id": 82,
+            "name": " Game of Thrones ",
+            "type": "Scripted",
+            "language": "",
+            "status": "Ended",
+            "premiered": "2011-04-17",
+            "ended": "2019-05-19",
+            "network": { "id": 8, "name": "HBO", "country": { "code": "us" } },
+            "webChannel": { "id": 329, "name": "Max", "country": null },
+            "externals": { "tvrage": 24493, "thetvdb": 121361, "imdb": "tt0944947" },
+            "weight": 99.6,
+            "updated": 1_704_794_122,
+            "summary": "<p>Not kept.</p>"
+        }))
+        .unwrap();
+        let show = listed.indexed();
+        assert_eq!(show.name, "Game of Thrones");
+        assert_eq!(show.language, None, "blank");
+        assert_eq!(
+            (show.network.as_deref(), show.country.as_deref(), show.web),
+            (Some("HBO"), Some("US"), false)
+        );
+        assert_eq!(
+            (show.tvdb_id, show.tvrage_id),
+            (Some(121_361), Some(24_493))
+        );
+        assert_eq!(show.weight, Some(100));
+        assert_eq!(show.updated, Some(1_704_794_122));
+
+        // No network: the web channel, of no country.
+        let streamed: Listed = serde_json::from_value(json!({
+            "id": 83, "name": "Streamed", "network": null,
+            "webChannel": { "name": "Lanternlight+", "country": null },
+            "externals": { "thetvdb": 0 }, "weight": null
+        }))
+        .unwrap();
+        let show = streamed.indexed();
+        assert_eq!(
+            (show.network.as_deref(), show.country, show.web),
+            (Some("Lanternlight+"), None, true)
+        );
+        assert_eq!((show.tvdb_id, show.weight), (None, None));
     }
 }

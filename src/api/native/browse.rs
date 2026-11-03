@@ -794,9 +794,12 @@ async fn company(
     if asked.is_empty() || asked.len() > ENTITY_ID {
         return Err(AppError::NotFound);
     }
-    let company = repo::company::get(&state.db, asked)
+    let mut company = repo::company::get(&state.db, asked)
         .await?
         .ok_or(AppError::NotFound)?;
+    // Its logo as the media store keeps it, where it does: a work's
+    // companies are read so already (`media.localize`).
+    company.logo = company.logo.map(|logo| state.media.localized(&logo));
     let adult = state.adult_for(identity.client_id(), identity.peer_id(), None);
     let mut roles: BTreeMap<String, i64> = BTreeMap::new();
     for credited in repo::company::works_of(&state.db, &company.id, adult).await? {

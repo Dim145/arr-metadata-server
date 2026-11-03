@@ -7,6 +7,153 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Added
+
+- The AniList relay can answer the anime this server holds itself
+  (`anilist.relayMode = local-first`, on *Opening & APIs*): a query about
+  entries held here — `Media` by AniList's or MyAnimeList's id, a work or one
+  of its seasons or cours as the anime identifier list places it, a `Page` of
+  such entries named by their ids, filtered and sorted, their schedules,
+  AniList's genres — is read as GraphQL reads it, variables, fragments,
+  aliases and directives included, and answered in AniList's shape from the
+  catalogue, its corrections, its characters and what AniList and MyAnimeList
+  last said of the entry, without AniList. Works and relations for adults
+  follow each key's adult policy; a query past what a client sends — longer,
+  deeper or wider — goes to AniList whole. Searches, pages of AniList's
+  catalogue and anything only AniList can say are still AniList's; a query
+  about entries held here that asks for what AniList's schema does not have is
+  refused here, in AniList's own words. `relay` stays the default; see
+  docs/relays.md.
+- A work entered by hand is known to AniList's clients by the number every
+  other dialect hands it; with `wikidata.enabled`, a work the catalogue ties to
+  no AniList id is known by the one Wikidata ties to it.
+- Characters are things of their own (migration 0049): TheTVDB's parts and
+  AniList's characters — one character once, whoever lists it — each with its
+  ids, its picture, what it is to the work, the person of the cast who plays
+  it and, for an anime, who voices it in every dub AniList knows of. A refresh
+  a source does not answer keeps what that source gave each character; one
+  character kept as two rows is made one, and those no work lists any more are
+  forgotten within the hour, with their pictures. Works held gain TheTVDB's
+  from the answers kept (`refresh.replay`), and AniList's at their next
+  refresh.
+- Collections are kept: their name and synopsis in every language TMDB has
+  them in, their pictures, their films — asked again with one of their films,
+  at a refresh or a sync, once a week at the most, and a day after TMDB said
+  it has no such collection — and Radarr, the collection pages and the NFO
+  export read the one kept. Companies' logos, collections' pictures,
+  characters' pictures and their voices' portraits are kept by the media
+  store, as a work's pictures and the cast's photographs are, and the works
+  whose media failed include those whose pictures of these did.
+- With `tmdb.relayMode = local-first`, a collection the catalogue keeps one of
+  the films of is answered here in TMDB's shape — in the language asked, with
+  its pictures and its translations — and with `tvdb.relayMode = local-first`,
+  TheTVDB's `characters/{id}` and the people of a held work's records are the
+  catalogue's characters, a character asked alone written as TheTVDB writes
+  one: the series or the film it is of as its name, picture and year, its
+  translations, aliases and tags as lists.
+- TVmaze's index of every series it lists can be kept (`tvmaze.index`, under
+  *Settings › Further sources*; migration 0050): read page by page the first
+  time, some four hundred pages at TVmaze's pace, then weekly for the series
+  TVmaze changed since, by the task *TVmaze's index* (`import.tvmaze`), which
+  can be stopped and goes on from where it stopped. Of each series it keeps
+  the name, kind, language, status, days, network or web channel, country,
+  TheTVDB, IMDb and TVRage ids, and weight. A series search that finds nothing
+  while a source that could have found it did not answer lists the series the
+  index finds by that name, under their TheTVDB ids, where it was a `502`, and
+  so do Sonarr's `tvdb:`, `imdb:` and `tmdb:` lookups by the ids it files.
+  Nothing it lists is kept as a work. A series TVmaze lists that cannot be read
+  is passed over rather than forgotten, and a reading that ends far below the
+  highest id kept forgets none. TVmaze is credited on every page while the
+  index is on.
+- A work TMDB gives no popularity — one entered by hand, or every work of a
+  catalogue TMDB does not serve — is given one worked out here, from TVmaze's
+  weight of a series and how many votes IMDb's daily list sees it gather a
+  day, placed on TMDB's scale among the works held: the catalogue's lists, the
+  search and the similar works rank by it where TMDB's is missing, and it is
+  never written in place of TMDB's, nor as AniList's. It is worked out again
+  after each reading of IMDb's ratings or TVmaze's index, and daily; IMDb's
+  votes of the works held are kept eight days for it.
+- Wikidata's links between the sites' ids can be kept (`wikidata.enabled`,
+  under *Settings › Further sources*; migration 0051): read weekly by eight
+  queries to Wikidata's query service (`AMS_WIKIDATA_ENDPOINT`), one after the
+  other, by the task *Wikidata's links between ids* (`import.wikidata`) — a
+  million links, some thirty-six megabytes in SQLite and a hundred in
+  PostgreSQL — the links read before kept until a reading completes. An id a
+  client asks by then leads to the work held here under another of its ids —
+  TMDB's `/3/find`, TheTVDB's `search/remoteid` with `local-first`, Sonarr's
+  and Radarr's `imdb:` and `tmdb:` terms, AniList's entries — and, where TMDB
+  does not answer, has no key or knows no work by an IMDb id, to the ids TMDB
+  and TheTVDB are asked by. The links only find ids, and never change the one
+  a client holds a work by: a series TMDB alone names keeps its number and its
+  numbering, whatever TheTVDB id the links know for it.
+- A series TheTVDB deletes, merges into another or no longer knows keeps the
+  numbering Sonarr matched its files by, frozen as its aired numbering
+  (`tvdb-last`, *TheTVDB (as last given)*; migration 0052); the episodes that
+  air afterwards are added after it — from TMDB's own numbering, else from
+  TVmaze, or, for a series merged into another, from TheTVDB under the id it
+  kept, which the work takes while answering to its own. TheTVDB answering
+  `404` at two refreshes in a row, twenty hours apart at the least, sets it
+  off, and so does the daily task *TheTVDB's deleted series* (`tvdb.deleted`),
+  which reads TheTVDB's feed of updates while TheTVDB is configured and
+  `numbering.fallbackAfter` is above `0` — as TheTVDB writes it: the kind of
+  record a series was merged into is `mergeToType` there, where its swagger
+  says `mergeToEntityType`, and a series merged into a film is read as
+  deleted. Sonarr v5 is sent `metadataSource` `tvdb` meanwhile; the audit
+  trail and the notifications say it as they say TMDB's numbering in
+  TheTVDB's place, and **Back to TheTVDB** gives the series back by hand.
+- A work's page lists its characters — each with what it is to the work, who
+  plays it and who voices it in the dub chosen — and each has a page of its
+  own, `/characters/{id}` (`GET /api/v1/characters/{id}`, open to visitors
+  where the catalogue is), with every work of the catalogue it is in. The task
+  page, the Sources page and the settings know TVmaze's index, Wikidata's
+  links and TheTVDB's deleted series; the numbering banner says why a series
+  TheTVDB no longer knows is served as it was, and what giving it back did;
+  the AniList relay's mode is set beside TMDB's and TheTVDB's. A link to a
+  company's, a keyword's, a character's or a kept collection's page carries a
+  preview.
+
+### Changed
+
+- What the TMDB relay writes itself — a work's documents with
+  `tmdb.relayMode = local-first`, the catalogue's works in a search, the works
+  changed here on `/3/movie/changes` and `/3/tv/changes` — lists a work for
+  adults as the caller's key or address rule says (`adult.clientPolicy`), as
+  the TheTVDB relay does, where it followed the server's setting alone. The
+  AniList relay's own answers do the same.
+- The records TheTVDB's relay lays on its `updates` feed for the works changed
+  here carry the fields TheTVDB's own records of an update carry, as its feed
+  writes them: no `mergeToId` nor `mergeToEntityType`, which its swagger
+  describes and its feed leaves out of an update.
+- A `/3/find` that TMDB answers with no work at all is answered with the work
+  held here under the id asked — or, with `wikidata.enabled`, under another id
+  of its Wikidata item — in `relay` too, as `local-first` answers it: TMDB does
+  not know every id a work carries.
+- AniList is asked, with an entry, for its characters and their voices, every
+  studio with its id and whether it is a main one, its tags' ids and its count
+  of members, where it was asked for the main studios' names alone: what the
+  relay's own answers need. A query AniList refuses for the characters is sent
+  again without them, and so is every later one.
+- The catalogue's two indexes on TMDB's popularity, which no list read any
+  more, are replaced by two on whichever popularity a work has, TMDB's or the
+  one worked out here (migration 0050).
+- No `item.renumbered` is told while an order is frozen as a series' aired
+  numbering — by a person, or as TheTVDB last gave a series it no longer
+  knows: that order is what the clients are sent, and the series' own episodes
+  moving moves nothing they are sent.
+- The archives and `transfer` carry TVmaze's index and Wikidata's links, as
+  they carry IMDb's lists, so that a database restored or moved has them at
+  once: from a PostgreSQL, a million rows more to copy, and some thirty-six
+  megabytes of the archive's database.
+
+### Fixed
+
+- A series TheTVDB answers `404` for — a duplicate it deleted, most often —
+  was renumbered by TMDB at its next refresh without a word: TMDB's episodes
+  took the place of TheTVDB's, and Sonarr matched its files anew. A `404` of
+  TheTVDB's for a series held here is read as TheTVDB not answering: what
+  it gave stays, its numbering with it, the work keeps its TheTVDB id whatever
+  TMDB says, and it is refreshed in part, tried again sooner.
+
 ## [0.13.0] — 2026-11-02
 
 ### Added

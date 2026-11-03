@@ -1,0 +1,96 @@
+query ($id: Int) {
+  jellyfin: Media(id: $id, type: ANIME) {
+    id
+    title { romaji english native userPreferred }
+    startDate { year month day }
+    endDate { year month day }
+    coverImage { medium large extraLarge }
+    bannerImage
+    format
+    type
+    status
+    episodes
+    chapters
+    volumes
+    season
+    seasonYear
+    description
+    averageScore
+    meanScore
+    genres
+    synonyms
+    duration
+    tags { id name rank category isMediaSpoiler }
+    nextAiringEpisode { airingAt timeUntilAiring episode }
+    studios { edges { node { id name isAnimationStudio } isMain } }
+    characters(sort: [ROLE, FAVOURITES_DESC]) {
+      edges {
+        node { id name { first last full } image { medium large } }
+        role
+        voiceActors {
+          id
+          name { first last full native }
+          image { medium large }
+          language: languageV2
+        }
+      }
+    }
+  }
+  yamtrack: Media(id: $id, type: ANIME) {
+    id
+    idMal
+    siteUrl
+    title { romaji english native }
+    coverImage { large }
+    description
+    format
+    status
+    startDate { year month day }
+    endDate { year month day }
+    season
+    seasonYear
+    episodes
+    duration
+    chapters
+    source
+    genres
+    averageScore
+    stats { scoreDistribution { score amount } }
+    studios(isMain: true) { nodes { name } }
+    nextAiringEpisode { episode airingAt }
+    relations { edges { relationType node { id type } } }
+    recommendations { nodes { mediaRecommendation { id } } }
+  }
+  taiga: Media(id: $id) { ...MediaFragment }
+  kometa: Media(id: $id) { id title { romaji english } }
+  kometaRelations: Media(id: $id) {
+    id
+    relations {
+      edges { node { id type } relationType }
+      nodes { id type }
+    }
+  }
+}
+
+fragment MediaFragment on Media {
+  id
+  title { romaji(stylised: true) english(stylised: true) native(stylised: true) }
+  format
+  status
+  description
+  startDate { year month day }
+  endDate { year month day }
+  episodes
+  duration
+  countryOfOrigin
+  trailer { id site }
+  updatedAt
+  coverImage { large }
+  genres
+  synonyms
+  averageScore
+  popularity
+  tags { name rank }
+  studios { nodes { name } }
+  nextAiringEpisode { airingAt episode }
+}

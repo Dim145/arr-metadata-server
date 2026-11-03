@@ -559,13 +559,12 @@ mod kept {
         }
 
         /// The setting that says whether its relay answers the works held
-        /// here itself ([`local_first`]): TMDB's and TheTVDB's; AniList's
-        /// relay always asks AniList.
+        /// here itself ([`local_first`]).
         pub const fn mode_setting(self) -> Option<&'static str> {
             match self {
                 Self::Tmdb => Some("tmdb.relayMode"),
                 Self::Tvdb => Some("tvdb.relayMode"),
-                Self::Anilist => None,
+                Self::Anilist => Some("anilist.relayMode"),
             }
         }
     }

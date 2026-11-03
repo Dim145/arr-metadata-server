@@ -6,9 +6,10 @@
 //! about on every load.
 //!
 //! The page is the same for every route but one thing: a link to a work, to a
-//! list, or to a genre's, a network's, a year's or a decade's page carries,
-//! in its head, what a link preview shows of it — a title, a line, a poster —
-//! for the readers that never run the app, and only while a reader with no
+//! list, to a collection, to a character, or to a genre's, a network's, a
+//! company's, a keyword's, a year's or a decade's page carries, in its head,
+//! what a link preview shows of it — a title, a line, a picture — for the
+//! readers that never run the app, and only while a reader with no
 //! credential would be let in at all. A work's page carries what a search
 //! engine reads of it too, as schema.org describes a film or a series — only
 //! where the site is public, the one case a search engine is meant to read it.
@@ -240,9 +241,9 @@ fn open_to_readers(state: &AppState) -> bool {
     }
 }
 
-/// The preview a path deserves: a work's, a list's, or none. The shape of
-/// the id or slug is checked before anything is looked up, so a stranger
-/// walking random addresses is answered from the page alone.
+/// The preview a path deserves: a work's, a list's, a page's, or none. The
+/// shape of the id or slug is checked before anything is looked up, so a
+/// stranger walking random addresses is answered from the page alone.
 async fn preview(state: &AppState, path: &str) -> Option<Preview> {
     if !open_to_readers(state) {
         return None;
@@ -256,6 +257,25 @@ async fn preview(state: &AppState, path: &str) -> Option<Preview> {
         {
             let key = urlencoding::decode(key).ok()?;
             page_preview(state, page, &key).await
+        }
+        // A company's, a keyword's and a character's pages, by this
+        // server's id for them.
+        (page @ ("company" | "keyword"), id)
+            if uuid::Uuid::parse_str(id).is_ok() && parts.next().is_none() =>
+        {
+            entity_preview(state, page, id).await
+        }
+        ("characters", id) if uuid::Uuid::parse_str(id).is_ok() && parts.next().is_none() => {
+            character_preview(state, id).await
+        }
+        // A collection's, by TMDB's id for it.
+        ("collections", id)
+            if !id.is_empty()
+                && id.len() <= 18
+                && id.bytes().all(|b| b.is_ascii_digit())
+                && parts.next().is_none() =>
+        {
+            collection_preview(state, id.parse().ok()?).await
         }
         _ => None,
     }
@@ -409,14 +429,48 @@ async fn page_preview(state: &AppState, page: &str, key: &str) -> Option<Preview
             (Scope::Decade, first.to_string(), title, filters)
         }
     };
-    facet_preview(state, scope, &slug, title, filters, &language, adult).await
+    facet_preview(
+        state,
+        Some((scope, &slug)),
+        title,
+        filters,
+        &language,
+        adult,
+    )
+    .await
 }
 
-/// What [`page_preview`] reads once it knows what the page is of.
+/// The preview of a company's or a keyword's page, by this server's id for
+/// it: its name, how many works it holds, and the poster of the one rated
+/// highest. Credited on nothing a reader with no credential may see, it is
+/// nobody's page, as the page itself answers.
+async fn entity_preview(state: &AppState, page: &str, id: &str) -> Option<Preview> {
+    let language = repo::genre::language_of(&state.language(None, None));
+    let adult = state.adult_for(None, None, None);
+    let (title, filters) = if page == "company" {
+        let company = repo::company::get(&state.db, id).await.ok().flatten()?;
+        let filters = repo::item::Query {
+            company: Some(company.id),
+            ..Default::default()
+        };
+        (company.name, filters)
+    } else {
+        let keyword = repo::keyword::get(&state.db, id).await.ok().flatten()?;
+        let filters = repo::item::Query {
+            keyword_id: Some(keyword.id),
+            ..Default::default()
+        };
+        (keyword.name, filters)
+    };
+    facet_preview(state, None, title, filters, &language, adult).await
+}
+
+/// What [`page_preview`] and [`entity_preview`] read once they know what the
+/// page is of: the programmer's note on it where it has one — a company and
+/// a keyword have none, and are nobody's page with no work in it.
 async fn facet_preview(
     state: &AppState,
-    scope: Scope,
-    slug: &str,
+    noted: Option<(Scope, &str)>,
     title: String,
     filters: repo::item::Query,
     language: &str,
@@ -430,6 +484,9 @@ async fn facet_preview(
         ..filters
     };
     let (found, count) = repo::item::search_counted(&state.db, &filters).await.ok()?;
+    if noted.is_none() && count == 0 {
+        return None;
+    }
     let image = match found.first() {
         Some(best) => service::load(state, &best.id)
             .await
@@ -438,10 +495,13 @@ async fn facet_preview(
             .and_then(|work| poster_of(state, &work)),
         None => None,
     };
-    let note = repo::editorial::read(&state.db, scope, slug, language)
-        .await
-        .ok()
-        .flatten();
+    let note = match noted {
+        Some((scope, slug)) => repo::editorial::read(&state.db, scope, slug, language)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
     let description = note
         .map(|note| repo::editorial::plain(&note.body))
         .and_then(|text| line(&text))
@@ -449,6 +509,137 @@ async fn facet_preview(
     Some(Preview {
         title,
         description,
+        image,
+        kind: "website",
+        structured: None,
+    })
+}
+
+/// The most works a character's preview names.
+const NAMED_WORKS: usize = 3;
+
+/// The preview of a character's page: its name, the works it is in — the
+/// first few by their titles — and its picture, else the poster of the
+/// newest of them. In nothing a reader with no credential may see, it is
+/// nobody's page, as the page itself answers.
+async fn character_preview(state: &AppState, id: &str) -> Option<Preview> {
+    let character = repo::character::get(&state.db, id).await.ok().flatten()?;
+    let adult = state.adult_for(None, None, None);
+    let appearances = repo::character::works_of(&state.db, &character.id, adult)
+        .await
+        .ok()?;
+    let ids: Vec<String> = appearances.into_iter().map(|a| a.work_id).collect();
+    let mut works = repo::item::by_ids(&state.db, &ids).await.ok()?;
+    if works.is_empty() {
+        return None;
+    }
+    service::apply_overrides(state, &mut works).await.ok()?;
+    crate::api::native::characters::newest_first(&mut works);
+    let language = repo::genre::language_of(&state.language(None, None));
+    let titles: Vec<&str> = works
+        .iter()
+        .take(NAMED_WORKS)
+        .map(|work| work.title.as_str())
+        .collect();
+    let description = Some(character_in(&titles, works.len(), &language));
+    // The character's own picture, as an address an unfurler can follow:
+    // the copy kept, under the public URL, or the source's.
+    let image = match character
+        .image
+        .as_deref()
+        .and_then(|url| state.media.for_elsewhere(&state.media.localized(url)))
+        .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+    {
+        Some(image) => Some(image),
+        None => match service::load(state, &works[0].id).await.ok().flatten() {
+            Some(work) => poster_of(state, &work),
+            None => None,
+        },
+    };
+    Some(Preview {
+        title: character.name,
+        description,
+        image,
+        kind: "website",
+        structured: None,
+    })
+}
+
+/// What a character is in, said in the catalogue's language: the first few
+/// titles, and how many more.
+fn character_in(titles: &[&str], all: usize, language: &str) -> String {
+    let more = all.saturating_sub(titles.len());
+    let french = language == "fr";
+    let quoted = |title: &str| {
+        if french {
+            format!("« {title} »")
+        } else {
+            format!("“{title}”")
+        }
+    };
+    let named = match titles {
+        [] => String::new(),
+        [one] => quoted(one),
+        [first @ .., last] => {
+            let first = first
+                .iter()
+                .map(|title| quoted(title))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let last = quoted(last);
+            if more > 0 {
+                format!("{first}, {last}")
+            } else if french {
+                format!("{first} et {last}")
+            } else {
+                format!("{first} and {last}")
+            }
+        }
+    };
+    match (french, more) {
+        (true, 0) => format!("Un personnage de {named}."),
+        (true, 1) => format!("Un personnage de {named} et d’une autre œuvre."),
+        (true, n) => format!("Un personnage de {named} et de {n} autres œuvres."),
+        (false, 0) => format!("A character in {named}."),
+        (false, 1) => format!("A character in {named} and one more work."),
+        (false, n) => format!("A character in {named} and {n} more works."),
+    }
+}
+
+/// The preview of a collection's page, by TMDB's id for it, as the
+/// catalogue keeps it — never asked of TMDB on a crawler's account: its
+/// name and synopsis in the catalogue's language, and its poster. One the
+/// catalogue holds no film of is nobody's page, as the page itself answers.
+async fn collection_preview(state: &AppState, tmdb_id: i64) -> Option<Preview> {
+    let collection = repo::collection::by_tmdb(&state.db, tmdb_id)
+        .await
+        .ok()
+        .flatten()?;
+    let filters = repo::item::Query {
+        kind: Some(MediaKind::Movie),
+        collection: Some(tmdb_id),
+        include_adult: state.adult_for(None, None, None),
+        limit: 1,
+        offset: 0,
+        ..Default::default()
+    };
+    let (_, count) = repo::item::search_counted(&state.db, &filters).await.ok()?;
+    if count == 0 {
+        return None;
+    }
+    let language = crate::service::collection::language_of(&state.language(None, None));
+    let (name, overview) = collection.texts_in(&language);
+    let image = collection
+        .poster
+        .as_deref()
+        .and_then(|url| state.media.for_elsewhere(&state.media.localized(url)))
+        .filter(|url| url.starts_with("https://") || url.starts_with("http://"));
+    let short = repo::genre::language_of(&state.language(None, None));
+    Some(Preview {
+        title: name.to_string(),
+        description: overview
+            .and_then(line)
+            .or_else(|| Some(counted(count, &short))),
         image,
         kind: "website",
         structured: None,
@@ -914,6 +1105,141 @@ mod tests {
         assert!(page_preview(&state, "year", "nineteen").await.is_none());
         assert!(page_preview(&state, "network", "nobody").await.is_none());
         assert!(page_preview(&state, "genre", "isekai").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_company_s_a_keyword_s_a_character_s_and_a_collection_s_pages_are_previewed() {
+        use crate::domain::{
+            Company, CompanyCredit, CompanyKind, CompanyRole, Keyword,
+            person::{Character, CharacterCredit, CharacterRole},
+        };
+
+        let state = crate::api::native::testing::server().await;
+        let mut work = MediaItem::empty(MediaKind::Movie);
+        work.title = "Previewed Film".into();
+        work.slug = crate::domain::make_slug(&work.title, None);
+        work.collection_tmdb_id = Some(88_001);
+        work.companies = vec![CompanyCredit {
+            company: Company {
+                id: String::new(),
+                kind: CompanyKind::Company,
+                name: "Preview Pictures".into(),
+                tmdb_id: Some(88_101),
+                tvdb_id: None,
+                logo: None,
+                country: None,
+            },
+            role: CompanyRole::Production,
+            sort_order: 0,
+            source: Some("tmdb".into()),
+        }];
+        work.keyword_entities = vec![Keyword {
+            id: String::new(),
+            tmdb_id: Some(88_201),
+            name: "preview lighthouse".into(),
+        }];
+        work.characters = vec![CharacterCredit {
+            character: Character {
+                id: String::new(),
+                name: "Preview Lead".into(),
+                native_name: None,
+                image: Some("https://s4.anilist.co/preview-lead.png".into()),
+                tvdb_id: None,
+                anilist_id: Some(88_301),
+                mal_id: None,
+            },
+            role: Some(CharacterRole::Main),
+            sort_order: 0,
+            credit_id: None,
+            voices: Vec::new(),
+            source: Some("anilist".into()),
+        }];
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+        crate::service::listing::relist_stale(&state.db, false, 100)
+            .await
+            .unwrap();
+
+        let company = repo::company::by_tmdb(&state.db, CompanyKind::Company, 88_101)
+            .await
+            .unwrap()
+            .expect("kept");
+        let preview = entity_preview(&state, "company", &company.id)
+            .await
+            .expect("previewed");
+        assert_eq!(preview.title, "Preview Pictures");
+        assert_eq!(
+            preview.description.as_deref(),
+            Some("One work in the catalogue.")
+        );
+
+        let mut held = repo::item::get(&state.db, &work.id)
+            .await
+            .unwrap()
+            .expect("the film");
+        repo::item::load_children(&state.db, &mut held)
+            .await
+            .unwrap();
+        let keyword = &held.keyword_entities[0];
+        let preview = entity_preview(&state, "keyword", &keyword.id)
+            .await
+            .expect("previewed");
+        assert_eq!(preview.title, "preview lighthouse");
+
+        let preview = character_preview(&state, &held.characters[0].character.id)
+            .await
+            .expect("previewed");
+        assert_eq!(preview.title, "Preview Lead");
+        assert_eq!(
+            preview.description.as_deref(),
+            Some("A character in “Previewed Film”.")
+        );
+        assert_eq!(
+            preview.image.as_deref(),
+            Some("https://s4.anilist.co/preview-lead.png")
+        );
+
+        // A collection the catalogue never kept is never asked of TMDB here.
+        assert!(collection_preview(&state, 88_001).await.is_none());
+        // Nobody by these ids.
+        assert!(
+            entity_preview(&state, "company", &crate::db::new_id())
+                .await
+                .is_none()
+        );
+        assert!(
+            character_preview(&state, &crate::db::new_id())
+                .await
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn what_a_character_is_in_is_said_in_the_catalogue_s_language() {
+        assert_eq!(character_in(&["One"], 1, "en"), "A character in “One”.");
+        assert_eq!(
+            character_in(&["One", "Two"], 2, "en"),
+            "A character in “One” and “Two”."
+        );
+        assert_eq!(
+            character_in(&["One", "Two", "Three"], 5, "en"),
+            "A character in “One”, “Two”, “Three” and 2 more works."
+        );
+        assert_eq!(
+            character_in(&["Un", "Deux"], 3, "fr"),
+            "Un personnage de « Un », « Deux » et d’une autre œuvre."
+        );
+        assert_eq!(
+            character_in(&["Un", "Deux"], 2, "fr"),
+            "Un personnage de « Un » et « Deux »."
+        );
     }
 
     #[test]

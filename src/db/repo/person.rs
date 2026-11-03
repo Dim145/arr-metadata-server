@@ -1628,6 +1628,8 @@ pub async fn merge(db: &Db, from: &str, into: &str) -> Result<Result<Vec<String>
         .execute(&mut *tx)
         .await
         .context("failed to file a merged person's credits again")?;
+    // The parts they played with them.
+    crate::db::repo::character::played_by_merged(db, &mut tx, from, into).await?;
 
     // Its names, as names the other goes by.
     let mut names: Vec<String> = vec![merged.name.clone()];
@@ -1823,6 +1825,8 @@ async fn not_theirs(
     Ok(credits.iter().find(|id| !theirs.contains(*id)).cloned())
 }
 
+/// File these credits under `to`, and the parts each played on its work with
+/// them: a character is played by whom its credit is filed under.
 async fn move_credits(
     db: &Db,
     tx: &mut Transaction<'_, Any>,
@@ -1830,6 +1834,26 @@ async fn move_credits(
     credits: &[String],
 ) -> Result<()> {
     for chunk in credits.chunks(CHUNK) {
+        let mut args = AnyArguments::default();
+        for id in chunk {
+            bind(&mut args, id.clone())?;
+        }
+        let sql = format!(
+            "SELECT media_id, person_id FROM media_credit
+              WHERE id IN ({}) AND person_id IS NOT NULL AND credit_type IN ('actor', 'guest')",
+            holes(chunk.len())
+        );
+        let mut moved: Vec<(String, String, String)> = Vec::new();
+        for row in sqlx::query_with(db.sql(&sql), args)
+            .fetch_all(&mut **tx)
+            .await?
+        {
+            let (media_id, from) = (row.text("media_id")?, row.text("person_id")?);
+            if from != to && !moved.iter().any(|(m, f, _)| *m == media_id && *f == from) {
+                moved.push((media_id, from, to.to_string()));
+            }
+        }
+
         let mut args = AnyArguments::default();
         bind(&mut args, to.to_string())?;
         for id in chunk {
@@ -1843,6 +1867,7 @@ async fn move_credits(
             .execute(&mut **tx)
             .await
             .context("failed to file credits under a person")?;
+        crate::db::repo::character::played_by_moved(db, tx, &moved).await?;
     }
     Ok(())
 }

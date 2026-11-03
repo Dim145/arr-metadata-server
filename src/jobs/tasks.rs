@@ -37,6 +37,9 @@ pub const IMPORT_ANIME: &str = repo::job::kinds::IMPORT_ANIME;
 pub const IMPORT_IMDB: &str = repo::job::kinds::IMPORT_IMDB;
 pub const IMDB_AKAS: &str = repo::job::kinds::IMDB_AKAS;
 pub const IMDB_EPISODES: &str = repo::job::kinds::IMDB_EPISODES;
+pub const IMPORT_TVMAZE: &str = repo::job::kinds::IMPORT_TVMAZE;
+pub const IMPORT_WIKIDATA: &str = repo::job::kinds::IMPORT_WIKIDATA;
+pub const TVDB_DELETED: &str = repo::job::kinds::TVDB_DELETED;
 pub const EXPORT_NFO: &str = repo::job::kinds::EXPORT_NFO;
 pub const MEDIA_STORE: &str = repo::job::kinds::MEDIA_STORE;
 pub const MEDIA_SWEEP: &str = repo::job::kinds::MEDIA_SWEEP;
@@ -68,6 +71,12 @@ pub enum TaskId {
     ImdbAkas,
     #[serde(rename = "imdb.episodes")]
     ImdbEpisodes,
+    #[serde(rename = "import.tvmaze")]
+    ImportTvmaze,
+    #[serde(rename = "import.wikidata")]
+    ImportWikidata,
+    #[serde(rename = "tvdb.deleted")]
+    TvdbDeleted,
     #[serde(rename = "import.batch")]
     ImportBatch,
     #[serde(rename = "import.rules")]
@@ -98,7 +107,7 @@ pub enum TaskId {
 
 impl TaskId {
     /// Every task, in the order the page shows them.
-    pub const ALL: [TaskId; 20] = [
+    pub const ALL: [TaskId; 23] = [
         Self::RefreshSweep,
         Self::RefreshAll,
         Self::RefreshReplay,
@@ -106,6 +115,9 @@ impl TaskId {
         Self::ImportImdb,
         Self::ImdbAkas,
         Self::ImdbEpisodes,
+        Self::ImportTvmaze,
+        Self::ImportWikidata,
+        Self::TvdbDeleted,
         Self::ImportBatch,
         Self::ImportRules,
         Self::ExportNfo,
@@ -131,6 +143,9 @@ impl TaskId {
             Self::ImportImdb => IMPORT_IMDB,
             Self::ImdbAkas => IMDB_AKAS,
             Self::ImdbEpisodes => IMDB_EPISODES,
+            Self::ImportTvmaze => IMPORT_TVMAZE,
+            Self::ImportWikidata => IMPORT_WIKIDATA,
+            Self::TvdbDeleted => TVDB_DELETED,
             Self::ImportBatch => IMPORT_BATCH,
             Self::ImportRules => IMPORT_RULES,
             Self::ExportNfo => EXPORT_NFO,
@@ -309,7 +324,8 @@ fn lock_busy(id: &str) -> bool {
     match id {
         REFRESH_SWEEP | REFRESH_ALL => crate::jobs::refresh::is_busy(),
         REFRESH_REPLAY => is_replaying(),
-        IMPORT_ANIME | IMPORT_IMDB | IMDB_AKAS | IMDB_EPISODES => crate::jobs::datasets::is_busy(),
+        IMPORT_ANIME | IMPORT_IMDB | IMDB_AKAS | IMDB_EPISODES | IMPORT_TVMAZE
+        | IMPORT_WIKIDATA | TVDB_DELETED => crate::jobs::datasets::is_busy(),
         IMPORT_BATCH => crate::jobs::import::is_busy(),
         IMPORT_RULES => crate::jobs::rules::is_busy(),
         EXPORT_NFO => crate::api::native::export::is_exporting(),
@@ -332,7 +348,8 @@ fn lock_busy(id: &str) -> bool {
 pub fn hold_of(id: &str) -> Option<&'static str> {
     match id {
         REFRESH_SWEEP | REFRESH_ALL | REFRESH_REPLAY => Some(crate::jobs::refresh::HOLD),
-        IMPORT_ANIME | IMPORT_IMDB | IMDB_AKAS | IMDB_EPISODES => Some(crate::jobs::datasets::HOLD),
+        IMPORT_ANIME | IMPORT_IMDB | IMDB_AKAS | IMDB_EPISODES | IMPORT_TVMAZE
+        | IMPORT_WIKIDATA | TVDB_DELETED => Some(crate::jobs::datasets::HOLD),
         IMPORT_BATCH => Some(crate::jobs::import::HOLD),
         IMPORT_RULES => Some(crate::jobs::rules::HOLD),
         MEDIA_STORE => Some(repo::job::kinds::MEDIA_STORE),
@@ -361,6 +378,7 @@ pub fn stops_partway(kind: &str) -> bool {
             | IMPORT_RULES
             | IMDB_AKAS
             | IMDB_EPISODES
+            | IMPORT_TVMAZE
     )
 }
 
@@ -426,7 +444,8 @@ async fn state_of(
                 (!on).then_some(Blocked::SourceOff),
             )
         }
-        IMPORT_IMDB | IMDB_AKAS | IMDB_EPISODES => {
+        IMPORT_IMDB | IMDB_AKAS | IMDB_EPISODES | IMPORT_TVMAZE | IMPORT_WIKIDATA
+        | TVDB_DELETED => {
             let list = crate::jobs::datasets::list_of(id).unwrap_or_default();
             let on = crate::jobs::datasets::wanted(state, list);
             (
@@ -606,7 +625,8 @@ async fn next_run(
             let clock = crate::jobs::refresh::sweep_clock(state).await?;
             schedule::next_of(read, clock, now)
         }
-        IMPORT_ANIME | IMPORT_IMDB | IMDB_AKAS | IMDB_EPISODES => {
+        IMPORT_ANIME | IMPORT_IMDB | IMDB_AKAS | IMDB_EPISODES | IMPORT_TVMAZE
+        | IMPORT_WIKIDATA | TVDB_DELETED => {
             let list = crate::jobs::datasets::list_of(id).unwrap_or_default();
             match crate::jobs::datasets::clock(state, list).await {
                 Some(clock) => schedule::next_of(read, clock, now),

@@ -539,6 +539,90 @@ pub fn movie_summary_to_item(summary: &models::MovieSummary) -> MediaItem {
     item
 }
 
+/// A collection as the catalogue keeps it, from TMDB's record of it asked in
+/// `asked_in` (ISO 639-1): its name and synopsis in that language, and in
+/// every other its translations have them in — one region's a language, as
+/// a work's — its pictures' addresses, and its films in TMDB's order, one
+/// without a title left out.
+pub fn collection(
+    tmdb_id: i64,
+    collection: &models::Collection,
+    asked_in: &str,
+) -> crate::domain::Collection {
+    let parts = collection
+        .parts
+        .iter()
+        .filter_map(|part| {
+            let title =
+                non_empty(part.title.as_deref()).or_else(|| non_empty(part.name.as_deref()))?;
+            Some((part, title))
+        })
+        .enumerate()
+        .map(|(at, (part, title))| crate::domain::CollectionPart {
+            tmdb_id: part.id,
+            title,
+            original_title: non_empty(part.original_title.as_deref())
+                .or_else(|| non_empty(part.original_name.as_deref())),
+            overview: non_empty(part.overview.as_deref()),
+            release_date: non_empty(part.release_date.as_deref()),
+            original_language: non_empty(part.original_language.as_deref()),
+            poster: non_empty(part.poster_path.as_deref()).map(|p| image_url(&p)),
+            backdrop: non_empty(part.backdrop_path.as_deref()).map(|p| image_url(&p)),
+            popularity: part.popularity,
+            vote_average: part.vote_average,
+            vote_count: part.vote_count,
+            is_adult: part.adult.unwrap_or(false),
+            sort_order: i32::try_from(at).unwrap_or(i32::MAX),
+        })
+        .collect();
+
+    crate::domain::Collection {
+        id: String::new(),
+        tmdb_id,
+        name: collection.name.trim().to_string(),
+        overview: non_empty(collection.overview.as_deref()),
+        poster: non_empty(collection.poster_path.as_deref()).map(|p| image_url(&p)),
+        backdrop: non_empty(collection.backdrop_path.as_deref()).map(|p| image_url(&p)),
+        language: non_empty(Some(asked_in)).map(|code| iso_639_1_to_3(&code)),
+        translations: collection
+            .translations
+            .as_ref()
+            .map(|t| translations(&t.translations))
+            .unwrap_or_default(),
+        parts,
+        refreshed_at: now(),
+    }
+}
+
+/// One of a collection's films as a list shows it, as TMDB's search would
+/// have it: its title, its year, its pictures.
+pub fn collection_part_to_item(part: &crate::domain::CollectionPart) -> MediaItem {
+    let summary = models::MovieSummary {
+        id: part.tmdb_id,
+        title: part.title.clone(),
+        original_title: part.original_title.clone(),
+        overview: part.overview.clone(),
+        release_date: part.release_date.clone(),
+        original_language: part.original_language.clone(),
+        vote_average: part.vote_average,
+        vote_count: part.vote_count,
+        popularity: part.popularity,
+        poster_path: None,
+        backdrop_path: None,
+        adult: Some(part.is_adult),
+    };
+    let mut item = movie_summary_to_item(&summary);
+    for (kind, url) in [
+        (CoverType::Poster, &part.poster),
+        (CoverType::Fanart, &part.backdrop),
+    ] {
+        if let Some(url) = url {
+            item.images.push(image(kind, url, None, 0));
+        }
+    }
+    item
+}
+
 #[derive(Default)]
 struct Releases {
     in_cinemas: Option<String>,
@@ -3308,5 +3392,53 @@ mod fixtures {
             ]
         );
         assert!(person_translations(&serde_json::json!({ "id": 1 })).is_empty());
+    }
+    /// A collection's films are read by their title, or by their name as
+    /// TMDB's own documentation of `/collection/{id}` writes them now; one
+    /// with neither is no film of it.
+    #[test]
+    fn a_collections_films_are_read_whether_titled_or_named() {
+        let answer: models::Collection = serde_json::from_value(serde_json::json!({
+            "id": 10,
+            "name": "Star Wars Collection",
+            "poster_path": "/saga.jpg",
+            "parts": [
+                { "id": 11, "title": "Star Wars", "original_title": "Star Wars",
+                  "release_date": "1977-05-25", "popularity": 82.559 },
+                { "id": 1891, "name": "The Empire Strikes Back",
+                  "original_name": "The Empire Strikes Back" },
+                { "id": 1, "overview": "Nothing to call it by." }
+            ],
+            "translations": { "translations": [
+                { "iso_3166_1": "FR", "iso_639_1": "fr",
+                  "data": { "title": "Star Wars - La Saga", "overview": "" } }
+            ] }
+        }))
+        .expect("a collection");
+        let kept = collection(10, &answer, "en");
+        let parts: Vec<(i64, &str, Option<&str>)> = kept
+            .parts
+            .iter()
+            .map(|p| (p.tmdb_id, p.title.as_str(), p.original_title.as_deref()))
+            .collect();
+        assert_eq!(
+            parts,
+            [
+                (11, "Star Wars", Some("Star Wars")),
+                (
+                    1891,
+                    "The Empire Strikes Back",
+                    Some("The Empire Strikes Back")
+                ),
+            ]
+        );
+        assert_eq!(kept.parts[0].year(), Some(1977));
+        assert_eq!(kept.parts[1].sort_order, 1);
+        assert_eq!(kept.language.as_deref(), Some("eng"));
+        assert_eq!(
+            kept.poster.as_deref(),
+            Some("https://image.tmdb.org/t/p/original/saga.jpg")
+        );
+        assert_eq!(kept.texts_in("fra").0, "Star Wars - La Saga");
     }
 }

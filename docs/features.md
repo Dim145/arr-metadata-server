@@ -55,11 +55,11 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   resolve here: each request is handed on and its answer handed back with the
   fields locked in this catalogue written in. A TheTVDB client signs in with
   a key issued here, and this server stands in with its own. Set to answer
-  from the catalogue first (`tmdb.relayMode`, `tvdb.relayMode`, on *Opening &
-  APIs*), the TMDB and TheTVDB relays answer the works held here themselves,
-  in their service's shape and without its key — corrections and works
-  entered by hand included — and ask the service for the rest
-  ([The relays](relays.md)).
+  from the catalogue first (`tmdb.relayMode`, `tvdb.relayMode`,
+  `anilist.relayMode`, on *Opening & APIs*), the TMDB, TheTVDB and AniList
+  relays answer the works held here themselves, in their service's shape and
+  without asking it — corrections and works entered by hand included — and ask
+  the service for the rest ([The relays](relays.md)).
 - **Curated lists.** Selections composed by hand or by a filter, shown on
   the site and served to Sonarr and Radarr as the custom lists their import
   lists read.
@@ -162,7 +162,9 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   The list is filtered by genre, years, score, status, language and network
   — and, a sheet away, by a person credited, a keyword, a running time, the
   country a work was made in, the rating the reader's country gives it and the
-  collection a film belongs to — and sorted by popularity, score, date, title,
+  collection a film belongs to — and sorted by popularity (TMDB's, or one
+  [worked out here](sources.md#the-popularity-worked-out-here) for a work TMDB
+  gives none), score, date, title,
   when a work arrived, running time, when a series last aired or how many
   episodes it holds — all of it kept in the address, so a view can be sent as
   a link — by the values each work's page shows, IMDb's latest score included
@@ -204,7 +206,10 @@ Sonarr's metadata service — and does what both did, from one catalogue.
   and kept a month. An index of everybody (`/people`) goes by letter and by job,
   the most credited first, and finds a name as the search does. TheTVDB's
   characters join TMDB's cast, matched by name, and each episode's guests, director
-  and writers are credited on it rather than on the series. Whoever maintains the
+  and writers are credited on it rather than on the series. The characters
+  themselves, as TheTVDB and AniList list them, are records of their own — each
+  once, with who plays it and, for an anime, who voices it in every dub — with a
+  page of their own ([Characters](data.md#characters)). Whoever maintains the
   catalogue merges two records of one person, splits a homonym off another, gives
   a credit typed by name the person it is of, and enters somebody by hand with
   their ids ([The people](data.md#the-people), [The API](api.md#people)).

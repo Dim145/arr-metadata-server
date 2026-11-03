@@ -2,8 +2,9 @@
 
 The sources give a work more than a title and a release date: the days it came out in
 each country, the rating it carries there, the line it was sold on, every country and
-company that made it, the people who wrote it, its Wikidata item. This page says what is
-kept of it, where it is shown, and what it changes in the answers.
+company that made it, the people who wrote it, the characters in it, the collection it
+belongs to, its Wikidata item. This page says what is kept of it, where it is shown, and
+what it changes in the answers.
 [Where the data comes from](sources.md) says which
 source brings what, and in which order the sources are merged.
 
@@ -108,7 +109,24 @@ of TheTVDB's studios), sold it. A role's list comes from the first source in the
 any — TMDB's networks, TheTVDB's studios — and the other completes the same companies with its ids:
 TMDB's AMC and TheTVDB's are one network, found again by its name when only one of the two has named
 it. TMDB's **keywords** are kept the same way, each by its id. The texts above, and their locks, stay
-what they were: these double them, for pages and filters that go by an id.
+what they were: these double them, for pages and filters that go by an id. The logos are kept by the
+media store as a work's pictures are, and served from it — a logo TMDB gives as an SVG aside, which
+stays at TMDB's address (see [Keeping the media](media.md)).
+
+## Collections
+
+A film that belongs to one of TMDB's **collections** names it by TMDB's id, and the collection is kept
+once for all its films, a record of its own: its name and overview in the catalogue's language and in
+every other TMDB has them in, its poster and background, which the media store keeps as it keeps a
+work's, and its films, held here or not, each as TMDB lists it — its title, its day, its overview, its
+poster. TMDB's answer is kept with it, and the TMDB relay writes a collection over it (see [TMDB's
+clients](relays.md#tmdbs-clients)). A collection is asked of TMDB when one of its films is refreshed
+or synced and none is kept, or the one kept is a week old — never more often, nor for a refresh only
+previewed — and by whichever reader wants it first where none is kept yet; it is kept from then on.
+One TMDB says it has no record of is not asked about again for a day. Radarr (`/v1/movie/collection/{id}`) and the collection's page on the site read the one kept, in the
+reader's language where TMDB has the collection in it, and a film's `.nfo` document its `<set>`, in the
+catalogue's; where none is kept and TMDB cannot be asked, there is none to read. The films of a
+collection that are not held here keep TMDB's addresses for their posters.
 
 ## Videos and pictures
 
@@ -167,6 +185,44 @@ name, whatever its accents, its case and the order of its words (TheTVDB writes 
 first), or by the name in its own script TMDB gives — and gives that person TheTVDB's id, and a part or a
 portrait where the cast had none. One nobody else listed is added after the cast. Somebody who plays two parts is
 one credit, the parts put together. A guest of one episode is not in the series' cast.
+
+### Characters
+
+A work keeps its **characters** besides, each a record of its own: the parts TheTVDB lists for a series or a
+film — the cast's, up to `tvdb.castLimit`, never an episode's guests — and, for an anime, the twenty-five
+characters AniList lists for the work's entry, the leads first, asked with the entry. TMDB names a part only in
+its credit's text, which stays as it was: it is what ties a character to the actor who plays it, and no source of
+characters itself.
+
+Each character is kept once, whichever source lists it. Two are one when an id of one source says so, and never
+when their ids of one source differ; else when their names are the same — the words of the name in any order,
+whatever their accents and case, or the name in its own script — else when one person plays both and nobody else
+in either list. AniList, then MyAnimeList, have the last word on its name, its picture and what it is to the work:
+a lead, a supporting part or a background one; TheTVDB says only whether a part is featured, which makes it a
+lead, and a character AniList does not list keeps TheTVDB's name. A character with an id is one record whatever
+works list it, which its page gathers; one no source gives an id is the work's alone, found again by its name
+there: two works' *Narrator* are not one. Two records found to be one character — one given an id the other holds
+— are made one, their works, ids and voices together, unless they hold two ids of one source.
+
+A character is played by a person of the work's cast: the one actor credited with that part by name — each part
+of TheTVDB's *A / B*, TMDB's *(voice)* set aside — else the one actor credited who voices it in the work's own
+language. It is filed under the person rather than the credit, so it follows them when two records of a person
+are merged or a credit is split off; one whose credit a lock hides is shown on the site with nobody playing it,
+and left out of TheTVDB's documents. For an anime, who voices it in each dub AniList knows of is kept with it, a
+language at a time by its ISO 639-3 code (`jpn`, `eng`, `fra`) — some forty languages, another left out: each
+voice's name, its name in its own script, its portrait and AniList's id. A voice is not a person of the catalogue's, and the index of people does not list it.
+The characters' pictures and the voices' portraits are kept by the media store with the cast's photographs (see
+[Keeping the media](media.md)).
+
+A work takes its characters at its next refresh. The task `refresh.replay` fills TheTVDB's in from the answers
+kept, without asking anybody; an anime's AniList characters wait for its next refresh, AniList not having been
+asked for them before. A refresh a source does not answer keeps what that source gave each character — its name,
+its picture, its role, its voices — whichever source's list holds it, and so does one that asks AniList without
+the characters it refused once. The characters no work lists any more are forgotten within the hour, their
+pictures with them, but for those a merge that can still be undone names. Each character has a page of its own, `/characters/{id}` (see
+[A character](interface.md#a-character), and `GET /api/v1/characters/{id}` in
+[The API](api.md#genres-networks-years-and-notes)), and the TheTVDB and AniList relays answer with them where
+they answer from the catalogue (see [The relays](relays.md#answering-from-the-catalogue)).
 
 ### A guest is credited on the episode
 

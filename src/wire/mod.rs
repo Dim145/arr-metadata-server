@@ -6,6 +6,7 @@
 //! field mapping is stated once. Plex's is written only: it is a client, never
 //! a source.
 
+pub mod anilist;
 #[cfg(test)]
 pub mod contract;
 pub mod plex;

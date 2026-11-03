@@ -306,6 +306,9 @@ async fn works(
         return Ok(Vec::new());
     }
     let mut items = repo::item::by_ids(&state.db, &ids).await?;
+    // Ranked by the popularity the lists sort by: TMDB's, else the one
+    // worked out here.
+    service::popularity::overlay(state, &mut items).await;
     let held: HashMap<String, (Option<i32>, Option<f64>, String)> = items
         .iter()
         .map(|item| {

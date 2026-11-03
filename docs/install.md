@@ -114,8 +114,9 @@ arr-metadata-server transfer 'sqlite://data/ams.db' 'postgres://ams:secret@local
 ```
 
 The target is migrated first and must be empty, unless you pass `--force` to add
-to what is already there. An archive does the same: one made on SQLite restores on
-PostgreSQL, and the other way round (see [Backups](#backups)).
+to what is already there. Everything goes across, the lists read whole — TVmaze's
+index, Wikidata's links — included. An archive does the same: one made on SQLite
+restores on PostgreSQL, and the other way round (see [Backups](#backups)).
 
 ## Backups
 
@@ -160,7 +161,11 @@ downloads, deletes and restores them; [the command line](cli.md) does the same f
   made it, when, from which engine, why, each file's size and SHA-256 — then
   `database.sqlite`, the whole database as one SQLite file whatever its engine, then, when
   asked, `media/<key>`, each medium under the SHA-256 of its bytes. Media kept in a bucket are
-  not in it: back the bucket up as a bucket is. Nothing of the server is needed to read one:
+  not in it: back the bucket up as a bucket is. The lists read whole are in it, TVmaze's index
+  and Wikidata's links beside IMDb's, so that a database restored or moved has them at once rather
+  than at their next weekly reading: from a PostgreSQL, Wikidata's links are a million rows more to
+  copy and some thirty-six megabytes of `database.sqlite`. Nothing of the server is needed to read
+  one:
 
   ```bash
   zstd -d < ams-20261019-020000-scheduled.tar.zst | tar -x

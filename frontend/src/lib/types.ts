@@ -478,6 +478,24 @@ export type Person = Schema<'Person'>
 /** What somebody did on a work, as their page and the index put works together: acting, or one of three jobs behind the camera. */
 export type PersonJob = Schema<'PersonJob'>
 
+/** A character, kept once for every work it is in: its page is `/characters/{id}`. */
+export type Character = Schema<'Character'>
+
+/** A character on a work: what it is to the work, the credit that plays it, who voices it in each dub. */
+export type CharacterCredit = Schema<'CharacterCredit'>
+
+/** A lead, one beside them, one in the background. */
+export type CharacterRole = Schema<'CharacterRole'>
+
+/** Who voices a character in one dub. */
+export type CharacterVoice = Schema<'CharacterVoice'>
+
+/** A character's page: the part, and the works of the catalogue it is in. */
+export type CharacterPage = Schema<'CharacterPage'>
+
+/** A work a character is in, and what it is there. */
+export type CharacterAppearance = Schema<'CharacterAppearance'>
+
 /** Somebody, as the index of people lists them; for those who keep the catalogue, with their ids and the other names they go by. */
 export type PersonCard = Schema<'PersonCard'>
 

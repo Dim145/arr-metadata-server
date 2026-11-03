@@ -1,0 +1,11 @@
+{
+  byIds: Page { pageInfo { total perPage currentPage lastPage hasNextPage } media(id_in: [21519, 21, 154587]) { id } }
+  sorted: Page(perPage: 2) { pageInfo { total perPage currentPage lastPage hasNextPage } media(id_in: [21519, 21, 154587], sort: [START_DATE_DESC]) { id } }
+  secondPage: Page(page: 2, perPage: 2) { pageInfo { total perPage currentPage lastPage hasNextPage } media(id_in: [21519, 21, 154587], sort: [START_DATE_DESC]) { id } }
+  mal: Page { media(idMal_in: [32281, 21], type: ANIME) { id idMal } }
+  filtered: Page { media(id_in: [21519, 21, 154587], format: TV, status: FINISHED) { id } }
+  empty: Page { pageInfo { total perPage currentPage lastPage hasNextPage } media(id_in: [21519], format: TV) { id } }
+  schedule: Page(perPage: 3) { pageInfo { total perPage currentPage lastPage hasNextPage } airingSchedules(mediaId_in: [21, 154587], notYetAired: true) { id airingAt timeUntilAiring episode mediaId media { id } } }
+  scheduleDefault: Page(perPage: 3) { pageInfo { total lastPage hasNextPage } airingSchedules(mediaId: 154587) { id airingAt episode } }
+  GenreCollection
+}

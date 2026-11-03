@@ -377,10 +377,14 @@ impl Media {
 
     /// Rewrite a work to point at every copy kept: its pictures, its
     /// seasons', its episodes' stills, its cast's photographs, its
-    /// relations' posters and its theme.
+    /// characters' pictures and their voices' portraits, its relations'
+    /// posters, its companies' logos and its theme.
     pub fn localize(&self, item: &mut MediaItem) {
         if !self.is_on() {
             return;
+        }
+        for credited in &mut item.companies {
+            self.localize_optional(&mut credited.company.logo);
         }
         for image in &mut item.images {
             self.localize_url(&mut image.url);
@@ -395,6 +399,12 @@ impl Media {
         }
         for credit in &mut item.credits {
             self.localize_optional(&mut credit.image);
+        }
+        for played in &mut item.characters {
+            self.localize_optional(&mut played.character.image);
+            for voice in &mut played.voices {
+                self.localize_optional(&mut voice.image);
+            }
         }
         for relation in &mut item.relations {
             self.localize_optional(&mut relation.image);
@@ -498,8 +508,17 @@ impl Media {
         for credit in &mut item.credits {
             back_optional(&mut credit.image);
         }
+        for played in &mut item.characters {
+            back_optional(&mut played.character.image);
+            for voice in &mut played.voices {
+                back_optional(&mut voice.image);
+            }
+        }
         for relation in &mut item.relations {
             back_optional(&mut relation.image);
+        }
+        for credited in &mut item.companies {
+            back_optional(&mut credited.company.logo);
         }
         back_optional(&mut item.theme_music);
     }
@@ -511,6 +530,14 @@ impl Media {
             Some(entry) => self.url_for(&entry.key),
             None => url.to_string(),
         }
+    }
+
+    /// An address that stands alone — a collection's poster, a company's
+    /// logo — as a client elsewhere follows it: the copy kept here, under the
+    /// public URL, where one is and the public URL is set; the provider's
+    /// otherwise.
+    pub fn elsewhere(&self, url: &str) -> Option<String> {
+        self.for_elsewhere(&self.localized(url))
     }
 
     /// The addresses a work points at that are not kept yet, for the line.
@@ -546,9 +573,22 @@ impl Media {
                     want(url, Kind::Image);
                 }
             }
+            // The characters' pictures and their voices' portraits, as the
+            // cast's photographs are.
+            for played in &item.characters {
+                let voices = played.voices.iter().filter_map(|v| v.image.as_ref());
+                for url in played.character.image.iter().chain(voices) {
+                    want(url, Kind::Image);
+                }
+            }
         }
         for relation in &item.relations {
             if let Some(url) = &relation.image {
+                want(url, Kind::Image);
+            }
+        }
+        for credited in &item.companies {
+            if let Some(url) = &credited.company.logo {
                 want(url, Kind::Image);
             }
         }
@@ -556,6 +596,40 @@ impl Media {
             want(url, Kind::Audio);
         }
         out
+    }
+
+    /// Put pictures that stand alone — a collection's — in line to be
+    /// fetched, as the settings allow, and wake whatever fetches them.
+    /// Quiet, as [`Self::enqueue_for`] is.
+    pub async fn enqueue_pictures(&self, state: &crate::state::AppState, urls: &[&str]) {
+        if !self.is_on() || !state.flag("media.store", true) {
+            return;
+        }
+        let mut seen = HashSet::new();
+        let rows: Vec<Wanted<'_>> = urls
+            .iter()
+            .filter(|url| {
+                fetch::fetchable(url, self.guard)
+                    && self.lookup(url).is_none()
+                    && seen.insert(**url)
+            })
+            .map(|url| Wanted {
+                origin: url,
+                kind: Kind::Image,
+                wanted_by: None,
+            })
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        match crate::db::repo::asset::enqueue(&state.db, &rows).await {
+            Ok(added) if added > 0 => {
+                self.notify.notify_one();
+                self.tell(crate::coord::Message::MediaWake);
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "could not put pictures in line"),
+        }
     }
 
     /// Put a work's media in line to be fetched, as the settings allow, and
@@ -745,6 +819,129 @@ mod tests {
         media.forget("https://p/poster.jpg");
         assert!(media.lookup("https://p/poster.jpg").is_none());
         assert!(media.keyed(KEY).is_none());
+    }
+
+    /// A company's logo is kept as a work's pictures are: wanted, read from
+    /// the copy kept, and given a client elsewhere under the public URL; a
+    /// picture that stands alone — a collection's — likewise.
+    #[test]
+    fn a_company_s_logo_is_kept_and_read_as_a_picture_is() {
+        use crate::domain::{Company, CompanyCredit, CompanyRole};
+
+        let media = media(Some("https://ams.example/"));
+        let logo = |url: &str| CompanyCredit {
+            company: Company {
+                id: String::new(),
+                kind: CompanyRole::Network.kind(),
+                name: "AMC".into(),
+                tmdb_id: Some(174),
+                tvdb_id: None,
+                logo: Some(url.into()),
+                country: None,
+            },
+            role: CompanyRole::Network,
+            sort_order: 0,
+            source: Some("tmdb".into()),
+        };
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.companies = vec![logo("https://p/amc.png"), logo("https://p/svg-logo.svg")];
+        assert_eq!(
+            media.wanted_of(&item, false, false),
+            vec![("https://p/amc.png".to_string(), Kind::Image)],
+            "not an SVG, which is never kept"
+        );
+
+        media.remember("https://p/amc.png", KEY, Thumb::None, "image/jpeg");
+        assert!(media.wanted_of(&item, false, false).is_empty());
+        media.localize(&mut item);
+        assert_eq!(
+            item.companies[0].company.logo.as_deref(),
+            Some(format!("/media/{KEY}").as_str())
+        );
+        media.for_clients(&mut item);
+        assert_eq!(
+            item.companies[0].company.logo.as_deref(),
+            Some(format!("https://ams.example/media/{KEY}").as_str())
+        );
+        assert_eq!(
+            media.elsewhere("https://p/amc.png").as_deref(),
+            Some(format!("https://ams.example/media/{KEY}").as_str())
+        );
+        assert_eq!(
+            media.elsewhere("https://p/not-kept.jpg").as_deref(),
+            Some("https://p/not-kept.jpg")
+        );
+        let private = self::media(None);
+        private.remember("https://p/amc.png", KEY, Thumb::None, "image/jpeg");
+        assert_eq!(
+            private.elsewhere("https://p/amc.png").as_deref(),
+            Some("https://p/amc.png"),
+            "no public URL: the provider's"
+        );
+    }
+
+    /// A character's picture and its voices' portraits are kept as the
+    /// cast's photographs are: wanted when people's are, read from the copy
+    /// kept, given a client elsewhere under the public URL.
+    #[test]
+    fn a_character_s_picture_and_its_voices_are_kept_as_the_cast_s_are() {
+        use crate::domain::person::{Character, CharacterCredit, CharacterVoice};
+
+        let media = media(Some("https://ams.example/"));
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.characters = vec![CharacterCredit {
+            character: Character {
+                id: String::new(),
+                name: "Frieren".into(),
+                native_name: None,
+                image: Some("https://p/frieren.png".into()),
+                tvdb_id: None,
+                anilist_id: Some(176_754),
+                mal_id: None,
+            },
+            role: None,
+            sort_order: 0,
+            credit_id: None,
+            voices: vec![CharacterVoice {
+                language: "jpn".into(),
+                name: "Atsumi Tanezaki".into(),
+                native_name: None,
+                image: Some("https://p/tanezaki.jpg".into()),
+                anilist_id: Some(112_215),
+                mal_id: None,
+                sort_order: 0,
+            }],
+            source: Some("anilist".into()),
+        }];
+        assert!(
+            media.wanted_of(&item, false, false).is_empty(),
+            "people's alone"
+        );
+        assert_eq!(
+            media.wanted_of(&item, true, false),
+            vec![
+                ("https://p/frieren.png".to_string(), Kind::Image),
+                ("https://p/tanezaki.jpg".to_string(), Kind::Image),
+            ]
+        );
+
+        media.remember("https://p/frieren.png", KEY, Thumb::None, "image/jpeg");
+        media.localize(&mut item);
+        let played = &item.characters[0];
+        assert_eq!(
+            played.character.image.as_deref(),
+            Some(format!("/media/{KEY}").as_str())
+        );
+        assert_eq!(
+            played.voices[0].image.as_deref(),
+            Some("https://p/tanezaki.jpg"),
+            "not kept: as it was"
+        );
+        media.for_clients(&mut item);
+        assert_eq!(
+            item.characters[0].character.image.as_deref(),
+            Some(format!("https://ams.example/media/{KEY}").as_str())
+        );
     }
 
     /// The same bytes from two places are one file, known until the last

@@ -14,7 +14,9 @@ pub mod radarr;
 pub mod skyhook;
 pub mod tmdb;
 pub mod tvdb;
+pub mod tvdb_updates;
 pub mod tvmaze;
+pub mod wikidata;
 
 /// The most of one provider answer this server will read into memory.
 ///

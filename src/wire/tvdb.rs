@@ -45,6 +45,7 @@ use crate::{
     domain::{
         AlternativeTitle, Company, CompanyCredit, CompanyRole, CoverType, Credit, CreditType,
         Episode, Image, ImageDetails, MediaItem, MediaKind, Season, Video, lead_images,
+        person::{Character, CharacterCredit},
     },
     providers::lang::{country_name, iso_3166_2_to_3},
     service::{
@@ -739,29 +740,202 @@ impl<'a> Work<'a> {
         remote
     }
 
-    /// Its people: TheTVDB's characters, with those added here by hand; the
-    /// catalogue's credits where TheTVDB's record is not held. A person
-    /// hid is taken out where the document is answered.
+    /// Its people: the catalogue's characters, each as TheTVDB's record lists
+    /// it where it keeps one of that id ([`Self::part`]), then TheTVDB's
+    /// other people — its crew, its guests, the parts the catalogue keeps no
+    /// character of — then those added here by hand; TheTVDB's own where the
+    /// catalogue keeps no character of the work, and its credits where it
+    /// holds neither. A person hid is taken out where the document is
+    /// answered.
     fn characters(&self) -> Vec<Value> {
-        match self.recorded("characters").and_then(Value::as_array) {
-            Some(theirs) => {
-                let mut people = theirs.clone();
-                people.extend(
-                    self.item
-                        .credits
-                        .iter()
-                        .filter(|credit| credit.is_manual)
-                        .map(|credit| self.character(credit)),
-                );
-                people
-            }
-            None => self
-                .item
+        let manual = || {
+            self.item
                 .credits
                 .iter()
+                .filter(|credit| credit.is_manual)
                 .map(|credit| self.character(credit))
-                .collect(),
+        };
+        let theirs = self.recorded("characters").and_then(Value::as_array);
+        if self.item.characters.is_empty() {
+            return match theirs {
+                Some(theirs) => {
+                    let mut people = theirs.clone();
+                    people.extend(manual());
+                    people
+                }
+                None => self
+                    .item
+                    .credits
+                    .iter()
+                    .map(|credit| self.character(credit))
+                    .collect(),
+            };
         }
+        let mut people: Vec<Value> = self
+            .item
+            .characters
+            .iter()
+            .filter(|played| self.shown(played))
+            .map(|played| Value::Object(self.part(played)))
+            .collect();
+        let written: BTreeSet<i64> = self
+            .item
+            .characters
+            .iter()
+            .filter_map(|played| played.character.tvdb_id)
+            .collect();
+        people.extend(
+            theirs
+                .into_iter()
+                .flatten()
+                .filter(|entry| {
+                    entry
+                        .get("id")
+                        .and_then(Value::as_i64)
+                        .is_none_or(|id| !written.contains(&id))
+                })
+                .cloned(),
+        );
+        people.extend(manual());
+        people
+    }
+
+    /// One of the catalogue's characters as TheTVDB lists a character — its
+    /// record of the part, where it keeps one of that id, under what the
+    /// catalogue says of it: its name, its picture, whether it is one of the
+    /// leads, the person playing it — the credit's, else its voice in the
+    /// work's own language.
+    pub fn part(&self, played: &CharacterCredit) -> Map<String, Value> {
+        let character = &played.character;
+        let record = character.tvdb_id.and_then(|id| {
+            self.recorded("characters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_object)
+                .find(|entry| entry.get("id").and_then(Value::as_i64) == Some(id))
+        });
+        let credit = played
+            .credit_id
+            .as_ref()
+            .and_then(|id| self.item.credits.iter().find(|credit| credit.id == *id));
+        let mut entry = match record {
+            Some(record) => record.clone(),
+            None => {
+                let series = (self.item.kind == MediaKind::Series).then_some(self.id);
+                let movie = (self.item.kind == MediaKind::Movie).then_some(self.id);
+                let voice = played
+                    .voices
+                    .iter()
+                    .find(|voice| voice.language == self.original)
+                    .or_else(|| played.voices.iter().find(|voice| voice.language == "jpn"));
+                let person = credit
+                    .map(|credit| credit.person_name.clone())
+                    .or_else(|| voice.map(|voice| voice.name.clone()));
+                let mut entry = Map::new();
+                for (key, value) in [
+                    ("id", json!(character_id(character))),
+                    ("name", json!(character.name)),
+                    (
+                        "peopleId",
+                        json!(credit.and_then(|c| self.item.people.of(c)?.tvdb_id)),
+                    ),
+                    ("seriesId", json!(series)),
+                    ("series", Value::Null),
+                    ("movie", Value::Null),
+                    ("movieId", json!(movie)),
+                    ("episodeId", Value::Null),
+                    ("type", json!(3)),
+                    ("image", json!(character.image)),
+                    ("sort", json!(played.sort_order)),
+                    ("isFeatured", json!(false)),
+                    ("url", Value::Null),
+                    ("nameTranslations", Value::Null),
+                    ("overviewTranslations", Value::Null),
+                    ("aliases", Value::Null),
+                    ("peopleType", json!("Actor")),
+                    ("personName", json!(person)),
+                    ("tagOptions", Value::Null),
+                    (
+                        "personImgURL",
+                        json!(
+                            credit
+                                .and_then(|c| c.image.clone())
+                                .or_else(|| voice?.image.clone())
+                        ),
+                    ),
+                ] {
+                    entry.insert(key.to_string(), value);
+                }
+                entry
+            }
+        };
+        entry.insert("name".into(), json!(character.name));
+        if let Some(image) = &character.image {
+            entry.insert("image".into(), json!(image));
+        }
+        if let Some(role) = played.role {
+            entry.insert(
+                "isFeatured".into(),
+                json!(role == crate::domain::person::CharacterRole::Main),
+            );
+        }
+        if let Some(credit) = credit {
+            entry.insert("personName".into(), json!(credit.person_name));
+            if let Some(image) = &credit.image {
+                entry.insert("personImgURL".into(), json!(image));
+            }
+        }
+        entry
+    }
+
+    /// Whether a character is shown: not played by a credit a person hid,
+    /// which the work is read without — as TheTVDB's record of the part is
+    /// taken out with the person.
+    fn shown(&self, played: &CharacterCredit) -> bool {
+        played
+            .credit_id
+            .as_ref()
+            .is_none_or(|id| self.item.credits.iter().any(|credit| credit.id == *id))
+    }
+
+    /// The record of one of its characters, by this server's id for it:
+    /// what TheTVDB answers `characters/{id}` with — the part as the work
+    /// lists it, but written as TheTVDB writes a record asked for alone: the
+    /// work it is of (`series` or `movie`: its name, picture and year), and
+    /// its lists as lists where a work's own list has them null. None for
+    /// one it does not list, or played by a person hid.
+    pub fn character_record(&self, character_id: &str) -> Option<Map<String, Value>> {
+        let mut record = self
+            .item
+            .characters
+            .iter()
+            .find(|played| played.character.id == character_id)
+            .filter(|played| self.shown(played))
+            .map(|played| self.part(played))?;
+        let of = match self.item.kind {
+            MediaKind::Movie => "movie",
+            _ => "series",
+        };
+        record.insert(
+            of.into(),
+            json!({
+                "name": self.name(),
+                "image": self.poster(),
+                "year": self.item.year.map(|year| year.to_string()),
+            }),
+        );
+        for list in [
+            "nameTranslations",
+            "overviewTranslations",
+            "aliases",
+            "tagOptions",
+        ] {
+            if record.get(list).is_none_or(Value::is_null) {
+                record.insert(list.into(), json!([]));
+            }
+        }
+        Some(record)
     }
 
     /// One credit of the catalogue's, as TheTVDB lists a character: the
@@ -1931,6 +2105,16 @@ fn season_poster(season: &Season) -> Option<&Image> {
         .copied()
 }
 
+/// The id TheTVDB's dialect knows a character of the catalogue by:
+/// TheTVDB's own id for its record of the part, else one made of this
+/// server's id for the character — negative, so never one of TheTVDB's, and
+/// the same at every answer.
+pub fn character_id(character: &Character) -> i64 {
+    character
+        .tvdb_id
+        .unwrap_or_else(|| ids::own_episode(&format!("character:{}", character.id)))
+}
+
 /// TheTVDB's type of a credit of the catalogue's, by number and by name.
 fn people_type(kind: CreditType) -> (i64, &'static str) {
     match kind {
@@ -2267,6 +2451,111 @@ mod tests {
             &Value::Object(covington.work().series()),
             &[],
         );
+    }
+
+    /// The characters the catalogue keeps, listed as TheTVDB lists a
+    /// series' people: its record of each part under what the catalogue
+    /// says of it, one it has no record of under an id made here, then
+    /// TheTVDB's other people; and each answered alone (`characters/{id}`).
+    #[test]
+    fn the_characters_kept_are_listed_as_thetvdb_lists_a_series_people() {
+        use crate::domain::person::{CharacterRole, CharacterVoice};
+
+        let mut covington = Covington::new();
+        let cedric = credit("actor", "Glenn Quinn", Some("Cedric Grey"), 1);
+        covington.item.credits.push(cedric.clone());
+        let character = |id: &str, name: &str, tvdb: Option<i64>| Character {
+            id: id.into(),
+            name: name.into(),
+            native_name: None,
+            image: Some(format!("https://example.test/{id}.png")),
+            tvdb_id: tvdb,
+            anilist_id: None,
+            mal_id: None,
+        };
+        covington.item.characters = vec![
+            CharacterCredit {
+                character: character("c-1", "Cedric Grey, as kept", Some(63_495_072)),
+                role: Some(CharacterRole::Main),
+                sort_order: 0,
+                credit_id: Some(cedric.id.clone()),
+                voices: Vec::new(),
+                source: Some("tvdb".into()),
+            },
+            CharacterCredit {
+                character: character("c-2", "A Part Of AniList's", None),
+                role: Some(CharacterRole::Supporting),
+                sort_order: 1,
+                credit_id: None,
+                voices: vec![CharacterVoice {
+                    language: "eng".into(),
+                    name: "A Voice".into(),
+                    native_name: None,
+                    image: Some("https://example.test/voice.png".into()),
+                    anilist_id: Some(1),
+                    mal_id: None,
+                    sort_order: 0,
+                }],
+                source: Some("anilist".into()),
+            },
+        ];
+        let work = covington.work();
+        let people = work.characters();
+        let theirs = &covington.record["characters"][0];
+
+        let ids: Vec<i64> = people.iter().filter_map(|p| p["id"].as_i64()).collect();
+        let made = character_id(&covington.item.characters[1].character);
+        assert!(made < 0, "never one of TheTVDB's");
+        assert_eq!(ids, [63_495_072, made, 63_495_077, 63_495_081]);
+        // What TheTVDB keeps of a person the catalogue does not, for one it
+        // has no record of: the person's id and page.
+        for person in &people {
+            assert_same_shape(
+                theirs,
+                person,
+                &["image", "personImgURL", "peopleId", "url"],
+            );
+        }
+        // TheTVDB's record of the part, under the catalogue's word.
+        assert_eq!(people[0]["name"], json!("Cedric Grey, as kept"));
+        assert_eq!(people[0]["url"], theirs["url"]);
+        assert_eq!(people[0]["isFeatured"], json!(true));
+        assert_eq!(people[0]["image"], json!("https://example.test/c-1.png"));
+        // One TheTVDB has no record of: played by its voice in the work's
+        // own language.
+        assert_eq!(people[1]["personName"], json!("A Voice"));
+        assert_eq!(
+            people[1]["personImgURL"],
+            json!("https://example.test/voice.png")
+        );
+        assert_eq!(people[1]["seriesId"], json!(70753));
+        assert_eq!(people[1]["isFeatured"], json!(false));
+
+        // Asked for alone, as TheTVDB writes such a record (read on 3
+        // November 2026): the work it is of, and its lists as lists.
+        let alone = work.character_record("c-2").expect("listed");
+        let series = work.series();
+        assert_eq!(alone["series"]["name"], series["name"]);
+        assert_eq!(alone["series"]["image"], series["image"]);
+        assert_eq!(alone["series"]["year"], series["year"]);
+        assert_eq!(alone["movie"], Value::Null);
+        for list in [
+            "nameTranslations",
+            "overviewTranslations",
+            "aliases",
+            "tagOptions",
+        ] {
+            assert_eq!(alone[list], json!([]), "{list}");
+        }
+        for (key, value) in people[1].as_object().expect("a record") {
+            if !matches!(
+                key.as_str(),
+                "series" | "nameTranslations" | "overviewTranslations" | "aliases" | "tagOptions"
+            ) {
+                assert_eq!(&alone[key.as_str()], value, "{key}");
+            }
+        }
+        assert!(work.character_record("nobody").is_none());
     }
 
     /// `series/{id}/extended`: Kodi, Yamtrack.

@@ -92,6 +92,81 @@ impl Quarter {
     }
 }
 
+/// A season of the year as AniList counts them, its `MediaSeason`: winter
+/// from December to February, then spring, summer and fall, three months
+/// each. Not the season chart's [`Quarter`], whose winter is January's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnilistSeason {
+    Winter,
+    Spring,
+    Summer,
+    Fall,
+}
+
+impl AnilistSeason {
+    /// AniList's season a day falls in — `YYYY-MM-DD`, or a month alone,
+    /// `YYYY-MM` — and the year AniList files it under. December opens the
+    /// winter of the year that follows: an entry that started on 28 December
+    /// 2024 is AniList's winter of 2025, as AniList answered on 2 November
+    /// 2026.
+    pub fn of(day: &str) -> Option<(Self, i32)> {
+        let day = day.trim();
+        let (year, month) =
+            match NaiveDate::parse_from_str(day.get(..10).unwrap_or(day), "%Y-%m-%d") {
+                Ok(date) => (date.year(), date.month()),
+                Err(_) => {
+                    let (year, month) = day.get(..7)?.split_once('-')?;
+                    let month: u32 = month.parse().ok()?;
+                    (year.parse().ok()?, month)
+                }
+            };
+        let season = match month {
+            12 | 1 | 2 => Self::Winter,
+            3..=5 => Self::Spring,
+            6..=8 => Self::Summer,
+            9..=11 => Self::Fall,
+            _ => return None,
+        };
+        Some((season, if month == 12 { year + 1 } else { year }))
+    }
+
+    /// Its name in AniList's schema.
+    pub fn anilist(self) -> &'static str {
+        match self {
+            Self::Winter => "WINTER",
+            Self::Spring => "SPRING",
+            Self::Summer => "SUMMER",
+            Self::Fall => "FALL",
+        }
+    }
+
+    /// AniList's `seasonInt` for it in `year`: the year's last two digits,
+    /// then the season's place — 251 for the winter of 2025, 994 for the
+    /// fall of 1999.
+    pub fn int(self, year: i32) -> i32 {
+        let place = match self {
+            Self::Winter => 1,
+            Self::Spring => 2,
+            Self::Summer => 3,
+            Self::Fall => 4,
+        };
+        year.rem_euclid(100) * 10 + place
+    }
+}
+
+/// One episode of an entry and when it airs: its id in AniList's dialect,
+/// its number within the entry, as AniList counts — the entry's first is 1 —
+/// and the instant, in seconds since the epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Airing {
+    /// Made of the catalogue's own id for the episode
+    /// ([`crate::service::ids::anilist_airing`]): the same however the list
+    /// splits the work, from one answer to the next.
+    pub id: i64,
+    pub episode: i32,
+    pub airing_at: i64,
+}
+
 /// The next episode of an entry to air.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Next {
@@ -314,27 +389,7 @@ pub fn of_series(
     placed
         .into_iter()
         .map(|(entry, span)| {
-            let episodes: Vec<&Episode> = match span {
-                Some(Span::Work) => regular.clone(),
-                Some(Span::Season {
-                    number,
-                    first,
-                    last,
-                }) => {
-                    let mut own: Vec<&Episode> = item
-                        .episodes
-                        .iter()
-                        .filter(|e| {
-                            e.season_number == number
-                                && e.episode_number >= first
-                                && last.is_none_or(|last| e.episode_number <= last)
-                        })
-                        .collect();
-                    own.sort_by_key(|e| e.episode_number);
-                    own
-                }
-                None => Vec::new(),
-            };
+            let episodes = covered(item, span);
             let standing = match span {
                 Some(Span::Work) => Place {
                     whole: true,
@@ -364,6 +419,84 @@ pub fn of_series(
             describe(item, entry, span, &episodes, standing, now)
         })
         .collect()
+}
+
+/// The work's episodes an entry standing at `span` covers, in their order:
+/// a season's from `first` to `last`; the whole work's, outside season zero,
+/// season by season; none for an entry the list does not place.
+fn covered(item: &MediaItem, span: Option<Span>) -> Vec<&Episode> {
+    let mut episodes: Vec<&Episode> = match span {
+        Some(Span::Work) => item
+            .episodes
+            .iter()
+            .filter(|e| e.season_number > 0)
+            .collect(),
+        Some(Span::Season {
+            number,
+            first,
+            last,
+        }) => item
+            .episodes
+            .iter()
+            .filter(|e| {
+                e.season_number == number
+                    && e.episode_number >= first
+                    && last.is_none_or(|last| e.episode_number <= last)
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    episodes.sort_by_key(|e| (e.season_number, e.episode_number));
+    episodes
+}
+
+/// An episode's own number within the entry standing at `span`, which
+/// covers `episodes`: from its season's offset, or along the whole series —
+/// the number TheTVDB counts it by there, else its place.
+fn number_within(span: Option<Span>, episodes: &[&Episode], episode: &Episode) -> i32 {
+    match span {
+        Some(Span::Season { first, .. }) => episode.episode_number - first + 1,
+        _ => episode.absolute_episode_number.unwrap_or_else(|| {
+            episodes
+                .iter()
+                .position(|e| std::ptr::eq(*e, episode))
+                .map_or(0, |at| i32::try_from(at + 1).unwrap_or(i32::MAX))
+        }),
+    }
+}
+
+/// When each of an entry's episodes airs, in the order they do, each by its
+/// number within the entry: its schedule, as AniList lists one. The episodes
+/// as they are served, corrections included; one with neither a day nor an
+/// instant is not on it.
+pub fn schedule(item: &MediaItem, cour: &Cour) -> Vec<Airing> {
+    let episodes = covered(item, cour.span);
+    let mut timed: Vec<(DateTime<Utc>, &Episode)> = episodes
+        .iter()
+        .filter_map(|episode| Some((airs(episode)?, *episode)))
+        .collect();
+    timed.sort_by_key(|(at, e)| (*at, e.season_number, e.episode_number));
+    timed
+        .into_iter()
+        .map(|(at, episode)| Airing {
+            id: crate::service::ids::anilist_airing(&episode_key(item, episode)),
+            episode: number_within(cour.span, &episodes, episode),
+            airing_at: at.timestamp(),
+        })
+        .collect()
+}
+
+/// What names an episode for good: the catalogue's id for it, else — one
+/// not stored — its work's and its own numbers.
+fn episode_key(item: &MediaItem, episode: &Episode) -> String {
+    if episode.id.is_empty() {
+        format!(
+            "{}:{}x{}",
+            item.id, episode.season_number, episode.episode_number
+        )
+    } else {
+        episode.id.clone()
+    }
 }
 
 /// Where an entry stands in the work as a whole: see [`Cour`].
@@ -414,17 +547,7 @@ fn describe(
     };
     let starts = first.map(|(e, at)| day_of(e, *at));
 
-    // Its own number for an episode: from its season's offset, or along the
-    // whole series — the number TheTVDB counts it by there, else its place.
-    let within = |episode: &Episode| match span {
-        Some(Span::Season { first, .. }) => episode.episode_number - first + 1,
-        _ => episode.absolute_episode_number.unwrap_or_else(|| {
-            episodes
-                .iter()
-                .position(|e| std::ptr::eq(*e, episode))
-                .map_or(0, |at| i32::try_from(at + 1).unwrap_or(i32::MAX))
-        }),
-    };
+    let within = |episode: &Episode| number_within(span, episodes, episode);
     let locked = |episode: &Episode, field: &str| {
         let scope = Scope::Episode {
             season: episode.season_number,
@@ -487,7 +610,14 @@ pub fn of_film(item: &MediaItem, entries: &[Entry]) -> Vec<Cour> {
         },
         None => None,
     };
-    own.map(|(anilist, mal, format)| Cour {
+    own.map(|(anilist, mal, format)| film(anilist, mal, format))
+        .into_iter()
+        .collect()
+}
+
+/// A film's own entry: the whole film, which no episode describes.
+fn film(anilist: Option<i64>, mal: Option<i64>, format: Option<String>) -> Cour {
+    Cour {
         anilist,
         mal,
         format,
@@ -506,40 +636,77 @@ pub fn of_film(item: &MediaItem, entries: &[Entry]) -> Vec<Cour> {
         next: None,
         corrected: false,
         made_here: false,
-    })
-    .into_iter()
-    .collect()
+    }
+}
+
+/// A work the list does not split, as the one entry it is, under `anilist`
+/// and `mal`: a series described from all its episodes outside season zero,
+/// as an entry the list keeps whole is; a film, its own.
+pub fn of_unlisted(
+    item: &MediaItem,
+    anilist: Option<i64>,
+    mal: Option<i64>,
+    now: DateTime<Utc>,
+) -> Cour {
+    match item.kind {
+        MediaKind::Series => {
+            let entry = Entry {
+                anilist_id: anilist,
+                mal_id: mal,
+                kind: item.format.clone(),
+                ..Entry::default()
+            };
+            let episodes = covered(item, Some(Span::Work));
+            let place = Place {
+                whole: true,
+                opens_work: true,
+                ends_work: true,
+                closed: item.status.as_deref() == Some("ended"),
+            };
+            describe(item, entry, Some(Span::Work), &episodes, place, now)
+        }
+        MediaKind::Movie => film(anilist, mal, item.format.clone()),
+    }
 }
 
 /// The entries a work is, as of `now`: a series' as the list splits it, a
 /// film's own. None where the list does not know the work, or cannot be
 /// read.
 pub async fn of_work(state: &AppState, item: &MediaItem, now: DateTime<Utc>) -> Vec<Cour> {
-    let read = match item.kind {
-        MediaKind::Series => match item.external_ids.tvdb {
-            Some(tvdb) => repo::anime::for_series(&state.db, tvdb).await,
-            None => return Vec::new(),
-        },
-        MediaKind::Movie => match item.external_ids.tmdb {
-            Some(tmdb) => repo::anime::for_movie(&state.db, tmdb).await,
-            None => Ok(Vec::new()),
-        },
-    };
-    let entries = match read {
-        Ok(entries) => entries,
+    match try_of_work(state, item, now).await {
+        Ok(cours) => cours,
         Err(e) => {
             tracing::warn!(
                 media_id = %item.id,
                 error = format_args!("{e:#}"),
                 "could not read the anime identifier list"
             );
-            return Vec::new();
+            Vec::new()
         }
+    }
+}
+
+/// [`of_work`], failing where the list cannot be read: for a reader that
+/// would otherwise take a work the list splits for one it does not.
+pub async fn try_of_work(
+    state: &AppState,
+    item: &MediaItem,
+    now: DateTime<Utc>,
+) -> anyhow::Result<Vec<Cour>> {
+    let entries = match item.kind {
+        MediaKind::Series => match item.external_ids.tvdb {
+            Some(tvdb) => repo::anime::for_series(&state.db, tvdb).await?,
+            None => return Ok(Vec::new()),
+        },
+        MediaKind::Movie => match item.external_ids.tmdb {
+            Some(tmdb) => repo::anime::for_movie(&state.db, tmdb).await?,
+            None => Vec::new(),
+        },
     };
-    match item.kind {
+    Ok(match item.kind {
         MediaKind::Series => of_series(item, &entries, &HashMap::new(), now),
         MediaKind::Movie => of_film(item, &entries),
-    }
+    })
 }
 
 /// What the catalogue already says an entry is called, without asking
@@ -569,6 +736,49 @@ pub async fn described(
     cours: &[Cour],
     ask: bool,
 ) -> HashMap<i64, mal::Described> {
+    let kept = match repo::snapshot::texts(&state.db, &item.id, &["mal"]).await {
+        Ok(kept) => kept,
+        Err(e) => {
+            tracing::warn!(
+                media_id = %item.id,
+                error = format_args!("{e:#}"),
+                "could not read what MyAnimeList answered for a work"
+            );
+            Vec::new()
+        }
+    };
+    let kept = kept_described(kept.iter().map(|(_, text)| text.as_str()));
+    described_from(state, cours, &kept, ask).await
+}
+
+/// The entries MyAnimeList's answers for a work describe, read off the
+/// texts [`repo::snapshot::texts`] keeps them as: for a reader that reads
+/// them once for each of the work's entries ([`described_among`]).
+pub fn kept_described<'t>(texts: impl IntoIterator<Item = &'t str>) -> Vec<mal::Described> {
+    texts
+        .into_iter()
+        .filter_map(|text| mal::described_from_kept(&serde_json::from_str(text).ok()?))
+        .collect()
+}
+
+/// [`described`], from what [`kept_described`] read of the work's
+/// answers: MyAnimeList is not asked.
+pub async fn described_among(
+    state: &AppState,
+    cours: &[Cour],
+    kept: &[mal::Described],
+) -> HashMap<i64, mal::Described> {
+    described_from(state, cours, kept, false).await
+}
+
+/// [`described`], from the entries MyAnimeList's answers kept for the work
+/// describe, `kept`.
+async fn described_from(
+    state: &AppState,
+    cours: &[Cour],
+    kept: &[mal::Described],
+    ask: bool,
+) -> HashMap<i64, mal::Described> {
     let mut wanted: Vec<i64> = Vec::new();
     for id in cours.iter().filter_map(|c| c.mal) {
         if !wanted.contains(&id) {
@@ -580,22 +790,10 @@ pub async fn described(
         return found;
     }
 
-    match repo::snapshot::texts(&state.db, &item.id, &["mal"]).await {
-        Ok(kept) => {
-            for (_, text) in kept {
-                if let Ok(raw) = serde_json::from_str(&text)
-                    && let Some(own) = mal::described_from_kept(&raw)
-                    && wanted.contains(&own.mal_id)
-                {
-                    found.insert(own.mal_id, own);
-                }
-            }
+    for own in kept {
+        if wanted.contains(&own.mal_id) {
+            found.insert(own.mal_id, own.clone());
         }
-        Err(e) => tracing::warn!(
-            media_id = %item.id,
-            error = format_args!("{e:#}"),
-            "could not read what MyAnimeList answered for a work"
-        ),
     }
 
     let mut missing = Vec::new();
@@ -981,6 +1179,149 @@ mod tests {
         let ended = of_series(&item, &entries, &HashMap::new(), now()).remove(0);
         assert_eq!(ended.status, Some(Status::Finished));
         assert_eq!(ended.ends.as_deref(), Some("2026-10-25"));
+    }
+
+    #[test]
+    fn a_work_the_list_does_not_split_is_one_entry_of_all_its_episodes() {
+        let item = split();
+        let whole = of_unlisted(&item, Some(7), Some(8), now());
+        assert!(whole.whole && whole.opens_work && whole.ends_work && !whole.closed);
+        assert_eq!((whole.anilist, whole.mal), (Some(7), Some(8)));
+        assert_eq!(whole.span, Some(Span::Work));
+        assert_eq!(whole.episodes, 24);
+        assert_eq!(whole.starts.as_deref(), Some("2026-01-02"));
+        assert_eq!(whole.status, Some(Status::Releasing));
+        // The second season's eleventh, the series' twenty-third.
+        let next = whole.next.expect("one to come");
+        assert_eq!((next.episode, next.episode_number), (23, 11));
+
+        let film = of_unlisted(&MediaItem::empty(MediaKind::Movie), Some(9), None, now());
+        assert!(film.whole && film.closed && film.episodes == 0);
+        assert_eq!((film.anilist, film.span), (Some(9), Some(Span::Work)));
+    }
+
+    #[test]
+    fn anilists_winter_runs_from_december_into_the_next_year() {
+        use AnilistSeason::{Fall, Spring, Summer, Winter};
+        // As AniList answered on 2 November 2026: 28 December 2024 is its
+        // winter of 2025, `seasonInt` 251; and its own examples.
+        assert_eq!(AnilistSeason::of("2024-12-28"), Some((Winter, 2025)));
+        assert_eq!(Winter.int(2025), 251);
+        assert_eq!(AnilistSeason::of("1999-10-20"), Some((Fall, 1999)));
+        assert_eq!(Fall.int(1999), 994);
+        assert_eq!(AnilistSeason::of("2023-09-29"), Some((Fall, 2023)));
+        assert_eq!(Fall.int(2023), 234);
+        assert_eq!(AnilistSeason::of("2016-08-26"), Some((Summer, 2016)));
+        assert_eq!(Summer.int(2016), 163);
+        // Each boundary, and an instant, and a month alone.
+        for (day, season, year) in [
+            ("2026-01-01", Winter, 2026),
+            ("2026-02-28", Winter, 2026),
+            ("2026-03-01", Spring, 2026),
+            ("2026-05-31", Spring, 2026),
+            ("2026-06-01", Summer, 2026),
+            ("2026-08-31", Summer, 2026),
+            ("2026-09-01", Fall, 2026),
+            ("2026-11-30", Fall, 2026),
+            ("2026-12-01", Winter, 2027),
+            ("2026-12-31T23:00:00Z", Winter, 2027),
+            ("2026-12", Winter, 2027),
+            ("2026-04", Spring, 2026),
+        ] {
+            assert_eq!(AnilistSeason::of(day), Some((season, year)), "{day}");
+        }
+        for nothing in ["2026", "", "late 2026", "2026-13"] {
+            assert_eq!(AnilistSeason::of(nothing), None, "{nothing}");
+        }
+        assert_eq!(Spring.anilist(), "SPRING");
+        assert_eq!(Winter.int(2000), 1);
+        // The season chart's quarters are its own still: winter from January.
+        assert_eq!(Quarter::of("2026-12-01"), Some((Quarter::Autumn, 2026)));
+    }
+
+    #[test]
+    fn a_scheduled_episode_keeps_its_id_however_the_list_splits_its_series() {
+        let item = split();
+        let apart = of_series(&item, &split_entries(), &HashMap::new(), now());
+        let together = of_series(
+            &item,
+            &[entry(1, Some(1), None, "TV"), entry(2, Some(2), None, "TV")],
+            &HashMap::new(),
+            now(),
+        );
+        let second_half = schedule(&item, &apart[2]);
+        let whole = schedule(&item, &together[1]);
+        // The season's seventh episode: the first of its second half, split
+        // apart, and the seventh of the season, listed whole.
+        assert_eq!((second_half[0].episode, whole[6].episode), (1, 7));
+        assert_eq!(second_half[0].id, whole[6].id);
+        // Each episode under an id of its own, the catalogue's own where it
+        // has one.
+        let distinct: std::collections::HashSet<i64> = whole.iter().map(|a| a.id).collect();
+        assert_eq!(distinct.len(), whole.len());
+        let mut named = item.clone();
+        named.episodes[18].id = "an-episode-of-the-catalogue".into();
+        let renamed = schedule(&named, &apart[2]);
+        assert_eq!(
+            renamed[0].id,
+            crate::service::ids::anilist_airing("an-episode-of-the-catalogue")
+        );
+        assert_eq!(renamed[1].id, second_half[1].id);
+    }
+
+    #[test]
+    fn an_entrys_schedule_is_its_own_episodes_counted_from_its_first() {
+        let item = split();
+        let cours = of_series(&item, &split_entries(), &HashMap::new(), now());
+        let autumn = schedule(&item, &cours[2]);
+        assert_eq!(autumn.len(), 6);
+        assert_eq!(
+            (autumn[0].episode, autumn[0].airing_at),
+            (
+                1,
+                Utc.with_ymd_and_hms(2026, 10, 4, 15, 0, 0)
+                    .unwrap()
+                    .timestamp()
+            )
+        );
+        assert_eq!(autumn[5].episode, 6);
+        // Midnight of its day for an episode with no time.
+        let summer = schedule(&item, &cours[1]);
+        assert_eq!(summer.len(), 6);
+        assert_eq!(
+            summer[0].airing_at,
+            Utc.with_ymd_and_hms(2026, 7, 4, 0, 0, 0)
+                .unwrap()
+                .timestamp()
+        );
+
+        // Along the whole series, by TheTVDB's count where it gives one; an
+        // episode with no day is not on it.
+        let mut along = MediaItem::empty(MediaKind::Series);
+        along.episodes = vec![
+            episode(1, 1, "2026-01-04"),
+            episode(2, 1, "2026-10-25"),
+            blank_episode(2, 2),
+        ];
+        along.episodes[1].absolute_episode_number = Some(1093);
+        let whole = of_series(
+            &along,
+            &[entry(1, None, None, "TV")],
+            &HashMap::new(),
+            now(),
+        );
+        let listed: Vec<i32> = schedule(&along, &whole[0])
+            .iter()
+            .map(|a| a.episode)
+            .collect();
+        assert_eq!(listed, [1, 1093]);
+
+        // An entry the list does not place has none.
+        let unplaced = Cour {
+            span: None,
+            ..whole[0].clone()
+        };
+        assert!(schedule(&along, &unplaced).is_empty());
     }
 
     #[test]

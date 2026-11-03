@@ -174,7 +174,12 @@ async fn sources(State(state): State<AppState>) -> Json<Sources> {
         (names::TMDB, state.tmdb.is_configured()),
         (names::TVDB, state.tvdb.is_enabled()),
         (names::FANART, state.fanart.is_enabled()),
-        (names::TVMAZE, state.flag("tvmaze.enabled", false)),
+        // Asked work by work, or its index kept here: what a search finds in
+        // it is TVmaze's too.
+        (
+            names::TVMAZE,
+            state.flag("tvmaze.enabled", false) || state.flag("tvmaze.index", false),
+        ),
         (names::ANILIST, state.flag("anilist.enabled", false)),
         (names::MAL, mal_on),
         ("tenrai", through_tenrai),
@@ -234,6 +239,14 @@ pub struct FurtherSources {
     /// read once.
     #[schema(required)]
     pub imdb_episodes: Option<ListImport>,
+    /// TVmaze's index of every series it lists, as this server keeps it;
+    /// absent until it has been read whole once.
+    #[schema(required)]
+    pub tvmaze_index: Option<ListImport>,
+    /// Wikidata's links between the sites' ids; absent until they have been
+    /// read once.
+    #[schema(required)]
+    pub wikidata_ids: Option<ListImport>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -300,6 +313,12 @@ async fn settings(
         imdb_episodes: imported(
             repo::import::get(&state.db, crate::jobs::datasets::IMDB_EPISODES).await?,
         ),
+        tvmaze_index: imported(
+            repo::import::get(&state.db, crate::jobs::datasets::TVMAZE_INDEX).await?,
+        ),
+        wikidata_ids: imported(
+            repo::import::get(&state.db, crate::jobs::datasets::WIKIDATA_IDS).await?,
+        ),
     };
 
     Ok(Json(Settings {
@@ -333,7 +352,7 @@ async fn settings(
 pub struct JobQuery {
     /// A task's name: `refresh.sweep`, `refresh.item`, `refresh.all`,
     /// `import.anime`, `import.imdb`, `imdb.akas`, `imdb.episodes`,
-    /// `export.nfo`.
+    /// `import.tvmaze`, `import.wikidata`, `tvdb.deleted`, `export.nfo`.
     pub kind: Option<String>,
     /// `running`, `succeeded` or `failed`.
     pub status: Option<String>,
@@ -448,15 +467,18 @@ pub struct Imported {
 
 /// Download one of the lists the further sources work from, now.
 ///
-/// `anime-lists`, `imdb-ratings`, `imdb-akas` (IMDb's titles by region) or
-/// `imdb-episodes`. Refused while the switch that needs the list is off, and
-/// while another import is running. An import that takes longer than a
-/// request is given carries on after the answer, 202, and is followed under
-/// Jobs like any other: IMDb's titles, half a gigabyte, usually do.
+/// `anime-lists`, `imdb-ratings`, `imdb-akas` (IMDb's titles by region),
+/// `imdb-episodes`, `tvmaze-index` (TVmaze's index of every series) or
+/// `wikidata-ids` (Wikidata's links between the sites' ids). Refused while
+/// the switch that needs the list is off, and while another import is
+/// running. An import that takes longer than a request is given carries on
+/// after the answer, 202, and is followed under Jobs like any other: IMDb's
+/// titles, half a gigabyte, usually do, and TVmaze's index, read at TVmaze's
+/// pace, always does.
 #[utoipa::path(
     post, path = "/datasets/{name}/import", tag = TAG,
     operation_id = "meta_import_dataset",
-    params(("name" = String, Path, description = "`anime-lists`, `imdb-ratings`, `imdb-akas` or `imdb-episodes`")),
+    params(("name" = String, Path, description = "`anime-lists`, `imdb-ratings`, `imdb-akas`, `imdb-episodes`, `tvmaze-index` or `wikidata-ids`")),
     responses(
         (status = 200, body = Imported),
         (status = 202, description = "Still downloading; it carries on, and its result is under Jobs", body = Imported),

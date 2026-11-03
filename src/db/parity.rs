@@ -166,7 +166,7 @@ async fn what_sqlite_built_is_read_back_whole() {
         "media_item: index ix_media_item_title (title)",
         "media_item: index ux_media_item_kind_slug (kind, slug) unique",
         "media_item: index ix_media_item_refresh (refresh_after) partial",
-        "media_item: index ix_media_item_browse (kind, is_enabled, popularity desc, title, is_adult)",
+        "media_item: index ix_media_item_rated (kind, is_enabled, listed_score desc, title, is_adult)",
         "media_external_id: primary key (source, value)",
         "media_external_id: foreign key (media_id) references media_item (id) on delete cascade",
         "search_doc: table",

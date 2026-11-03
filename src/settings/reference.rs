@@ -240,6 +240,26 @@ const GROUPS: &[Group] = &[
                  its numbers, the page says the match is the less sure for it.",
             ),
             set(
+                "tvmaze.index",
+                "TVmaze's index of every series it lists, read through weekly — a few hundred \
+                 pages the first time, the series changed since after — and kept whole: Sonarr's \
+                 search still finds a series, under its TheTVDB id, when the providers do not \
+                 answer, and its weight goes into the popularity worked out here for a work TMDB \
+                 gives none. Its data is CC BY-SA, credited on every page. See \
+                 [TVmaze's index](sources.md#tvmazes-index).",
+            ),
+            set(
+                "wikidata.enabled",
+                "Wikidata's links between the sites' ids — IMDb, TMDB, TheTVDB, TVmaze, AniList, \
+                 MyAnimeList, AniDB — read through weekly by one query for each of eight sites, \
+                 TMDB's and TheTVDB's films and series counted apart, and kept in the database: \
+                 an id a client asks by leads to the work held here under another of its ids, \
+                 and to the ids TMDB and TheTVDB are asked by where TMDB does not answer or does \
+                 not know the work. It never changes the id a client holds a work by. The links \
+                 read before stay until a reading completes. Wikidata's data is CC0. See \
+                 [Wikidata's links](sources.md#wikidatas-links).",
+            ),
+            set(
                 "imdb.regions",
                 "The regions whose titles Radarr is given while `imdb.akas` is on: two-letter \
                  codes, `FR, BE, CA`, or IMDb's own — `XWW` is the world, in English. Set for \
@@ -291,7 +311,12 @@ const GROUPS: &[Group] = &[
              says so (`item.numbering_fallback`), the notifications that want it are told \
              (`numbering.fallback`), and the work's page and its editor carry a banner with the \
              way back. TheTVDB takes its numbering back of itself when it answers again, unless \
-             an order of the series was frozen as its aired numbering meanwhile. `0`: never. \
+             an order of the series was frozen as its aired numbering meanwhile. A series \
+             TheTVDB no longer knows — it answers that it has no such series at two refreshes \
+             in a row, twenty hours apart at the least, or its feed of updates says it deleted \
+             the series or merged it into another — is numbered as it was served then, frozen, \
+             the episodes that air afterwards placed after it; see [A series TheTVDB no longer \
+             knows](sonarr-radarr.md#a-series-thetvdb-no-longer-knows). `0`: never, neither. \
              Unset, it is `3`.",
         )],
     },
@@ -505,18 +530,30 @@ const GROUPS: &[Group] = &[
                 "tmdb.relayMode",
                 "How the TMDB relay answers: `relay` asks TMDB for everything and writes the \
                  locks into its answers; `local-first` answers a work this server holds — a film, \
-                 a series, its seasons and episodes, a `find` by one of its ids — itself, in \
-                 TMDB's shape, from the catalogue, corrections and works entered by hand \
-                 included, puts the catalogue's works first in searches, and asks TMDB for the \
-                 rest. See [The relays](relays.md).",
+                 a series, its seasons and episodes, a `find` by one of its ids, a collection one \
+                 of whose films it holds — itself, in TMDB's shape, from the catalogue, \
+                 corrections and works entered by hand included, puts the catalogue's works \
+                 first in searches, and asks TMDB for the rest. See [The relays](relays.md).",
             ),
             set(
                 "tvdb.relayMode",
                 "How the TheTVDB relay answers: `relay` asks TheTVDB for everything and writes \
                  the locks into its answers; `local-first` answers a series or a film this \
-                 server holds — its record, its episodes in any order, its seasons and episodes \
-                 — itself, in TheTVDB's shape, from the catalogue, puts the catalogue's works \
-                 first in searches, and asks TheTVDB for the rest. See [The relays](relays.md).",
+                 server holds — its record and its characters, its episodes in any order, its \
+                 seasons and episodes, one of its characters asked alone — itself, in TheTVDB's \
+                 shape, from the catalogue, puts the catalogue's works first in searches, and \
+                 asks TheTVDB for the rest. See [The relays](relays.md).",
+            ),
+            set(
+                "anilist.relayMode",
+                "How the AniList relay answers: `relay` asks AniList for everything and writes \
+                 the locks into its answers; `local-first` answers a query about the entries \
+                 this server holds itself, in AniList's shape — an entry by AniList's or \
+                 MyAnimeList's id, a work or one of its seasons or cours, a page of such entries \
+                 named by their ids and their schedules, AniList's genres — and asks AniList for \
+                 the rest: searches, pages of its catalogue, anything of an account or of \
+                 somebody, and anything only AniList can say. See [AniList's \
+                 clients](relays.md#anilists-clients).",
             ),
         ],
     },

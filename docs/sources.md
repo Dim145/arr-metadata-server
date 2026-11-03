@@ -26,15 +26,25 @@ in order on the Sources page, and given its first value by `AMS_PROVIDER_PRIORIT
 
 The **list** of episodes and seasons always comes from TheTVDB, or from Skyhook
 which republishes its numbering. Every other provider may fill fields on those
-episodes; none may add one. The one exception is a series TheTVDB stopped
-answering for, refresh after refresh: TMDB then numbers it in TheTVDB's place,
-until TheTVDB answers again — see
-[Who numbers a series](sonarr-radarr.md#who-numbers-a-series).
+episodes; none may add one. The exceptions are two, both while TheTVDB gives
+nothing to number a series by:
+
+- a series TheTVDB stopped answering for, refresh after refresh: TMDB then numbers
+  it in TheTVDB's place, until TheTVDB answers again — see
+  [Who numbers a series](sonarr-radarr.md#who-numbers-a-series);
+- a series TheTVDB no longer knows — it deleted it, merged it into another, or
+  answers that it has no such series at two refreshes in a row: the numbering it
+  was served by then is kept, frozen as the aired numbering, and the episodes that
+  air afterwards are placed after it, from TMDB's own numbering, else from TVmaze —
+  or, for a series merged into another, from TheTVDB under the id it kept — see
+  [A series TheTVDB no longer knows](sonarr-radarr.md#a-series-thetvdb-no-longer-knows).
 
 This is not configurable, because it is not really a preference. A client
 addresses a series by its TVDB id and expects the numbering that goes with it,
 and the providers do not agree on where seasons end — so serving TMDB's
 boundaries under a TVDB id makes Sonarr map files to the wrong episodes.
+`numbering.fallbackAfter` only says how long TheTVDB's silence is waited out
+before the first, and turns both off at `0`.
 
 Taking the union of both is worse still: episodes that are the same hour of
 television sit at different numbers in each scheme, so none of them match and
@@ -95,8 +105,10 @@ and a deployment with no TMDB key at all still answers. Fankai's productions,
 with Fankai on, are searched beside the rest whatever they found. When nothing is
 found and a source that could have found it did not answer, the search fails with
 `502` rather than answer an empty list, which Sonarr would read as "no such
-series". A film search asks the catalogue, TMDB and, with `radarr.enrich` on,
-Radarr's own service, and merges all three.
+series" — unless TVmaze's index is kept (`tvmaze.index`), which then lists the
+series it finds by that name: see [TVmaze's index](#tvmazes-index). A film search
+asks the catalogue, TMDB and, with `radarr.enrich` on, Radarr's own service, and
+merges all three.
 
 > If you redirect `skyhook.sonarr.tv` or `api.radarr.video` at this server
 > through your **resolver** rather than per container, it resolves those names
@@ -192,17 +204,18 @@ refreshed before this was recorded needs one full refresh first. The same throug
 
 ## Further sources
 
-Six more, each off until switched on under **Settings → Further sources**.
+Seven more, each off until switched on under **Settings → Further sources**.
 None needs a key.
 
 | Source | Brings | Costs |
 | --- | --- | --- |
-| **TVmaze** | the moment each episode aired | two calls per series fetch |
+| **TVmaze** | the moment each episode aired; with its index read (`tvmaze.index`), every series it lists, which a series search lists when the providers do not answer, and each series' weight, which goes into [the popularity worked out here](#the-popularity-worked-out-here) | two calls per series fetch; for the index, some four hundred the first time and seventeen hundred a week after |
 | **AniList** | its score, the romaji, native and English titles and synonyms, the main studio, an adult flag — for anime | one call per anime fetch |
 | **MyAnimeList** | its score and titles — for anime; through its own API when `AMS_MAL_CLIENT_ID` is set, through [Tenrai](https://api.tenrai.org/documentation) otherwise, a mirror written to Jikan's schema (`AMS_TENRAI_UPSTREAM`), and through a Jikan of your own (`AMS_JIKAN_UPSTREAM`) when neither answers (`mal.fallback`, on) — Jikan's public API closed on 1 October 2026 | one call per anime fetch |
 | **IMDb** | IMDb's rating, for every work with an IMDb id; with its titles read (`imdb.akas`), the titles a film goes by in each region, which Radarr is given; with its episodes read (`imdb.episodes`), each episode's IMDb id, in its `.nfo` document, and its IMDb rating, on its page | one download a day for the ratings; one a week each for the titles and the episodes |
 | **Fankai** | the Fan-Kai productions — anime recut into films, each as a series with its sagas as seasons — from Fankai's own metadata service | one call per saga, and three more per production fetch |
 | **Wiki Fankai** | for each Fan-Kai, the anime it was cut from and the Fan-Kai that follows it — only while Fankai is on | one call per Fan-Kai fetch |
+| **Wikidata** | the links its items make between the sites' ids (`wikidata.enabled`), which lead an id a client asks by to the work held here under another | eight queries a week |
 
 TVmaze's servers take fifteen to twenty seconds, now and then, over what their
 cache does not hold — the first lookup of a series — whatever the pace of the
@@ -316,8 +329,9 @@ at least — until its weekly turn, once it has landed before.
   the episodes are read, and catches up within the hour after they are — with
   *by number* beside it, and a link to IMDb's page of the episode.
 
-The lists downloaded whole — the anime identifiers and IMDb's three — are on
-**Administration › Sources** too, under *Lists downloaded whole*: what each
+The lists downloaded whole — the anime identifiers, IMDb's three, TVmaze's index
+and Wikidata's links — are on **Administration › Sources** too, under *Lists
+downloaded whole*: what each
 brings, whether it is on, when it last landed and how many rows it kept, how
 its last run went and when the next one is due (`GET
 /api/v1/sources/datasets`, for whoever may edit the catalogue).
@@ -358,14 +372,121 @@ Fan-Kai itself: sharing one would merge it into the anime.
 The lists and their last download are shown under the switches, with a button
 to download one now rather than wait for its turn, and every download is a job.
 
+### TVmaze's index
+
+With `tvmaze.index` on, the server keeps TVmaze's index of every series it lists —
+some ninety thousand — and reads it again weekly, as the task *TVmaze's index*
+(`import.tvmaze`): the first time page by page (`/shows?page=N`), some four
+hundred pages, a hundred-odd megabytes and four minutes; then only the series
+TVmaze lists among those it changed since (`/updates/shows`), each read again by
+its id — some seventeen hundred a week; after a month without a reading, the pages
+again. Of each series it keeps its name, its kind, its language, its status, the
+days it began and ended, its network or else its web channel, with the country,
+its TheTVDB, IMDb and TVRage ids, its weight — how closely TVmaze's readers follow
+it, from 0 to 100 — and when TVmaze last changed it: no synopsis, no picture. Every
+call goes through the door the series fetched one by one take, half a second
+apart, which keeps both under TVmaze's twenty calls in ten seconds, a `429` waited
+out for as long as it asks; a client's request takes its turn between two of the
+reading's. A reading can be stopped on the Jobs page, and says how far it has got:
+what it wrote stays, and the next one goes on from there. A series is forgotten
+only once a whole reading of the pages went without it, or when TVmaze answers
+`404` for it; one TVmaze lists in a shape that cannot be read is passed over and
+kept as it was. A reading of the pages that finds fewer than half the series kept,
+or ends more than a thousand ids below the highest kept, fails and forgets none.
+
+The index is kept whole, since it is for the series not held yet, and read from
+the database alone: TVmaze is never asked while a client waits. A series search
+that finds nothing while a source that could have found it did not answer —
+TMDB, TheTVDB or Skyhook — lists the series the index finds by that name, the best
+first: a name that is the term, then one that starts with it, then one with a word
+that does, TVmaze's weight deciding between names alike, and a year at the end of
+the term read as the one the series began. A lookup by `tvdb:`, `imdb:` or `tmdb:`
+the providers could not answer lists the series the index files under that id —
+under TMDB's, through [Wikidata's links](#wikidatas-links). Each series is listed
+under its TheTVDB id, which Sonarr adds a series by, and one TVmaze knows no
+TheTVDB id for is left out; none is kept here, and Sonarr asking for the series by
+that id is answered once the providers answer. Only where the index finds nothing
+either is the search a `502`. Each series' weight goes into
+[the popularity worked out here](#the-popularity-worked-out-here).
+
+### Wikidata's links
+
+With `wikidata.enabled` on, the server keeps the links Wikidata's items make
+between the sites' ids — IMDb's, TMDB's, TheTVDB's, TVmaze's, AniList's,
+MyAnimeList's and AniDB's — and reads them again weekly, as the task *Wikidata's
+links between ids* (`import.wikidata`): eight queries to Wikidata's query service
+(`AMS_WIKIDATA_ENDPOINT`), one for each of TMDB's films and series, TheTVDB's
+series and films, AniList, MyAnimeList, AniDB and TVmaze, each with the IMDb id
+beside, one after the other with two seconds between them — some fifty seconds in
+all — under a `User-Agent` that names this server, as Wikimedia's policy asks. A
+reading is kept only once every query has answered whole and none lists fewer than
+half the ids kept of its site; until then the links read before stay, and only
+what changed is written. In November 2026 that was a million links on 360,000
+items: some thirty-six megabytes in SQLite, a hundred in PostgreSQL.
+
+The links only ever find ids. They are read from the database, Wikidata being
+asked nothing while a client waits, and nothing of a work is written from them.
+They serve where the id a client asks by leads to nothing held here:
+
+- **to the work held under another of its ids**: TMDB's `/3/find` by an IMDb,
+  TheTVDB or Wikidata id, in either mode of the relay; TheTVDB's search by an id
+  elsewhere (`search/remoteid`) with `tvdb.relayMode = local-first`; Sonarr's and
+  Radarr's `imdb:` and `tmdb:` terms; an AniList entry the catalogue ties to no
+  AniList id, with `anilist.relayMode = local-first` — see
+  [Answering from the catalogue](relays.md#answering-from-the-catalogue);
+- **to the ids a work is fetched by**, where TMDB does not answer, has no key, or
+  knows no work by an IMDb id: TMDB is asked by the TMDB id the links give, and for
+  a series TheTVDB by theirs;
+- **to a series of TVmaze's index**, for a lookup the providers could not answer.
+
+They never change the id a client holds a work by. A work held is answered as it
+is held, under the id its clients know it by: a series TMDB alone names keeps the
+number made of TMDB's id, and its numbering, though the links know its TheTVDB id.
+A work is fetched by the ids they give only where nothing is held under the id
+asked, nor under one they give: the work fetched is a new one, which no client
+holds yet. Nor do they serve `tvdb:`, or Sonarr and Radarr asking for a work by the
+number they hold it under, which are how they ask again for the works they hold:
+a work found through the links there would be served under another number than
+the one asked.
+
+### The popularity worked out here
+
+TMDB gives every work it lists a popularity, and the catalogue's lists are in its
+order: *Most popular* on the site, `sort=popularity` in the API, works alike in a
+search, and the works in the same vein a work's page offers. A work TMDB gives none — one entered by hand, or every work of a
+catalogue TMDB does not serve — is given one here, worked out for the works held
+alone from two things the server reads anyway: TVmaze's weight of a series, from
+its index (`tvmaze.index`) or else from its answer for the series
+(`tvmaze.enabled`), and how many votes IMDb's daily list (`imdb.enabled`) sees a
+work gather a day over the last week, the counts of each work held being kept
+eight days. Each is put between 0 and 10 — the weight in tenths, the votes by their
+logarithm, ten for some twenty-two thousand a day — and a work with both takes the
+mean of the two. That figure is placed on TMDB's scale: at the rank it has among
+the figures of the works held of its kind, among TMDB's popularities of the same
+works — of every kind where one kind has fewer than twenty, the figure times ten
+where TMDB gives fewer than twenty in all — so that a list in TMDB's order takes
+the work where it belongs. It is worked out again after each reading of IMDb's
+ratings or of TVmaze's index, and once a day besides, by the instance that leads;
+the log says what it came to.
+
+It never stands for TMDB's figure. It is kept only for a work TMDB gives none, the
+lists sort on whichever a work has, and every answer that carries a popularity —
+the native API, a document in TMDB's shape, Radarr's — carries TMDB's where the
+catalogue holds it. Where it holds none, the one worked out here stands in, also
+for a work whose TMDB record was never read because TMDB does not serve the
+catalogue: the rest of its document in TMDB's shape comes from other sources
+already, and a `0` would tell the client nothing. AniList's own figure, a count of
+its members, is another thing, and this one is never written in its place.
+
 ## Terms of use
 
 Each source answers under terms of its own, and the catalogue is built to stay
 within them. What this server does with a source's data is the same for every
 one: it keeps a copy of what the source answered for the works it holds — a
 work is fetched when a client or a person asks for it, never a catalogue
-wholesale — refreshes that copy on the schedule above, hands it to the clients
-it serves, and never uses it to train a model. Since 0.8.0
+wholesale, but for two lists of open data kept whole once switched on, TVmaze's
+index and Wikidata's links — refreshes that copy on the schedule above, hands it
+to the clients it serves, and never uses it to train a model. Since 0.8.0
 the TMDB, TheTVDB and AniList relays can also pass a client's own key through,
 so a client that holds one answers under its own agreement rather than the
 operator's. Every public page credits the sources that are on, with the
@@ -397,7 +518,10 @@ while it is on; see [The API](api.md#connecting-claude-code-or-open-webui).
 - **TheTVDB** is free below $50,000 a year of revenue, with a credit and a
   direct link shown to end users: the footer carries both.
 - **TVmaze**'s data is CC BY-SA 4.0, credited on every page with the licence
-  named.
+  named, while TVmaze or its index is on.
+- **Wikidata**'s data is CC0, free to reuse with no credit asked. Its query
+  service is asked one query at a time, by a client that names itself, as
+  Wikimedia's policy wants.
 - **AniList**'s API is free for non-commercial use, and forbids hoarding or mass
   collection, use as a backup or a data store, and use within a competing list
   or tracker service: this server asks about one work at a time, for the works
@@ -429,8 +553,8 @@ while it is on; see [The API](api.md#connecting-claude-code-or-open-webui).
 Each source has its own switch, and a source switched off is asked nothing and
 credited nowhere; what it gave while on stays as it is. The further sources are
 settings — `tvmaze.enabled`, `anilist.enabled`, `mal.enabled`, `imdb.enabled`,
-`imdb.akas`, `imdb.episodes`, `fankai.enabled` and `fankai.wiki`, under
-**Settings › Further sources** — as
+`imdb.akas`, `imdb.episodes`, `tvmaze.index`, `wikidata.enabled`,
+`fankai.enabled` and `fankai.wiki`, under **Settings › Further sources** — as
 are Skyhook's and Radarr's services (`skyhook.enrich`, `skyhook.fallback`,
 `radarr.enrich`, `radarr.fallback`). TheTVDB and Fanart.tv are on while they
 have a key and `AMS_TVDB_ENABLED` or `AMS_FANART_ENABLED` is not `false`; TMDB

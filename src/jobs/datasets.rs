@@ -54,20 +54,40 @@ pub const IMDB: &str = "imdb-ratings";
 pub const IMDB_AKAS: &str = "imdb-akas";
 /// The episodes IMDb lists of each series: `title.episode`.
 pub const IMDB_EPISODES: &str = "imdb-episodes";
+/// TVmaze's index of every series it lists: see `jobs::tvmaze_index`.
+pub const TVMAZE_INDEX: &str = "tvmaze-index";
+/// Wikidata's links between the sites' ids: see `jobs::wikidata`.
+pub const WIKIDATA_IDS: &str = "wikidata-ids";
+/// TheTVDB's feed of the series it deleted or merged into others: see
+/// `service::numbering::watch`.
+pub const TVDB_DELETED: &str = crate::service::numbering::FEED;
 
 /// Every list, in the order the schedule looks at them: IMDb's episodes
 /// before its ratings, so that switched on together, the episodes' ratings
 /// come with the first list of ratings rather than the next.
-pub const LISTS: [&str; 4] = [ANIME, IMDB_EPISODES, IMDB, IMDB_AKAS];
+pub const LISTS: [&str; 7] = [
+    ANIME,
+    IMDB_EPISODES,
+    IMDB,
+    IMDB_AKAS,
+    TVMAZE_INDEX,
+    WIKIDATA_IDS,
+    TVDB_DELETED,
+];
 
 /// How often each list is fetched again. The anime list moves by a handful of
 /// entries a week; IMDb republishes its ratings daily. Its titles and its
 /// episodes it republishes daily too, but they are half a gigabyte and fifty
 /// megabytes, and a title or an episode's number changes far less often
-/// than a rating: weekly.
+/// than a rating: weekly. TVmaze's index — the series it changed in the
+/// meantime — and Wikidata's links: weekly as well. TheTVDB's feed of the
+/// series it deleted: daily.
 pub const ANIME_EVERY: chrono::Duration = chrono::Duration::days(7);
 pub const IMDB_EVERY: chrono::Duration = chrono::Duration::days(1);
 pub const IMDB_LISTS_EVERY: chrono::Duration = chrono::Duration::days(7);
+pub const TVMAZE_EVERY: chrono::Duration = chrono::Duration::days(7);
+pub const WIKIDATA_EVERY: chrono::Duration = chrono::Duration::days(7);
+pub const TVDB_DELETED_EVERY: chrono::Duration = chrono::Duration::days(1);
 
 /// How soon IMDb's ratings are fetched again for works added since the last
 /// import. Only the works held here are kept from the file, so a work added an
@@ -133,13 +153,17 @@ pub fn anime_wanted(state: &AppState) -> bool {
     state.flag("anilist.enabled", false) || state.flag("mal.enabled", false)
 }
 
-/// Whether a list is wanted: the switch that needs it is on.
+/// Whether a list is wanted: the switch that needs it is on — for TheTVDB's
+/// feed, TheTVDB configured and the fallback numbering not turned off.
 pub fn wanted(state: &AppState, list: &str) -> bool {
     match list {
         ANIME => anime_wanted(state),
         IMDB => state.flag("imdb.enabled", false),
         IMDB_AKAS => state.flag("imdb.akas", false),
         IMDB_EPISODES => state.flag("imdb.episodes", false),
+        TVMAZE_INDEX => state.flag("tvmaze.index", false),
+        WIKIDATA_IDS => state.flag("wikidata.enabled", false),
+        TVDB_DELETED => state.tvdb.is_enabled() && crate::service::numbering::allowed(state),
         _ => false,
     }
 }
@@ -150,6 +174,9 @@ pub fn kind_of(list: &str) -> &'static str {
         ANIME => job::kinds::IMPORT_ANIME,
         IMDB => job::kinds::IMPORT_IMDB,
         IMDB_AKAS => job::kinds::IMDB_AKAS,
+        TVMAZE_INDEX => job::kinds::IMPORT_TVMAZE,
+        WIKIDATA_IDS => job::kinds::IMPORT_WIKIDATA,
+        TVDB_DELETED => job::kinds::TVDB_DELETED,
         _ => job::kinds::IMDB_EPISODES,
     }
 }
@@ -164,6 +191,9 @@ pub fn every(list: &str) -> chrono::Duration {
     match list {
         ANIME => ANIME_EVERY,
         IMDB => IMDB_EVERY,
+        TVMAZE_INDEX => TVMAZE_EVERY,
+        WIKIDATA_IDS => WIKIDATA_EVERY,
+        TVDB_DELETED => TVDB_DELETED_EVERY,
         _ => IMDB_LISTS_EVERY,
     }
 }
@@ -178,6 +208,8 @@ pub async fn run(state: AppState) {
 
     // When each list's last run failed, or was stopped, by its name.
     let mut failed: HashMap<&'static str, tokio::time::Instant> = HashMap::new();
+    // When the popularity of the works held was last worked out here.
+    let mut worked_out: Option<tokio::time::Instant> = None;
 
     loop {
         ticker.tick().await;
@@ -186,6 +218,16 @@ pub async fn run(state: AppState) {
         // the one holding the lease.
         if !state.coord.leads() {
             continue;
+        }
+
+        // Once a day, besides after each list that moves it: a series
+        // refreshed brings TVmaze's weight in its own answer, and works come
+        // and go. Not beside an import, which would only make it wait.
+        if worked_out.is_none_or(|at| at.elapsed() >= crate::jobs::popularity::EVERY)
+            && let Ok(_importing) = IMPORTING.try_lock()
+        {
+            crate::jobs::popularity::work_out_logged(&state).await;
+            worked_out = Some(tokio::time::Instant::now());
         }
 
         for list in LISTS {
@@ -420,17 +462,41 @@ pub enum Ended {
 }
 
 /// Run one list's import as a job, so it shows in the interface.
+///
+/// IMDb's ratings and TVmaze's index are what the popularity of the works
+/// held is worked out from: once either has landed, it is worked out again.
 async fn import_list(state: &AppState, list: &str, by: Option<&str>) -> Result<Ended> {
-    match list {
+    let ended = match list {
         ANIME => record(state, job::kinds::IMPORT_ANIME, by, import_anime(state))
             .await
             .map(Ended::Done),
         IMDB => record(state, job::kinds::IMPORT_IMDB, by, import_imdb(state))
             .await
             .map(Ended::Done),
-        IMDB_AKAS | IMDB_EPISODES => record_stoppable(state, list, by).await,
+        WIKIDATA_IDS => record(
+            state,
+            job::kinds::IMPORT_WIKIDATA,
+            by,
+            crate::jobs::wikidata::import(state),
+        )
+        .await
+        .map(Ended::Done),
+        TVDB_DELETED => record(
+            state,
+            job::kinds::TVDB_DELETED,
+            by,
+            crate::service::numbering::watch(state),
+        )
+        .await
+        .map(Ended::Done),
+        IMDB_AKAS | IMDB_EPISODES | TVMAZE_INDEX => record_stoppable(state, list, by).await,
         _ => bail!("{list} is not a list this server downloads"),
+    }?;
+
+    if matches!(list, IMDB | TVMAZE_INDEX) && matches!(ended, Ended::Done(_)) {
+        crate::jobs::popularity::work_out_logged(state).await;
     }
+    Ok(ended)
 }
 
 /// Run one import as a job, so it shows in the interface.
@@ -475,7 +541,7 @@ async fn record(
 
 /// A run of an import that can be stopped, as the import sees it: where it
 /// says how far it has got, and whether somebody asked it to stop.
-struct Run<'a> {
+pub(crate) struct Run<'a> {
     state: &'a AppState,
     /// None when the history could not be written: the work goes on, unseen.
     id: Option<String>,
@@ -483,7 +549,7 @@ struct Run<'a> {
 }
 
 impl Run<'_> {
-    fn stopped(&self) -> bool {
+    pub(crate) fn stopped(&self) -> bool {
         self.flag.as_ref().is_some_and(|flag| flag.stopped())
     }
 
@@ -493,7 +559,8 @@ impl Run<'_> {
         move || flag.as_ref().is_some_and(|flag| flag.stopped())
     }
 
-    async fn say(&self, detail: &str) {
+    /// Say how far the run has got, as `jobs::tasks::progress_of` reads it.
+    pub(crate) async fn say(&self, detail: &str) {
         if let Some(id) = &self.id
             && let Err(e) = job::progress(&self.state.db, id, detail).await
         {
@@ -519,10 +586,11 @@ async fn record_stoppable(state: &AppState, list: &str, by: Option<&str>) -> Res
         id,
     };
 
-    let outcome = if list == IMDB_AKAS {
-        import_akas(state, &run).await
-    } else {
-        import_episodes(state, &run).await
+    let outcome = match list {
+        IMDB_AKAS => import_akas(state, &run).await,
+        IMDB_EPISODES => import_episodes(state, &run).await,
+        TVMAZE_INDEX => crate::jobs::tvmaze_index::import(state, &run).await,
+        other => Err(anyhow!("{other} is not a list that can be stopped")),
     };
 
     if let Some(id) = &run.id {
@@ -761,6 +829,22 @@ async fn import_imdb(state: &AppState) -> Result<String> {
     // An episode is listed nowhere: its figure is read when its page asks.
     let before = repo::imdb::values(&state.db).await?;
     repo::imdb::replace_all(&state.db, &ratings).await?;
+
+    // How many votes each work held has today: the list keeps no more than
+    // today's, and how fast they come is what the popularity worked out here
+    // reads. Kept a week and a day; not worth failing the ratings over.
+    let votes: Vec<(String, i64)> = ratings
+        .iter()
+        .filter(|rating| is_work(rating))
+        .map(|rating| (rating.tconst.clone(), rating.votes))
+        .collect();
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    if let Err(e) = repo::imdb::keep_votes(&state.db, &today, &votes).await {
+        tracing::warn!(
+            error = format_args!("{e:#}"),
+            "could not keep the day's votes of IMDb's list"
+        );
+    }
 
     let kept: HashSet<&str> = ratings
         .iter()

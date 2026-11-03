@@ -46,6 +46,7 @@ server directly; Prometheus keeps the history.
 | `ams_upstream_requests_total{provider,outcome}` | Calls to each provider: `ok` (a 404 is an answer), `refused`, `failed`, `unreachable`. |
 | `ams_upstream_duration_seconds` | How long each provider took; a histogram. |
 | `ams_relay_stale_total{relay,from}` | Answers a relay — `tmdb`, `tvdb`, `anilist` — gave from what it kept because its service failed: `memory`, the last answer kept; `database`, a reference list. See [When a service fails](../relays.md#when-a-service-fails). |
+| `ams_relay_local_total{relay}` | Answers a relay — `tmdb`, `tvdb`, `anilist` — wrote itself from the catalogue, without asking its service. See [Answering from the catalogue](../relays.md#answering-from-the-catalogue). |
 | `ams_db_pool_size`, `ams_db_pool_idle`, `ams_db_pool_max` | The database's connections: open, idle, and the most the pool opens. |
 | `ams_db_pool_wait_seconds` | How long each connection was waited for; a histogram. |
 | `ams_queue_depth{kind}` | What waits: `refresh`, works due for a refresh; `media`, pictures and themes to fetch; `webhooks`, deliveries to send. |

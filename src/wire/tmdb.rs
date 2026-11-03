@@ -2667,6 +2667,348 @@ pub fn found(movies: Vec<Value>, series: Vec<Value>) -> Value {
     })
 }
 
+// ─── a collection ────────────────────────────────────────────────────────────
+
+/// What TMDB lists of each film of a collection: a search's result, less
+/// what a collection's list leaves out.
+const PART_KEYS: &[&str] = &[
+    "adult",
+    "backdrop_path",
+    "id",
+    "title",
+    "original_language",
+    "original_title",
+    "overview",
+    "poster_path",
+    "media_type",
+    "genre_ids",
+    "popularity",
+    "release_date",
+    "video",
+    "vote_average",
+    "vote_count",
+];
+
+/// A collection the catalogue keeps, as a document of TMDB's shape is
+/// written from it (`/3/collection/{id}`): from what the catalogue keeps of
+/// it first — its name and synopsis in the language asked, its pictures, its
+/// films, each one it holds as it reads the film — then from TMDB's own
+/// answer about it as it was kept, for what the catalogue keeps nothing of:
+/// a film's genres, the collection's other keys. A film it does not hold is
+/// written, in another language than the one its texts are kept in, by its
+/// original title and no synopsis, as TMDB writes a film it has nothing in
+/// that language for.
+pub struct Saga<'a> {
+    collection: &'a crate::domain::Collection,
+    /// TMDB's answer about it, as kept: in the language it was asked in,
+    /// with its pictures and its translations.
+    document: Option<&'a Value>,
+    language: &'a Language,
+    pictures: &'a dyn Pictures,
+    /// Its films the catalogue holds, each as its own document is written.
+    held: Vec<Work<'a>>,
+}
+
+impl<'a> Saga<'a> {
+    /// `held`, its films the catalogue holds and answers, read as they are
+    /// served.
+    pub fn new(
+        collection: &'a crate::domain::Collection,
+        document: Option<&'a Value>,
+        language: &'a Language,
+        pictures: &'a dyn Pictures,
+        held: &'a [MediaItem],
+    ) -> Self {
+        let document = document.filter(|document| {
+            document.get("id").and_then(Value::as_i64) == Some(collection.tmdb_id)
+        });
+        let held = held
+            .iter()
+            .filter_map(|item| Some(Work::new(item, item.external_ids.tmdb?, language, pictures)))
+            .collect();
+        Self {
+            collection,
+            document,
+            language,
+            pictures,
+            held,
+        }
+    }
+
+    fn theirs(&self, pointer: &str) -> Option<&'a Value> {
+        self.document?
+            .pointer(pointer)
+            .filter(|value| !value.is_null())
+    }
+
+    fn their_list(&self, pointer: &str) -> &'a [Value] {
+        self.theirs(pointer)
+            .and_then(Value::as_array)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether the language asked is the one its texts are kept in.
+    fn in_own_language(&self) -> bool {
+        let own = self
+            .collection
+            .language
+            .as_deref()
+            .unwrap_or(&self.language.stored);
+        own == self.language.asked
+    }
+
+    /// Its texts held in the language asked, where it is another.
+    fn translation(&self) -> Option<&'a Translation> {
+        self.collection
+            .translations
+            .iter()
+            .find(|translation| translation.language == self.language.asked)
+    }
+
+    /// Its name in the language asked: its own, in the language it is kept
+    /// in; else its translation's; else its name in its own language, where
+    /// TMDB said it, as TMDB names it where it has nothing in a language;
+    /// else its own.
+    fn name(&self) -> String {
+        if self.in_own_language() {
+            return self.collection.name.clone();
+        }
+        self.translation()
+            .and_then(|translation| some_text(translation.title.as_deref()))
+            .or_else(|| some_text(self.theirs("/original_name").and_then(Value::as_str)))
+            .unwrap_or_else(|| self.collection.name.clone())
+    }
+
+    /// Its synopsis in the language asked, or none.
+    fn overview(&self) -> String {
+        let text = if self.in_own_language() {
+            self.collection.overview.as_deref()
+        } else {
+            self.translation()
+                .and_then(|translation| translation.overview.as_deref())
+        };
+        some_text(text).unwrap_or_default()
+    }
+
+    fn path(&self, address: Option<&str>) -> Value {
+        address
+            .and_then(|address| self.pictures.path(address))
+            .map_or(Value::Null, Value::String)
+    }
+
+    /// One of its films, as its list carries it: TMDB's entry for it, as
+    /// kept, under the catalogue's values — the film's own where it holds
+    /// it, else what it kept of the film.
+    fn part(&self, part: &crate::domain::CollectionPart) -> Value {
+        let theirs = self
+            .their_list("/parts")
+            .iter()
+            .filter_map(Value::as_object)
+            .find(|entry| entry.get("id").and_then(Value::as_i64) == Some(part.tmdb_id));
+        let held = self
+            .held
+            .iter()
+            .find(|work| work.item.external_ids.tmdb == Some(part.tmdb_id));
+        let ours: Map<String, Value> = match held {
+            Some(work) => {
+                let mut map = match result(work, true) {
+                    Value::Object(map) => map,
+                    _ => Map::new(),
+                };
+                // A picture the film held has none of: the one kept with the
+                // collection.
+                for (key, kept) in [
+                    ("poster_path", &part.poster),
+                    ("backdrop_path", &part.backdrop),
+                ] {
+                    if map.get(key).is_none_or(Value::is_null) {
+                        map.insert(key.to_string(), self.path(kept.as_deref()));
+                    }
+                }
+                map
+            }
+            None => {
+                let own = self.in_own_language();
+                let original = part
+                    .original_title
+                    .clone()
+                    .unwrap_or_else(|| part.title.clone());
+                let their = |key: &str| theirs.and_then(|entry| entry.get(key)).cloned();
+                let mut map = Map::new();
+                map.insert("adult".into(), json!(part.is_adult));
+                map.insert("backdrop_path".into(), self.path(part.backdrop.as_deref()));
+                map.insert("id".into(), json!(part.tmdb_id));
+                map.insert(
+                    "title".into(),
+                    json!(if own {
+                        part.title.clone()
+                    } else {
+                        original.clone()
+                    }),
+                );
+                map.insert(
+                    "original_language".into(),
+                    json!(part.original_language.clone().unwrap_or_default()),
+                );
+                map.insert("original_title".into(), json!(original));
+                map.insert(
+                    "overview".into(),
+                    json!(part.overview.clone().filter(|_| own).unwrap_or_default()),
+                );
+                map.insert("poster_path".into(), self.path(part.poster.as_deref()));
+                map.insert("media_type".into(), json!("movie"));
+                map.insert(
+                    "genre_ids".into(),
+                    their("genre_ids").unwrap_or_else(|| json!([])),
+                );
+                map.insert("popularity".into(), json!(part.popularity.unwrap_or(0.0)));
+                map.insert(
+                    "release_date".into(),
+                    json!(part.release_date.clone().unwrap_or_default()),
+                );
+                map.insert("video".into(), their("video").unwrap_or(Value::Bool(false)));
+                map.insert(
+                    "vote_average".into(),
+                    json!(part.vote_average.unwrap_or(0.0)),
+                );
+                map.insert("vote_count".into(), json!(part.vote_count.unwrap_or(0)));
+                map
+            }
+        };
+
+        let mut entry: Map<String, Value> = theirs.cloned().unwrap_or_default();
+        for key in PART_KEYS {
+            if let Some(value) = ours.get(*key) {
+                entry.insert((*key).to_string(), value.clone());
+            }
+        }
+        // Where TMDB's entry names the film as it names a series.
+        for (key, from) in [("name", "title"), ("original_name", "original_title")] {
+            if entry.contains_key(key)
+                && let Some(value) = ours.get(from)
+            {
+                entry.insert(key.to_string(), value.clone());
+            }
+        }
+        Value::Object(entry)
+    }
+
+    /// Its pictures, `{backdrops, posters}`: TMDB's, as kept, each kept
+    /// where its language is one the request takes; else the poster and the
+    /// background it keeps, of no language said.
+    fn images(&self, filters: &Filters) -> Value {
+        let list = |key: &str, own: Option<&str>| -> Vec<Value> {
+            if let Some(theirs) = self.theirs(&format!("/images/{key}")) {
+                return theirs
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|entry| {
+                        filters.takes_image(entry.get("iso_639_1").and_then(Value::as_str))
+                    })
+                    .cloned()
+                    .collect();
+            }
+            let Some(path) = own.and_then(|address| self.pictures.path(address)) else {
+                return Vec::new();
+            };
+            if !filters.takes_image(None) {
+                return Vec::new();
+            }
+            let (width, height) = own
+                .and_then(|address| self.pictures.size(address))
+                .unwrap_or((0, 0));
+            vec![json!({
+                "aspect_ratio": aspect(width, height),
+                "height": height,
+                "iso_639_1": null,
+                "file_path": path,
+                "vote_average": 0.0,
+                "vote_count": 0,
+                "width": width,
+            })]
+        };
+        json!({
+            "backdrops": list("backdrops", self.collection.backdrop.as_deref()),
+            "posters": list("posters", self.collection.poster.as_deref()),
+        })
+    }
+
+    /// Its translations: TMDB's list, as kept; else one of each language it
+    /// keeps texts in.
+    fn translations(&self) -> Value {
+        if let Some(theirs) = self.theirs("/translations/translations") {
+            return json!({ "translations": theirs });
+        }
+        let translations: Vec<Value> = self
+            .collection
+            .translations
+            .iter()
+            .map(|translation| {
+                json!({
+                    "iso_3166_1": "",
+                    "iso_639_1": language::two_letter(&translation.language),
+                    "name": "",
+                    "english_name": "",
+                    "data": {
+                        "title": translation.title.clone().unwrap_or_default(),
+                        "overview": translation.overview.clone().unwrap_or_default(),
+                        "homepage": "",
+                    },
+                })
+            })
+            .collect();
+        json!({ "translations": translations })
+    }
+}
+
+/// A collection's own document, `/3/collection/{id}`, without what is
+/// appended to it: TMDB's answer as kept, less what was appended to it,
+/// under the catalogue's values.
+pub fn collection(saga: &Saga) -> Value {
+    let mut document: Map<String, Value> = saga
+        .document
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    document.shift_remove("images");
+    document.shift_remove("translations");
+    let parts: Vec<Value> = saga
+        .collection
+        .parts
+        .iter()
+        .map(|part| saga.part(part))
+        .collect();
+    for (key, value) in [
+        ("id", json!(saga.collection.tmdb_id)),
+        ("name", json!(saga.name())),
+        ("overview", json!(saga.overview())),
+        ("poster_path", saga.path(saga.collection.poster.as_deref())),
+        (
+            "backdrop_path",
+            saga.path(saga.collection.backdrop.as_deref()),
+        ),
+        ("parts", Value::Array(parts)),
+    ] {
+        document.insert(key.to_string(), value);
+    }
+    Value::Object(document)
+}
+
+/// What a collection's document carries under `name`, appended or on its
+/// own: its pictures and its translations. Nothing else of TMDB's.
+pub fn collection_part(saga: &Saga, name: &str, filters: &Filters) -> Part {
+    let mut value = match name {
+        "images" => saga.images(filters),
+        "translations" => saga.translations(),
+        _ => return Part::Unknown,
+    };
+    if let Value::Object(map) = &mut value {
+        map.shift_insert(0, "id".into(), json!(saga.collection.tmdb_id));
+    }
+    Part::Doc(value)
+}
+
 /// Whether the catalogue numbers a series' episodes as TMDB's own document
 /// does: as many episodes in each season TMDB lists, and none in a season it
 /// does not. What tells TMDB's numbering from a group of TMDB's that the
@@ -2976,6 +3318,11 @@ mod tests {
             "search-movie" => include_str!("fixtures/tmdb/search-movie.json"),
             "search-tv" => include_str!("fixtures/tmdb/search-tv.json"),
             "search-multi" => include_str!("fixtures/tmdb/search-multi.json"),
+            "collection" => include_str!("fixtures/tmdb/collection.json"),
+            "collection-images" => include_str!("fixtures/tmdb/collection-images.json"),
+            "collection-translations" => {
+                include_str!("fixtures/tmdb/collection-translations.json")
+            }
             other => panic!("no fixture {other}"),
         };
         serde_json::from_str(text).expect("a fixture reads")
@@ -4003,5 +4350,115 @@ mod tests {
         assert_eq!(legacy_size(Some(1080)), json!("HD"));
         assert_eq!(legacy_size(Some(480)), json!("HQ"));
         assert_eq!(legacy_size(Some(2160)), Value::Null);
+    }
+    // ─── a collection ────────────────────────────────────────────────────
+
+    /// TMDB's answer about the Star Wars collection as the catalogue keeps
+    /// it — its pictures and its translations appended — and the collection
+    /// mapped from it.
+    fn kept_saga() -> (Value, crate::domain::Collection) {
+        let mut answer = fixture("collection");
+        answer["images"] = appended(fixture("collection-images"));
+        answer["translations"] = appended(fixture("collection-translations"));
+        let typed: models::Collection =
+            serde_json::from_value(answer.clone()).expect("a collection");
+        (answer, map::collection(10, &typed, "en"))
+    }
+
+    /// Recorded from TMDB by the `tmdb-api` crate (`assets/collection-details.json`),
+    /// reduced to two films; its pictures and translations as TMDB's own
+    /// documentation gives them.
+    #[test]
+    fn a_collection_is_written_as_tmdb_writes_one() {
+        let theirs = fixture("collection");
+        let (answer, kept) = kept_saga();
+        let language = english();
+
+        // From what the catalogue keeps alone: TMDB's shape, its values.
+        let saga = Saga::new(&kept, None, &language, &TmdbOnly, &[]);
+        let ours = collection(&saga);
+        assert_same_shape(&theirs, &ours, &[]);
+        assert_eq!(ours["name"], theirs["name"]);
+        assert_eq!(ours["poster_path"], theirs["poster_path"]);
+        assert_eq!(ours["parts"][1]["title"], json!("The Empire Strikes Back"));
+        assert_eq!(ours["parts"][0]["genre_ids"], json!([]), "kept nowhere");
+
+        // With TMDB's answer kept beside it: TMDB's document, whole.
+        let saga = Saga::new(&kept, Some(&answer), &language, &TmdbOnly, &[]);
+        assert_eq!(collection(&saga), theirs);
+        let every = Filters::from_query(None, None);
+        let Part::Doc(images) = collection_part(&saga, "images", &every) else {
+            panic!("its pictures are written here");
+        };
+        assert_eq!(images, fixture("collection-images"));
+        let english_only = Filters::from_query(Some("language=en"), Some(&language));
+        let Part::Doc(images) = collection_part(&saga, "images", &english_only) else {
+            panic!("its pictures are written here");
+        };
+        assert_eq!(
+            images["posters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["iso_639_1"].clone())
+                .collect::<Vec<_>>(),
+            [json!("en")]
+        );
+        assert_eq!(images["backdrops"], json!([]));
+        let Part::Doc(translations) = collection_part(&saga, "translations", &every) else {
+            panic!("its translations are written here");
+        };
+        assert_eq!(translations, fixture("collection-translations"));
+        assert_eq!(collection_part(&saga, "lists", &every), Part::Unknown);
+    }
+
+    #[test]
+    fn a_collection_in_another_language_is_its_translation_and_its_films_held_their_own() {
+        let (answer, kept) = kept_saga();
+        let french = Language::new("fr-FR", "eng");
+        let mut held = MediaItem::empty(MediaKind::Movie);
+        held.title = "The Empire Strikes Back".into();
+        held.original_title = Some("The Empire Strikes Back".into());
+        held.external_ids = ExternalIds {
+            tmdb: Some(1891),
+            ..Default::default()
+        };
+        held.genres = vec!["Adventure".into(), "Action".into()];
+        held.translations = vec![Translation {
+            language: "fra".into(),
+            title: Some("L'Empire contre-attaque".into()),
+            overview: Some("Le synopsis tenu ici.".into()),
+            tagline: None,
+            is_manual: false,
+        }];
+        let held = [held];
+        let saga = Saga::new(&kept, Some(&answer), &french, &TmdbOnly, &held);
+        let ours = collection(&saga);
+        assert_same_shape(&fixture("collection"), &ours, &[]);
+        assert_eq!(ours["name"], json!("Collection Star Wars"));
+        assert!(ours["overview"].as_str().is_some_and(|o| !o.is_empty()));
+        // Held nowhere here: its title in its own language, no synopsis.
+        assert_eq!(ours["parts"][0]["title"], json!("Star Wars"));
+        assert_eq!(ours["parts"][0]["overview"], json!(""));
+        // Held: as the catalogue reads it in French.
+        assert_eq!(ours["parts"][1]["title"], json!("L'Empire contre-attaque"));
+        assert_eq!(ours["parts"][1]["overview"], json!("Le synopsis tenu ici."));
+        assert_eq!(ours["parts"][1]["genre_ids"], json!([12, 28]));
+
+        // Its texts kept, without TMDB's answer: the translations it keeps.
+        let saga = Saga::new(&kept, None, &french, &TmdbOnly, &[]);
+        let every = Filters::from_query(None, None);
+        let Part::Doc(translations) = collection_part(&saga, "translations", &every) else {
+            panic!("its translations are written here");
+        };
+        assert_same_shape(&fixture("collection-translations"), &translations, &[]);
+        let Part::Doc(images) = collection_part(&saga, "images", &every) else {
+            panic!("its pictures are written here");
+        };
+        assert_same_shape(&fixture("collection-images"), &images, &[]);
+        assert_eq!(
+            images["posters"][0]["file_path"],
+            fixture("collection")["poster_path"]
+        );
     }
 }

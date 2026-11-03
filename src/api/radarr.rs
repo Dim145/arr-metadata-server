@@ -282,7 +282,10 @@ async fn changed(
     Ok(Json(movie::changed_since(&state, since).await?))
 }
 
-/// A collection and the movies in it.
+/// A collection and the movies in it, as the catalogue keeps it — asked of
+/// TMDB once, the first time it is wanted, where it is not kept yet (see
+/// [`crate::service::collection`]) — named in the caller's language where
+/// TMDB has its name in it, its pictures where this server keeps them.
 ///
 /// The parts carry search-level detail only: fetching each in full would be
 /// dozens of upstream calls for a list Radarr uses to offer suggestions. Each
@@ -304,31 +307,41 @@ async fn collection(
     Extension(identity): Extension<Identity>,
     Path(tmdb_id): Path<i64>,
 ) -> AppResult<Json<CollectionResource>> {
-    let language = language::tmdb_locale(
+    let language = crate::service::collection::language_of(&language::tmdb_locale(
         None,
         &state.language(identity.client_id(), identity.peer_id()),
-    );
-    let found = movie::collection(&state, tmdb_id, &language)
+    ));
+    let found = crate::service::collection::get(&state, tmdb_id)
         .await?
         .ok_or(AppError::NotFound)?;
+    let (name, overview) = found.texts_in(&language);
 
     let named = CollectionResource {
-        name: found.name.clone(),
+        name: name.to_string(),
         overview: None,
         tmdb_id,
         images: Vec::new(),
         parts: Vec::new(),
     };
-    let mut parts = served(&state, &identity, found.parts);
+    let parts = found
+        .parts
+        .iter()
+        .map(crate::providers::tmdb::map::collection_part_to_item)
+        .collect();
+    let mut parts = served(&state, &identity, parts);
     for part in &mut parts {
         part.collection = Some(named.clone());
     }
 
+    let picture = |url: &Option<String>| url.as_deref().and_then(|url| state.media.elsewhere(url));
     Ok(Json(CollectionResource {
-        name: found.name,
-        overview: found.overview,
+        name: name.to_string(),
+        overview: overview.map(str::to_string),
         tmdb_id,
-        images: collection_images(found.poster.as_deref(), found.backdrop.as_deref()),
+        images: collection_images(
+            picture(&found.poster).as_deref(),
+            picture(&found.backdrop).as_deref(),
+        ),
         parts,
     }))
 }
@@ -537,6 +550,80 @@ mod tests {
             .map(|film| (film.tmdb_id, film.title.as_str()))
             .collect();
         assert_eq!(said, [(949, "Heat"), (950, "Heat")]);
+    }
+
+    /// A collection kept is answered from what is kept, its parts each
+    /// naming it, as api.radarr.video's do.
+    #[tokio::test]
+    async fn a_collection_kept_is_answered_with_its_films() {
+        let state = crate::api::native::testing::server().await;
+        repo::collection::write(
+            &state.db,
+            &crate::domain::Collection {
+                id: String::new(),
+                tmdb_id: 9_500_001,
+                name: "A Kept Saga".into(),
+                overview: Some("Two films.".into()),
+                poster: Some("https://image.tmdb.org/t/p/original/saga.jpg".into()),
+                backdrop: None,
+                language: Some("eng".into()),
+                translations: Vec::new(),
+                parts: ["One", "Two"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(at, title)| crate::domain::CollectionPart {
+                        tmdb_id: 9_500_010 + at as i64,
+                        title: format!("The Saga: Part {title}"),
+                        original_title: None,
+                        overview: None,
+                        release_date: Some(format!("200{at}-05-01")),
+                        original_language: Some("en".into()),
+                        poster: Some(format!("https://image.tmdb.org/t/p/original/{at}.jpg")),
+                        backdrop: None,
+                        popularity: None,
+                        vote_average: Some(7.5),
+                        vote_count: Some(100),
+                        is_adult: false,
+                        sort_order: at as i32,
+                    })
+                    .collect(),
+                refreshed_at: String::new(),
+            },
+        )
+        .await
+        .expect("kept");
+
+        let Json(found) = collection(
+            State(state.clone()),
+            Extension(Identity::Network(None)),
+            Path(9_500_001),
+        )
+        .await
+        .expect("answered");
+        assert_eq!(
+            (found.name.as_str(), found.overview.as_deref()),
+            ("A Kept Saga", Some("Two films."))
+        );
+        assert_eq!(found.images.len(), 1);
+        let parts: Vec<(i64, &str, Option<&str>)> = found
+            .parts
+            .iter()
+            .map(|p| {
+                (
+                    p.tmdb_id,
+                    p.title.as_str(),
+                    p.collection.as_ref().map(|c| c.name.as_str()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            parts,
+            [
+                (9_500_010, "The Saga: Part One", Some("A Kept Saga")),
+                (9_500_011, "The Saga: Part Two", Some("A Kept Saga")),
+            ]
+        );
+        assert!(found.parts.iter().all(|p| !p.images.is_empty()));
     }
 
     #[test]

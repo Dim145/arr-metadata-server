@@ -13,6 +13,8 @@
 //! can edit it.
 
 pub mod anime;
+pub mod bridge;
+pub mod collection;
 pub mod cour;
 pub mod gather;
 pub mod ids;
@@ -21,9 +23,12 @@ pub mod language;
 pub mod listing;
 pub mod merge;
 pub mod movie;
+pub mod numbering;
 pub mod orders;
+pub mod popularity;
 pub mod scene;
 pub mod series;
+pub mod tvmaze_index;
 pub mod webhook;
 
 use std::sync::Arc;
@@ -92,6 +97,9 @@ pub async fn load(state: &AppState, id: &str) -> Result<Option<MediaItem>> {
             "could not read IMDb's rating"
         );
     }
+
+    // Where TMDB gives the work no popularity, the one worked out here.
+    popularity::overlay(state, std::slice::from_mut(&mut item)).await;
 
     let overrides = repo::override_field::list(&state.db, id).await?;
     // As served in the language it is stored in, a text locked there laid
@@ -232,11 +240,15 @@ pub fn redact_for_reader(identity: &crate::auth::Identity, items: &mut [MediaIte
     }
 }
 
-/// IMDb's figure for every work of a list, in one query.
+/// IMDb's figure for every work of a list, in one query — and, where TMDB
+/// gives a work no popularity, the one worked out here, in another: every
+/// list of works the site draws passes this way.
 ///
 /// A failure costs the list IMDb's figure and nothing else: the stored ratings
 /// are already on every card.
 pub async fn overlay_imdb_many(state: &AppState, items: &mut [MediaItem]) {
+    popularity::overlay(state, items).await;
+
     if !state.flag("imdb.enabled", false) {
         return;
     }
@@ -320,6 +332,18 @@ pub(crate) async fn find_existing(state: &AppState, item: &MediaItem) -> Result<
         if let Some(id) = repo::item::find_id_by_external(&state.db, source, &value).await? {
             return Ok(Some(id));
         }
+    }
+
+    // A series TheTVDB merged into the one it answers for, held here under
+    // the id it had, while no work holds the one TheTVDB kept: the work it
+    // is (`service::numbering`). Nothing else may name it — no TMDB id — and
+    // its TheTVDB ids differ, which below says is another work.
+    if item.kind == MediaKind::Series
+        && let Some(tvdb) = item.external_ids.tvdb
+        && let Some(heir) = repo::order::merge_heir(&state.db, tvdb).await?
+        && crate::service::numbering::takes_id(state, &heir, tvdb).await
+    {
+        return Ok(Some(heir));
     }
 
     // IMDb last: it is the one most often shared, between a film and its remake
@@ -508,12 +532,15 @@ pub async fn persist(
     provenance: crate::merge::provenance::Provenance,
     failure: Option<&str>,
 ) -> Result<MediaItem> {
-    persist_as(state, item, snapshots, provenance, failure, false).await
+    persist_as(state, item, snapshots, provenance, failure, None).await
 }
 
-/// [`persist`], told whether this refresh handed the series' numbering from
-/// one source to the other: what its journal then says of the seasons and
-/// the episodes it moved (`fallback`).
+/// [`persist`], told how this refresh handed the series' numbering from one
+/// source to the other, when it did: what its journal then says of the
+/// seasons and the episodes it moved (`fallback`). For a series TheTVDB no
+/// longer knows, they moved nothing the clients are sent — the numbering
+/// they were sent is kept, frozen, once the work is written — and no
+/// renumbering is told.
 ///
 /// What it changes in a work held here is written to the work's journal
 /// once the work is, at once, and nothing when it changes nothing:
@@ -525,7 +552,7 @@ pub(crate) async fn persist_as(
     snapshots: &[(String, String)],
     provenance: crate::merge::provenance::Provenance,
     failure: Option<&str>,
-    renumbered: bool,
+    numbering: Option<gather::NumberingChange>,
 ) -> Result<MediaItem> {
     use crate::merge::provenance::Watched;
 
@@ -606,7 +633,7 @@ pub(crate) async fn persist_as(
                 was.as_ref(),
                 &provenance,
             );
-            let cause = |change: &crate::merge::provenance::FieldChange| match renumbered
+            let cause = |change: &crate::merge::provenance::FieldChange| match numbering.is_some()
                 && change.scope != "item"
             {
                 true => Cause::Fallback,
@@ -632,7 +659,9 @@ pub(crate) async fn persist_as(
     .await?;
 
     journal(state, &item.id, &changed).await;
-    crate::arr::renumber::tell(state, &item, &moved).await;
+    if numbering != Some(gather::NumberingChange::Dropped) {
+        crate::arr::renumber::tell(state, &item, &moved).await;
+    }
 
     // Refreshed in part, where its refreshes had been going well: told once.
     if was_well && let Some(error) = &item.refresh_error {

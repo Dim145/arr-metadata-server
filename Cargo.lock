@@ -273,6 +273,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "governor",
+ "graphql-parser",
  "hmac 0.13.0",
  "http-body-util",
  "hyper",
@@ -1961,6 +1962,16 @@ dependencies = [
  "smallvec",
  "spinning_top",
  "web-time",
+]
+
+[[package]]
+name = "graphql-parser"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a818c0d883d7c0801df27be910917750932be279c7bc82dc541b8769425f409"
+dependencies = [
+ "combine",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

@@ -22,7 +22,7 @@ use crate::{
     },
 };
 
-use super::{DATE_CHECKED, STUDIO_AUTHORITIES, TVDB_NUMBERED};
+use super::{CHARACTER_AUTHORITIES, DATE_CHECKED, STUDIO_AUTHORITIES, TVDB_NUMBERED};
 
 /// Every provider a work can be made from, IMDb aside: its rating is laid
 /// over at reading time and it never contributes to a merge.
@@ -244,6 +244,14 @@ const LINES: &[Line] = &[
     // TheTVDB's characters are matched into the list, whoever gave it: see
     // `merge_cast`.
     line(People, "castMatched", Union, &[TVDB]),
+    // The characters as things of their own: every source's, one character
+    // once — by an id both give, its name, or who plays it — its name, its
+    // picture and its role AniList's where it has them: see
+    // `merge::characters`.
+    with_authorities(
+        line(People, "characters", Union, &[TVDB, ANILIST]),
+        CHARACTER_AUTHORITIES,
+    ),
     only(
         line(People, "episodeCredits", First, &[TMDB]),
         MediaKind::Series,
@@ -334,12 +342,17 @@ const LINES: &[Line] = &[
 /// where one is. Everybody else's credits are dropped, as before.
 ///
 /// The credits of single episodes are the first provider's to have any.
+///
+/// Returns the credits of TheTVDB's that were matched into the list, by
+/// their id, each with the id of the credit it went into: the characters
+/// they played are played by that one now.
 pub fn merge_cast(
     credits: &mut Vec<Credit>,
     people: &mut People,
     other_credits: Vec<Credit>,
     other: People,
-) {
+) -> BTreeMap<String, String> {
+    let mut renamed = BTreeMap::new();
     let People {
         episodes,
         by_credit: mut known,
@@ -375,9 +388,10 @@ pub fn merge_cast(
             }
         }
         *credits = theirs;
-        match_in(credits, people, held, held_known);
+        match_in(credits, people, held, held_known, &mut renamed);
     }
-    match_in(credits, people, characters, known);
+    match_in(credits, people, characters, known, &mut renamed);
+    renamed
 }
 
 /// Whether a credit is one of TheTVDB's characters: a TheTVDB people id, and
@@ -386,12 +400,15 @@ fn is_character(credit: &Credit, known: &BTreeMap<String, PersonRef>) -> bool {
     credit.tmdb_person_id.is_none() && known.get(&credit.id).is_some_and(|p| p.tvdb_id.is_some())
 }
 
-/// Match TheTVDB's characters into the list, adding those it lacks after it.
+/// Match TheTVDB's characters into the list, adding those it lacks after it;
+/// those matched are written into `renamed`, by their id, with the id of the
+/// credit each went into.
 fn match_in(
     credits: &mut Vec<Credit>,
     people: &mut People,
     characters: Vec<Credit>,
     mut known: BTreeMap<String, PersonRef>,
+    renamed: &mut BTreeMap<String, String>,
 ) {
     let mut next = credits
         .iter()
@@ -408,6 +425,7 @@ fn match_in(
         });
         match matched {
             Some(ours) => {
+                renamed.insert(theirs.id.clone(), ours.id.clone());
                 let person = people.by_credit.entry(ours.id.clone()).or_default();
                 person.tvdb_id = person.tvdb_id.or(their_person.tvdb_id);
                 if ours.character_name.is_none() {
@@ -447,7 +465,7 @@ fn match_in(
 /// of its words aside — TheTVDB writes some Japanese names family name
 /// first where TMDB does not — or the name one gives in its own script
 /// being the other's.
-fn same_person(
+pub(super) fn same_person(
     ours: &Credit,
     our_person: Option<&PersonRef>,
     theirs: &Credit,

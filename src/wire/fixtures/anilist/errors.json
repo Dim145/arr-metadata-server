@@ -1,0 +1,98 @@
+{
+ "not-found": {
+  "query": "{ Media(id: 999999999) { id } }",
+  "variables": {},
+  "body": {
+   "errors": [
+    {
+     "message": "Not Found.",
+     "status": 404,
+     "locations": [
+      {
+       "line": 1,
+       "column": 3
+      }
+     ]
+    }
+   ],
+   "data": {
+    "Media": null
+   }
+  },
+  "status": 404
+ },
+ "unknown-field": {
+  "query": "query {\n  Media(id: 21) {\n    idd\n  }\n}",
+  "variables": {},
+  "body": {
+   "errors": [
+    {
+     "message": "Cannot query field \"idd\" on type \"Media\". Did you mean \"id\"?",
+     "status": 400,
+     "locations": [
+      {
+       "line": 3,
+       "column": 5
+      }
+     ]
+    }
+   ],
+   "data": null
+  },
+  "status": 400
+ },
+ "syntax": {
+  "query": "{ Media(id: 21) { id }",
+  "variables": {},
+  "body": {
+   "errors": [
+    {
+     "message": "Syntax Error: Expected Name, found <EOF>",
+     "status": 400,
+     "locations": [
+      {
+       "line": 1,
+       "column": 23
+      }
+     ]
+    }
+   ],
+   "data": null
+  },
+  "status": 400
+ },
+ "missing-variable": {
+  "query": "query ($id: Int!) {\n  Media(id: $id) { id }\n}",
+  "variables": {},
+  "body": {
+   "errors": [
+    {
+     "message": "Variable \"$id\" of required type \"Int!\" was not provided.",
+     "status": 400
+    }
+   ],
+   "data": null
+  },
+  "status": 400
+ },
+ "unknown-fragment": {
+  "query": "{ Media(id: 21) { ...Missing } }",
+  "variables": {},
+  "body": {
+   "errors": [
+    {
+     "message": "Unknown fragment \"Missing\".",
+     "status": 400,
+     "locations": [
+      {
+       "line": 1,
+       "column": 22
+      }
+     ]
+    }
+   ],
+   "data": null
+  },
+  "status": 400
+ }
+}

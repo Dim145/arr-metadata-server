@@ -18,9 +18,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::domain::{
-    AlternativeTitle, Credit, Episode, Image, Keyword, MediaItem, MediaKind, Relation, Season,
-    fields::ITEM_FIELDS,
+use crate::{
+    domain::{
+        AlternativeTitle, Credit, Episode, Image, Keyword, MediaItem, MediaKind, Relation, Season,
+        fields::ITEM_FIELDS,
+        person::{Character, CharacterCredit, CharacterVoice},
+    },
+    providers::names,
 };
 
 use super::{Contribution, DATE_CHECKED, TVDB_NUMBERED};
@@ -707,6 +711,8 @@ pub fn reconstruct(
         .filter(|v| v.source.as_deref() == Some(provider))
         .cloned()
         .collect();
+    // Each character it gave, though another's list holds it.
+    item.characters = characters_given(stored, provider);
     // What it said of its own pictures, by their addresses.
     let own_addresses: std::collections::HashSet<&str> = item
         .images
@@ -728,7 +734,8 @@ pub fn reconstruct(
         || !item.alternative_titles.is_empty()
         || !item.releases.is_empty()
         || !item.companies.is_empty()
-        || !item.videos.is_empty();
+        || !item.videos.is_empty()
+        || !item.characters.is_empty();
     (gave_a_value || gave_a_list).then_some(item)
 }
 
@@ -759,7 +766,94 @@ pub fn leftover(stored: &MediaItem, answered: &[&str]) -> MediaItem {
     item.companies
         .retain(|company| !theirs(company.source.as_deref()));
     item.videos.retain(|video| !theirs(video.source.as_deref()));
+    // Nor a character every source that gave it answered for: one a source
+    // that did not answer gave stands, without the voices of those that did.
+    item.characters.retain_mut(|character| {
+        let givers = givers(character);
+        if !givers.is_empty() && givers.iter().all(|giver| answered.contains(giver)) {
+            return false;
+        }
+        character
+            .voices
+            .retain(|voice| !answered.iter().any(|source| voiced_by(source, voice)));
+        true
+    });
     item
+}
+
+// ─── characters ──────────────────────────────────────────────────────────────
+
+/// The sources that file a character under an id of their own, which a
+/// character two of them give keeps both of (`Character::complete`).
+const CHARACTER_SOURCES: [&str; 3] = [names::TVDB, names::ANILIST, names::MAL];
+
+/// The id `provider` files a character under, where the character carries
+/// one: TheTVDB's record of the part, AniList's, MyAnimeList's.
+fn filed_by(provider: &str, character: &Character) -> Option<i64> {
+    match provider {
+        names::TVDB => character.tvdb_id,
+        names::ANILIST => character.anilist_id,
+        names::MAL => character.mal_id,
+        _ => None,
+    }
+}
+
+/// Whether `provider` named this voice: AniList's voices carry AniList's ids
+/// for them, MyAnimeList's its own.
+fn voiced_by(provider: &str, voice: &CharacterVoice) -> bool {
+    match provider {
+        names::ANILIST => voice.anilist_id.is_some(),
+        names::MAL => voice.mal_id.is_some(),
+        _ => false,
+    }
+}
+
+/// Whether `provider` gave a work this character: its list holds it, or it
+/// completed the list's — the character carries the id `provider` files it
+/// under, or a voice it named. Kept no other way, who gave a character is
+/// read off it: every source that gives one gives its own id for it, and a
+/// character two sources give keeps both.
+pub fn gave_character(provider: &str, character: &CharacterCredit) -> bool {
+    character.source.as_deref() == Some(provider)
+        || filed_by(provider, &character.character).is_some()
+        || character
+            .voices
+            .iter()
+            .any(|voice| voiced_by(provider, voice))
+}
+
+/// Every source that gave a work this character.
+fn givers(character: &CharacterCredit) -> Vec<&str> {
+    let mut givers: Vec<&str> = character.source.as_deref().into_iter().collect();
+    for source in CHARACTER_SOURCES {
+        if !givers.contains(&source) && gave_character(source, character) {
+            givers.push(source);
+        }
+    }
+    givers
+}
+
+/// The characters `provider` gave the stored work, as the merge is handed a
+/// source's answer: each as the work holds it, whoever's list it is in, the
+/// voices `provider` did not name aside, in their order. What a source that
+/// did not answer is given back (see [`reconstruct`]), and what an answer
+/// that says nothing of its characters — AniList asked without them — is
+/// given in their place: the characters it gave stay, with what it said of
+/// them, rather than go with its silence.
+pub fn characters_given(stored: &MediaItem, provider: &str) -> Vec<CharacterCredit> {
+    let mut given: Vec<CharacterCredit> = stored
+        .characters
+        .iter()
+        .filter(|character| gave_character(provider, character))
+        .cloned()
+        .collect();
+    given.sort_by_key(|character| character.sort_order);
+    for (at, character) in given.iter_mut().enumerate() {
+        character.voices.retain(|voice| voiced_by(provider, voice));
+        character.source = Some(provider.to_string());
+        character.sort_order = i32::try_from(at).unwrap_or(i32::MAX);
+    }
+    given
 }
 
 // ─── what changed ────────────────────────────────────────────────────────────
@@ -2432,5 +2526,205 @@ mod tests {
         assert_eq!(after.videos.len(), 1);
         assert_eq!(after.keyword_entities.len(), 1);
         assert_eq!(now.fields["keywordEntities"].from, "tmdb");
+    }
+
+    /// An anime's characters as TheTVDB and AniList give them: Eren in both
+    /// — TheTVDB's photograph and word on the part, AniList's drawing, its
+    /// lead and his voices — Mikasa TheTVDB's alone, Levi AniList's alone.
+    fn two_lists() -> (MediaItem, MediaItem) {
+        use crate::domain::person::CharacterRole;
+        let character = |name: &str, source: &str, order: i32| CharacterCredit {
+            character: Character {
+                id: String::new(),
+                name: name.into(),
+                native_name: None,
+                image: None,
+                tvdb_id: None,
+                anilist_id: None,
+                mal_id: None,
+            },
+            role: None,
+            sort_order: order,
+            credit_id: None,
+            voices: Vec::new(),
+            source: Some(source.into()),
+        };
+        let voice = |language: &str, name: &str, id: i64| CharacterVoice {
+            language: language.into(),
+            name: name.into(),
+            native_name: None,
+            image: None,
+            anilist_id: Some(id),
+            mal_id: None,
+            sort_order: 0,
+        };
+
+        let mut tvdb = item("Attack on Titan", None, None);
+        let mut eren = character("EREN YEAGER", "tvdb", 0);
+        eren.character.tvdb_id = Some(7001);
+        eren.character.image = Some("https://artworks.thetvdb.com/eren.jpg".into());
+        eren.role = Some(CharacterRole::Supporting);
+        let mut mikasa = character("Mikasa Ackerman", "tvdb", 1);
+        mikasa.character.tvdb_id = Some(7002);
+        tvdb.characters = vec![eren, mikasa];
+
+        let mut anilist = item("Attack on Titan", None, None);
+        let mut eren = character("Eren Yeager", "anilist", 0);
+        eren.character.anilist_id = Some(40882);
+        eren.character.image = Some("https://s4.anilist.co/eren.png".into());
+        eren.role = Some(CharacterRole::Main);
+        eren.voices = vec![
+            voice("jpn", "Yuuki Kaji", 95_001),
+            voice("eng", "Bryce Papenbrook", 95_002),
+        ];
+        let mut levi = character("Levi", "anilist", 1);
+        levi.character.anilist_id = Some(45627);
+        levi.voices = vec![voice("jpn", "Hiroshi Kamiya", 95_003)];
+        anilist.characters = vec![eren, levi];
+        (tvdb, anilist)
+    }
+
+    /// Each character's name, its picture, its role and its voices' languages.
+    type Read<'a> = (
+        &'a str,
+        Option<&'a str>,
+        Option<crate::domain::person::CharacterRole>,
+        Vec<&'a str>,
+    );
+
+    fn read(item: &MediaItem) -> Vec<Read<'_>> {
+        item.characters
+            .iter()
+            .map(|c| {
+                (
+                    c.character.name.as_str(),
+                    c.character.image.as_deref(),
+                    c.role,
+                    c.voices.iter().map(|v| v.language.as_str()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn contribution(provider: &str, item: MediaItem) -> Contribution {
+        Contribution {
+            provider: provider.into(),
+            item,
+        }
+    }
+
+    /// AniList silent — failed, or asked without its characters — whatever
+    /// it gave stays: its name, picture, word and voices on the character
+    /// TheTVDB's list holds, and the character it alone gave.
+    #[test]
+    fn what_a_source_gave_a_character_stays_while_it_is_silent() {
+        use crate::domain::person::CharacterRole::Main;
+        let (tvdb, anilist) = two_lists();
+        let (stored, provenance) = merge(vec![("tvdb", tvdb.clone()), ("anilist", anilist)]);
+        let as_stored: Vec<Read<'_>> = vec![
+            (
+                "Eren Yeager",
+                Some("https://s4.anilist.co/eren.png"),
+                Some(Main),
+                vec!["jpn", "eng"],
+            ),
+            ("Mikasa Ackerman", None, None, vec![]),
+            ("Levi", None, None, vec!["jpn"]),
+        ];
+        assert_eq!(read(&stored), as_stored);
+        assert_eq!(
+            stored.characters[0].source.as_deref(),
+            Some("tvdb"),
+            "TheTVDB's list holds him"
+        );
+
+        // A refresh AniList failed: what it gave is handed back, the
+        // character TheTVDB's list holds among it.
+        let handed = reconstruct(&stored, &provenance, "anilist").expect("AniList gave");
+        assert_eq!(
+            handed
+                .characters
+                .iter()
+                .map(|c| (c.character.name.as_str(), c.source.as_deref()))
+                .collect::<Vec<_>>(),
+            [("Eren Yeager", Some("anilist")), ("Levi", Some("anilist"))]
+        );
+        let refreshed = combine(
+            vec![
+                contribution("tvdb", tvdb.clone()),
+                contribution("anilist", handed),
+            ],
+            &priority(),
+        )
+        .unwrap();
+        assert_eq!(read(&refreshed), as_stored, "nothing of AniList's lost");
+
+        // AniList answered without its characters: its answer is given those
+        // it gave before in their place, and they stay just the same.
+        let mut unasked = item("Attack on Titan", None, None);
+        unasked.characters = characters_given(&stored, "anilist");
+        let refreshed = combine(
+            vec![
+                contribution("tvdb", tvdb.clone()),
+                contribution("anilist", unasked),
+            ],
+            &priority(),
+        )
+        .unwrap();
+        assert_eq!(read(&refreshed), as_stored);
+
+        // A sync from TheTVDB alone: the same.
+        let (synced_now, _) = synced(&stored, &provenance, vec![("tvdb", tvdb.clone())]);
+        assert_eq!(read(&synced_now), as_stored);
+
+        // TheTVDB silent and AniList answering, Eren's English voice gone:
+        // TheTVDB is handed back no voice of AniList's to keep it by.
+        let handed = reconstruct(&stored, &provenance, "tvdb").expect("TheTVDB gave");
+        assert!(handed.characters.iter().all(|c| c.voices.is_empty()));
+        assert_eq!(handed.characters.len(), 2, "Eren and Mikasa");
+        let (_, mut anilist) = two_lists();
+        anilist.characters[0].voices.truncate(1);
+        let refreshed = combine(
+            vec![
+                contribution("tvdb", handed),
+                contribution("anilist", anilist.clone()),
+            ],
+            &priority(),
+        )
+        .unwrap();
+        assert_eq!(refreshed.characters[0].voices.len(), 1);
+        let (synced_now, _) = synced(&stored, &provenance, vec![("anilist", anilist)]);
+        assert_eq!(
+            read(&synced_now)[0],
+            (
+                "Eren Yeager",
+                Some("https://s4.anilist.co/eren.png"),
+                Some(Main),
+                vec!["jpn"]
+            ),
+            "the stored work beneath gives back no voice AniList dropped"
+        );
+
+        // The stored work beneath a sync: a character stays while one that
+        // gave it did not answer, and goes once all of them did.
+        let names = |item: &MediaItem| {
+            item.characters
+                .iter()
+                .map(|c| c.character.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&leftover(&stored, &["tvdb"])),
+            ["Eren Yeager", "Levi"]
+        );
+        assert_eq!(
+            names(&leftover(&stored, &["anilist"])),
+            ["Eren Yeager", "Mikasa Ackerman"]
+        );
+        assert!(
+            leftover(&stored, &["tvdb", "anilist"])
+                .characters
+                .is_empty()
+        );
     }
 }

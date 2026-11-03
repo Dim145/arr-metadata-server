@@ -451,6 +451,8 @@ pub const SCHEDULABLE: &[&str] = &[
     repo::job::kinds::IMPORT_IMDB,
     repo::job::kinds::IMDB_AKAS,
     repo::job::kinds::IMDB_EPISODES,
+    repo::job::kinds::IMPORT_TVMAZE,
+    repo::job::kinds::IMPORT_WIKIDATA,
     crate::jobs::backup::KIND,
 ];
 

@@ -191,6 +191,33 @@ async fn run(
             )
             .await?
         }
+        tasks::IMPORT_TVMAZE => {
+            jobs::datasets::import_in_background(
+                &state,
+                jobs::datasets::TVMAZE_INDEX,
+                &identity,
+                ip,
+            )
+            .await?
+        }
+        tasks::IMPORT_WIKIDATA => {
+            jobs::datasets::import_in_background(
+                &state,
+                jobs::datasets::WIKIDATA_IDS,
+                &identity,
+                ip,
+            )
+            .await?
+        }
+        tasks::TVDB_DELETED => {
+            jobs::datasets::import_in_background(
+                &state,
+                jobs::datasets::TVDB_DELETED,
+                &identity,
+                ip,
+            )
+            .await?
+        }
         tasks::IMPORT_BATCH => {
             return Err(AppError::BadRequest(
                 "a batch is started from the import page, with the lines it imports".into(),

@@ -273,6 +273,20 @@ pub const REGISTRY: &[Definition] = &[
         scopes: SERVER_ONLY,
     },
     Definition {
+        // TVmaze's index of every series, read weekly: a search that finds
+        // what the providers would, when they do not answer.
+        key: "tvmaze.index",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // Wikidata's links between the sites' ids, read weekly: one id of a
+        // work's leads to its others without asking anybody.
+        key: "wikidata.enabled",
+        kind: Kind::Bool,
+        scopes: SERVER_ONLY,
+    },
+    Definition {
         // The regions whose titles a Radarr is given — per key and per
         // address too, as a household's languages differ. Unset, the
         // country of the language it is answered in.
@@ -478,6 +492,14 @@ pub const REGISTRY: &[Definition] = &[
     Definition {
         // The same for the TheTVDB relay.
         key: "tvdb.relayMode",
+        kind: Kind::Choice {
+            options: &["relay", "local-first"],
+        },
+        scopes: SERVER_ONLY,
+    },
+    Definition {
+        // The same for the AniList relay.
+        key: "anilist.relayMode",
         kind: Kind::Choice {
             options: &["relay", "local-first"],
         },

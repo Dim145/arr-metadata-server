@@ -1,0 +1,15 @@
+{
+  Media(id: 21519) {
+    characters(perPage: 2, sort: [ROLE]) {
+      pageInfo { total perPage currentPage lastPage hasNextPage }
+      edges {
+        id role name
+        node { id name { first middle last full native alternative alternativeSpoiler userPreferred } image { large medium } siteUrl gender age description dateOfBirth { year month day } bloodType favourites }
+        voiceActors(language: JAPANESE) { id name { first middle last full native alternative userPreferred } languageV2 image { large medium } siteUrl primaryOccupations gender }
+        voiceActorRoles(language: JAPANESE) { roleNotes dubGroup voiceActor { id } }
+        all: voiceActors { id languageV2 }
+      }
+      nodes { id }
+    }
+  }
+}

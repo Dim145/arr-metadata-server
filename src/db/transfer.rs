@@ -47,6 +47,10 @@ const TABLES: &[&str] = &[
     "person_alias",
     "person_translation",
     "media_credit",
+    // The characters, then what each is to a work and who voices it there.
+    "character",
+    "media_character",
+    "media_character_voice",
     "media_relation",
     // An order before its places; who numbers a series beside them.
     "media_order",
@@ -65,6 +69,12 @@ const TABLES: &[&str] = &[
     "keyword",
     "media_keyword",
     "media_video",
+    // What each work's popularity here was worked out from.
+    "media_popularity",
+    // TMDB's collections kept: their names in each language, then their films.
+    "collection",
+    "collection_translation",
+    "collection_part",
     // What changed in each work, after the works.
     "media_change",
     // What a merged work was known by, and the pairs that look like one work.
@@ -109,6 +119,15 @@ const TABLES: &[&str] = &[
     // IMDb's titles by region and its episodes, for the works held here.
     "imdb_title",
     "imdb_episode",
+    // The votes IMDb gave each work held, day by day: what its popularity
+    // here is worked out from, with TVmaze's weight.
+    "imdb_votes",
+    // TVmaze's index of the series it lists and Wikidata's links between the
+    // sites' ids: carried like the lists above, so that a database restored
+    // does not wait a week to have them again — `data_import` says they were
+    // read.
+    "tvmaze_show",
+    "wikidata_link",
     "data_import",
     "curated_list",
     "curated_list_item",

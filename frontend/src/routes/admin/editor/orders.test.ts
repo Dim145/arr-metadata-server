@@ -22,6 +22,14 @@ describe('an order’s name, as the pages say it', () => {
       'TMDB (diffusion)',
     )
     expect(orderName(order('tmdb-aired', 'TMDB (aired)', 'tmdb'), words)).toBe('TMDB (aired)')
+    // TheTVDB's numbering as it last gave a series it no longer knows.
+    expect(
+      orderName(order('tvdb-last', 'TheTVDB (as last given)'), {
+        ...words,
+        'tvdb-last': 'TheTVDB (tel qu’il l’a donné en dernier)',
+      }),
+    ).toBe('TheTVDB (tel qu’il l’a donné en dernier)')
+    expect(orderName(order('tvdb-last', 'TheTVDB (as last given)'), words)).toBe('TheTVDB (as last given)')
   })
 
   it('says where an order comes from only when another goes by the same name', () => {

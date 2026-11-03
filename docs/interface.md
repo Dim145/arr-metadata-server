@@ -3,8 +3,9 @@
 The interface has two sides: a catalogue anyone allowed to may browse, and an
 administration for the people who maintain it. This page covers how they are laid out
 and how to move about them: the bar along the foot of a phone, the catalogue as a
-list, the pages of a genre, a network and a year, of a company and a keyword, two works side by
-side, the administration's tables, its palette and its keys, the Settings page, and the Jobs page.
+list, the pages of a genre, a network and a year, of a company and a keyword, and of a character,
+two works side by side, the administration's tables, its palette and its keys, the Settings page,
+and the Jobs page.
 What the administration's catalogue and
 dashboard do is in [Editing](editing.md).
 
@@ -81,7 +82,12 @@ you may see — then what it did for them and for how many (*Production · 3*), 
 way to it on TMDB, the five works rated highest and every one of them in the catalogue's own list.
 It carries no programmer's note. The list is `/browse?company={id}`, or `?keywordId={id}`, which a
 link may give on its own: a chip names the company or the keyword, and takes it off. The network's
-page by the slug of its name, `/network/hbo`, is still there, and goes by the works' texts.
+page by the slug of its name, `/network/hbo`, is still there, and goes by the works' texts. A link to
+a company's or a keyword's page carries a preview of it, as a genre's does — its name, how many works
+it holds and the poster of the one rated highest — while it holds one a visitor may see. So does a
+link to a collection's page, `/collections/{id}`, for a collection kept one of whose films a visitor
+may see: its name and synopsis in the catalogue's language, and its poster; TMDB is never asked for
+a collection to draw a preview.
 
 The same page lists the rest of the crew under the cast — everybody TMDB credits behind the camera,
 a department at a time, the most telling jobs first, the first three departments open and the rest
@@ -90,6 +96,26 @@ first. Nothing is fetched from YouTube or Vimeo for the list, not even a still: 
 plays in the trailer's own player once asked for, the others open on their own site. A season's
 title and synopsis, and a person's biography, are in the reader's language where TMDB gave them in
 it.
+
+## A character
+
+A work's page lists its characters after its cast, as TheTVDB and AniList list them (see
+[Characters](data.md#characters)), under *Characters* in the page's index: the leads first, six of
+them and the rest folded. Each has its picture, its name — the way to its own page — what it is to the
+work, its name in its own script, marked as in the work's language for a screen reader, and who plays
+it, the way to their page, or *Performer unknown*; then who voices it in the dub chosen. Where the
+characters are voiced in more than one language, a list above them chooses the dub: the reader's
+language where there is one in it, else the work's own. A voice who is the performer already is not
+named twice.
+
+A character's page, `/characters/{id}`, is drawn as a filmography: its picture, its name and the one
+in its own script, the way to it on AniList and on MyAnimeList, then a line for each work of the
+catalogue it is in, the newest first — the year, the poster, the title, what it is there, a series or a
+film — with who plays it and who voices it in each language. A work the reader may not see is left out,
+and a character in none is not found. The page is open to visitors where the catalogue is, as a
+company's is. A link to it carries a preview — its name, the works it is in (*A character in “Frieren”
+and 2 more works*), in the catalogue's language, and its picture, else the poster of the newest of
+them.
 
 ## Two works side by side
 
@@ -180,8 +206,9 @@ that have a page of their own: signing in and the APIs are on **Opening & APIs**
 the sources on **Sources**, the media store on **Media**, the cache's spaces on **Cache**,
 Sonarr's and Radarr's connections on **Sonarr & Radarr**, and the destinations of notifications
 on **Notifications**. The relays' own settings — whose key they ask with, what they answer
-themselves from the catalogue (`tmdb.relayMode`, `tvdb.relayMode`: *Ask the service*, or *The
-catalogue first*, which answers the works held here in the service's shape without asking it),
+themselves from the catalogue (`tmdb.relayMode`, `tvdb.relayMode`, `anilist.relayMode`: *Ask the
+service*, or *The catalogue first*, which answers the works held here in the service's shape
+without asking it),
 whether they answer with the last answer kept when their service fails (`relays.staleIfError`),
 where TMDB's clients fetch the pictures (`tmdb.images`) — are set on **Opening & APIs**, each with
 what it changes said under it, and listed here as well. How much of TMDB's crew and of its pictures
@@ -210,18 +237,21 @@ Each task shows when it runs, how it last went, and when it runs next. Any of th
 by hand — *Run now*, or *Run again* once it has run — and a run somebody started says whose it
 was. *Log* opens what the run under way, or the last one, did: each work it took, and how that
 went. A task that works through many works or files — refreshing everything, storing the media,
-seeding from Sonarr and Radarr, a batch, the import rules, reading IMDb's titles or episodes — can
-be cancelled, and stops after the work in hand.
+seeding from Sonarr and Radarr, a batch, the import rules, reading IMDb's titles or episodes or
+TVmaze's index — can be cancelled, and stops after the work in hand.
 
 | Task | Id | What it does |
 |---|---|---|
 | Refresh what is due | `refresh.sweep` | Works whose details have aged, asked of their sources again, a batch at a time |
 | Refresh everything | `refresh.all` | Every work that has an identifier elsewhere, one after the other; can be stopped |
-| Fill in from the answers kept | `refresh.replay` | What this version keeps of TMDB's and TheTVDB's answers and earlier ones let go — the networks and companies with their ids and logos, TMDB's keywords and videos, each picture's language, size and votes, each crew credit's department and job — filled into every work from the answers kept with it, without asking either; by hand, once after an upgrade. TMDB's answers over six months old are passed over; the rest of the crew and the seasons' texts in other languages wait for each work's next refresh — the people to file and the season documents are not in the answers kept — or for *Refresh everything*, which brings them at once. Never beside a refresh in bulk |
+| Fill in from the answers kept | `refresh.replay` | What this version keeps of TMDB's and TheTVDB's answers and earlier ones let go — the networks and companies with their ids and logos, TMDB's keywords and videos, each picture's language, size and votes, each crew credit's department and job, TheTVDB's characters, and AniList's from an answer kept since — filled into every work from the answers kept with it, without asking either; by hand, once after an upgrade. TMDB's answers over six months old are passed over; the rest of the crew and the seasons' texts in other languages wait for each work's next refresh — the people to file and the season documents are not in the answers kept — or for *Refresh everything*, which brings them at once. Never beside a refresh in bulk |
 | Anime identifier list | `import.anime` | The list that ties AniList and MyAnimeList to TheTVDB and TMDB, downloaded whole |
 | IMDb ratings | `import.imdb` | IMDb's ratings file, downloaded whole and kept for the works held here |
 | IMDb titles by region | `imdb.akas` | IMDb's titles file read through weekly once switched on, the titles of the works held kept; can be stopped. See [IMDb's titles and episodes](sources.md#imdbs-titles-by-region-and-its-episodes) |
 | IMDb episodes | `imdb.episodes` | IMDb's episodes file read through weekly once switched on, the episodes of the series held kept; can be stopped |
+| TVmaze's index | `import.tvmaze` | TVmaze's index of every series it lists, read weekly once switched on — page by page the first time, then the series changed since — and kept whole; can be stopped, and goes on from where it stopped. See [TVmaze's index](sources.md#tvmazes-index) |
+| Wikidata's links between ids | `import.wikidata` | Wikidata's links between the sites' ids, read weekly once switched on by eight queries, one after the other; the links read before stay until a reading completes. See [Wikidata's links](sources.md#wikidatas-links) |
+| TheTVDB's deleted series | `tvdb.deleted` | TheTVDB's feed of the series it deleted or merged into another, read daily: a series held here among them keeps the numbering it was served by, frozen. Only while TheTVDB is configured and `numbering.fallbackAfter` is above 0, and said to have its source off otherwise. See [A series TheTVDB no longer knows](sonarr-radarr.md#a-series-thetvdb-no-longer-knows) |
 | Import a batch | `import.batch` | The works of a batch started on the *Import* page, one after the other; see [Importing many works at once](editing.md#importing-many-works-at-once) |
 | Import rules | `import.rules` | What the import rules bring in, each on its own schedule; see [Import rules](exports.md#filled-on-its-own-import-rules) |
 | NFO export | `export.nfo` | A `.nfo` document for every work; see [Exports](exports.md#nfo-documents-and-their-artwork) |
@@ -261,7 +291,7 @@ for the credential again; a session that ended is followed no longer than that.
 
 ### When it runs
 
-The sweep, the two lists downloaded whole and the archive run on a cadence of their own. *When
+The sweep, the lists downloaded whole and the archive run on a cadence of their own. *When
 it runs* on their card keeps that cadence to **a window of the day** — `01:00` to `06:00`: a run
 that comes due outside it waits for the window to open; an end before the start crosses
 midnight — or replaces it with **the moments a cron expression names** — `0 4 * * 0`, Sundays at

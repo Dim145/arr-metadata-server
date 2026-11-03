@@ -76,6 +76,9 @@ const TASKS: TaskId[] = [
   'import.imdb',
   'imdb.akas',
   'imdb.episodes',
+  'import.tvmaze',
+  'import.wikidata',
+  'tvdb.deleted',
   'import.batch',
   'import.rules',
   'export.nfo',
@@ -161,6 +164,36 @@ export function describeDetail(detail: string | null | undefined, t: Dict, local
   if ((m = detail.match(/^stopped: (\d+) titles for (\d+) works$/))) return s.titlesStopped(n(m[1]), n(m[2]))
   if ((m = detail.match(/^(\d+) episodes of (\d+) of (\d+) series$/))) return s.episodes(n(m[1]), n(m[2]), n(m[3]))
   if ((m = detail.match(/^stopped: (\d+) episodes for (\d+) series$/))) return s.episodesStopped(n(m[1]), n(m[2]))
+  // TVmaze's index: its pages read the first time — as it goes, once read,
+  // once stopped — then the series changed since, likewise; and Wikidata's
+  // links. Counts in the tens of thousands, written as the reader counts.
+  const say = (count: number) => fmt.count(count, locale)
+  if ((m = detail.match(/^(\d+) pages read, (\d+) series kept$/))) return s.tvmazePages(n(m[1]), n(m[2]), say)
+  if ((m = detail.match(/^stopped: (\d+) series from (\d+) pages$/))) return s.tvmazeStopped(n(m[1]), n(m[2]), say)
+  if ((m = detail.match(/^(\d+) series from (\d+) pages(?:, (\d+) no longer listed)?(?:, (\d+) unreadable)?$/)))
+    return s.tvmazeRead(n(m[1]), n(m[2]), n(m[3]), n(m[4]), say)
+  if ((m = detail.match(/^(\d+) of (\d+): series read again$/))) return s.tvmazeChanging(n(m[1]), n(m[2]), say)
+  if ((m = detail.match(/^stopped: (\d+) of (\d+) changed series read again, (\d+) gone$/)))
+    return s.tvmazeChangedStopped(n(m[1]), n(m[2]), n(m[3]), say)
+  if ((m = detail.match(/^(\d+) of (\d+) series changed in the (day|week|month) read again, (\d+) gone: (\d+) in all$/)))
+    return s.tvmazeChanged(n(m[1]), n(m[2]), m[3] ?? '', n(m[4]), n(m[5]), say)
+  if ((m = detail.match(/^(\d+) links on (\d+) items: (\d+) new, (\d+) gone$/)))
+    return s.wikidata(n(m[1]), n(m[2]), n(m[3]), n(m[4]), say)
+  // TheTVDB's deleted series: since when, as the reader's clock says it in
+  // UTC, and the titles of those held here, each merged one's new id said in
+  // the reader's words.
+  if (
+    (m = detail.match(
+      /^TheTVDB deleted (\d+) series since (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC(?:; numbered as they were served: (.+?))?(?:; (\d+) held here numbered so already)?(?:; none held here)?$/,
+    ))
+  ) {
+    const at = new Date(`${m[2]}T${m[3]}:00Z`)
+    const since = Number.isNaN(at.getTime())
+      ? `${m[2]} ${m[3]}`
+      : `${new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }).format(at)} UTC`
+    const kept = m[4]?.replace(/ \(merged into (\d+)\)/g, (_, id: string) => s.mergedInto(id))
+    return s.tvdbDeleted(n(m[1]), since, kept, n(m[5]))
+  }
   return t.admin.runs.notes[detail] ?? detail
 }
 

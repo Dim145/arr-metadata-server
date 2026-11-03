@@ -191,6 +191,14 @@ pub struct MediaItem {
     /// under: see [`person::People`].
     #[serde(default, skip_serializing_if = "person::People::is_empty")]
     pub people: person::People,
+    /// The characters of the work, its leads first: each with the ids its
+    /// sources file it under, its picture, what it is to the work, the
+    /// credit that plays it — `creditId`, among `credits` — and, for an
+    /// anime, who voices it in each dub. TheTVDB's and AniList's, one
+    /// character once whoever lists it; a credit's `characterName` stays
+    /// what it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub characters: Vec<person::CharacterCredit>,
     /// The networks and the companies credited on the work, each with the
     /// ids its sources file it under, its logo and its country, in what it
     /// did for the work. The texts `network`, `studio` and
@@ -379,6 +387,7 @@ impl MediaItem {
             relations: Vec::new(),
             releases: Vec::new(),
             people: person::People::default(),
+            characters: Vec::new(),
             companies: Vec::new(),
             keyword_entities: Vec::new(),
             videos: Vec::new(),
@@ -1106,6 +1115,104 @@ pub struct ImageDetails {
 impl ImageDetails {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+/// A collection the catalogue's films belong to — a saga, a trilogy — as
+/// TMDB has it, kept once for all of them: by TMDB's id, the one a film's
+/// `collectionTmdbId` names.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Collection {
+    /// This server's id for it. Empty in TMDB's answer, until it is stored.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub tmdb_id: i64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview: Option<String>,
+    /// Its pictures: addresses, like an image's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backdrop: Option<String>,
+    /// The language its name and its synopsis are in: ISO 639-3, the
+    /// catalogue's when it was asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Its name — as `title` — and its synopsis in the other languages TMDB
+    /// has them in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub translations: Vec<Translation>,
+    /// Its films, in TMDB's order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<CollectionPart>,
+    /// When TMDB was last asked about it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub refreshed_at: String,
+}
+
+impl Collection {
+    /// Its name and its synopsis in `language` (ISO 639-3): its own where
+    /// that is the language they are in, or where no translation is; a
+    /// translation's otherwise, each field the translation lacks its own.
+    pub fn texts_in(&self, language: &str) -> (&str, Option<&str>) {
+        let own = (self.name.as_str(), self.overview.as_deref());
+        if self.language.as_deref() == Some(language) {
+            return own;
+        }
+        let Some(translated) = self.translations.iter().find(|t| t.language == language) else {
+            return own;
+        };
+        fn text(s: &Option<String>) -> Option<&str> {
+            s.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        }
+        (
+            text(&translated.title).unwrap_or(own.0),
+            text(&translated.overview).or(own.1),
+        )
+    }
+}
+
+/// One of a collection's films, as much of it as a list shows, whether the
+/// catalogue holds it or not.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionPart {
+    pub tmdb_id: i64,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overview: Option<String>,
+    /// As TMDB writes it: `YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    /// As TMDB writes it: ISO 639-1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backdrop: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub popularity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vote_average: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vote_count: Option<i64>,
+    #[serde(default)]
+    pub is_adult: bool,
+    pub sort_order: i32,
+}
+
+impl CollectionPart {
+    /// The year it came out, where it says.
+    pub fn year(&self) -> Option<i32> {
+        self.release_date
+            .as_deref()
+            .and_then(|date| date.get(..4))
+            .and_then(|year| year.parse().ok())
     }
 }
 

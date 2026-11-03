@@ -31,14 +31,25 @@ type Named = Pick<EpisodeOrder, 'key' | 'label' | 'source' | 'isDefault'>
 export const TMDB_AIRED = 'tmdb-aired'
 
 /**
+ * The numbering a series was served by when TheTVDB stopped knowing it —
+ * deleted, merged into another — kept, frozen as the aired numbering, the
+ * episodes aired since placed after it. Neither written nor forgotten here:
+ * an order is made from it to change it, and it goes when the numbering is
+ * given back to TheTVDB.
+ */
+export const TVDB_LAST = 'tvdb-last'
+
+/**
  * What an order is called: the aired one, one of TheTVDB's named only by its
- * type, and TMDB's own numbering, in the reader's language (`words`, the
- * dictionary's `season.order`); any other by its own name.
+ * type, TMDB's own numbering and TheTVDB's as it last gave it, in the
+ * reader's language (`words`, the dictionary's `season.order`); any other by
+ * its own name.
  */
 export function orderName(order: Named | undefined, words: Record<string, string>): string {
   if (!order || order.isDefault) return words.official ?? 'official'
   if (order.source === 'tvdb' && TVDB_TYPE_NAMES[order.key] === order.label) return words[order.key] ?? order.label
   if (order.source === 'tmdb' && order.key === TMDB_AIRED) return words[TMDB_AIRED] ?? order.label
+  if (order.source === 'tvdb' && order.key === TVDB_LAST) return words[TVDB_LAST] ?? order.label
   return order.label
 }
 

@@ -1,6 +1,6 @@
 //! Movie resolution, for Radarr's surface and the native API.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use futures::{StreamExt as _, future::join_all};
@@ -11,7 +11,11 @@ use crate::{
     db::repo,
     domain::{ExternalSource, MediaItem, MediaKind},
     providers::{names, tmdb, tmdb::map as tmdb_map},
-    service::{FETCHING, Found, cached_search, gather, ids, local, merge, or_held, persist},
+    service::{
+        FETCHING, Found,
+        bridge::{self, Site},
+        cached_search, gather, held, ids, local, merge, or_held, persist,
+    },
     state::AppState,
     wire::radarr::{Beside, NamedCollection},
 };
@@ -81,6 +85,16 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
     {
         return Ok(Some(item));
     }
+    // Nothing held under it: one held under another id of the item Wikidata
+    // files it on, which does not carry it.
+    if bridge::enabled(state)
+        && held(state, ExternalSource::Imdb, &normalized)
+            .await?
+            .is_none()
+        && let Some(item) = bridged(state, Site::Imdb, &normalized).await?
+    {
+        return Ok(Some(item));
+    }
 
     let _fetching = FETCHING.lock(&format!("movie:imdb:{normalized}")).await;
     if let Some(item) = local(state, ExternalSource::Imdb, &normalized).await?
@@ -101,23 +115,89 @@ pub async fn by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaI
 }
 
 /// Ask the providers for a film by its IMDb id, and store what they say.
+///
+/// TMDB not saying which film it is — it knows none by that id, it does not
+/// answer, or it is not asked, with no key — the film Wikidata's links file
+/// the id beside is fetched by its TMDB id instead, where they know one no
+/// film held here goes by ([`bridge::fetchable`]). TMDB's failure is the
+/// answer still when nothing else found the film.
 async fn fetch_by_imdb_id(state: &AppState, imdb_id: &str) -> Result<Option<MediaItem>> {
-    let tmdb_id = match state.tmdb.is_configured() {
-        true => state
-            .tmdb
-            .find("imdb_id", imdb_id)
-            .await?
-            .movie_results
-            .first()
-            .map(|r| r.id),
+    let asked = match state.tmdb.is_configured() {
+        true => Some(state.tmdb.find("imdb_id", imdb_id).await),
         false => None,
     };
+    let (tmdb_id, failed) = match asked {
+        Some(Ok(found)) => (found.movie_results.first().map(|r| r.id), None),
+        Some(Err(e)) => (None, Some(e)),
+        None => (None, None),
+    };
+    let tmdb_id = match tmdb_id {
+        Some(id) => Some(id),
+        None => {
+            bridge::fetchable(state, Site::Imdb, imdb_id, MediaKind::Movie)
+                .await?
+                .tmdb
+        }
+    };
+    if tmdb_id.is_none()
+        && let Some(e) = failed
+    {
+        return Err(e);
+    }
 
     if let Some(item) = gather::movie(state, tmdb_id, Some(imdb_id)).await? {
+        crate::service::collection::keep_for_later(state, &item);
         return Ok(Some(item));
     }
 
-    from_radarr(state, tmdb_id, Some(imdb_id)).await
+    match from_radarr(state, tmdb_id, Some(imdb_id)).await? {
+        Some(item) => Ok(Some(item)),
+        None => match failed {
+            Some(e) => Err(e),
+            None => Ok(None),
+        },
+    }
+}
+
+/// A film by TMDB's id, as Radarr's `tmdb:` term asks for one: the one held
+/// under it; held under none, one held under another id of the item
+/// Wikidata files it on, which does not carry it; else fetched by it.
+///
+/// Not [`by_tmdb_id`] itself: that is how Radarr asks again for the films it
+/// holds, by the id it was handed, and a film found through the links would
+/// be answered under another.
+async fn by_tmdb_term(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
+    let value = tmdb_id.to_string();
+    if !ids::is_own(tmdb_id)
+        && bridge::enabled(state)
+        && held(state, ExternalSource::TmdbMovie, &value)
+            .await?
+            .is_none()
+        && merge::aliased(state, MediaKind::Movie, ExternalSource::TmdbMovie, &value)
+            .await?
+            .is_none()
+        && let Some(item) = bridged(state, Site::TmdbMovie, &value).await?
+    {
+        return Ok(Some(item));
+    }
+    by_tmdb_id(state, tmdb_id).await
+}
+
+/// A film held here under another id of the item Wikidata files `site`'s
+/// `id` on ([`bridge::held`]), as the id Radarr keeps it under resolves it:
+/// answered from here, or fetched again when it is due. None when the links
+/// lead to no film held.
+async fn bridged(state: &AppState, site: Site, id: &str) -> Result<Option<MediaItem>> {
+    for film in bridge::held(state, site, id).await? {
+        if film.kind != MediaKind::Movie {
+            continue;
+        }
+        return match client_id(&film) {
+            Some(handed) => Box::pin(by_tmdb_id(state, handed)).await,
+            None => Ok(Some(film)),
+        };
+    }
+    Ok(None)
 }
 
 /// Several movies at once, in the order requested, each with the id it was
@@ -177,7 +257,9 @@ pub async fn search_at(
 
 pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<Vec<MediaItem>> {
     match ids::classify(term) {
-        ids::TermLookup::Tmdb(id) => return Ok(by_tmdb_id(state, id).await?.into_iter().collect()),
+        ids::TermLookup::Tmdb(id) => {
+            return Ok(by_tmdb_term(state, id).await?.into_iter().collect());
+        }
         ids::TermLookup::Imdb(id) => {
             return Ok(by_imdb_id(state, &id).await?.into_iter().collect());
         }
@@ -245,78 +327,6 @@ pub async fn search(state: &AppState, term: &str, year: Option<i32>) -> Result<V
     .await
 }
 
-/// A collection and the movies in it, as Radarr is told of it.
-pub struct Collection {
-    pub name: String,
-    pub overview: Option<String>,
-    /// Its pictures' addresses, where TMDB has them.
-    pub poster: Option<String>,
-    pub backdrop: Option<String>,
-    pub parts: Vec<MediaItem>,
-}
-
-/// A collection and the movies in it, in `language`, a TMDB locale.
-///
-/// The parts come back as search-level detail: fetching each in full would be
-/// dozens of upstream calls for a list Radarr only uses to offer suggestions.
-/// TMDB's record is kept a day, under the key the catalogue's own collection
-/// pages keep it under: either one asking warms it for the other, and for the
-/// films of the collection that Radarr is sent.
-pub async fn collection(
-    state: &AppState,
-    tmdb_id: i64,
-    language: &str,
-) -> Result<Option<Collection>> {
-    if !state.tmdb.is_configured() {
-        return Ok(None);
-    }
-
-    let key = collection_key(tmdb_id, language);
-    let raw = match cached(state, &key).await {
-        Some(raw) => raw,
-        None => {
-            // Kept as `null` where TMDB has no such collection, as the
-            // catalogue's pages keep it.
-            let raw = state
-                .tmdb
-                .collection_raw(tmdb_id, language)
-                .await?
-                .unwrap_or(Value::Null);
-            state
-                .caches
-                .lists
-                .insert(key, Bytes::from(serde_json::to_vec(&raw)?))
-                .await;
-            raw
-        }
-    };
-    if raw.is_null() {
-        return Ok(None);
-    }
-
-    let collection: tmdb::models::Collection =
-        serde_json::from_value(raw).context("could not interpret the TMDB collection response")?;
-
-    Ok(Some(Collection {
-        name: collection.name,
-        overview: collection.overview.filter(|o| !o.trim().is_empty()),
-        poster: collection.poster_path.as_deref().map(tmdb::image_url),
-        backdrop: collection.backdrop_path.as_deref().map(tmdb::image_url),
-        parts: collection
-            .parts
-            .iter()
-            .map(tmdb_map::movie_summary_to_item)
-            .collect(),
-    }))
-}
-
-/// The key TMDB's record of a collection is kept under in the lists' cache,
-/// in a TMDB locale: one copy for the catalogue's collection pages and for
-/// Radarr.
-pub fn collection_key(tmdb_id: i64, language: &str) -> String {
-    format!("collection:{tmdb_id}:{language}")
-}
-
 /// The key what TMDB recommends beside a work is kept under in the lists'
 /// cache, once the editor has asked for it.
 pub fn suggestions_key(kind: MediaKind, tmdb_id: i64) -> String {
@@ -337,19 +347,37 @@ const BESIDE_AT_ONCE: usize = 8;
 
 /// What goes beside each of `items` as Radarr is sent them, in their order —
 /// see [`Beside`] — from what is held: the providers' answers for the film as
-/// they were kept, and what TMDB told the catalogue's own pages since. Never
-/// fetched: Radarr refreshes its library through these routes, and what a
-/// film suggests is not worth a call to TMDB per film. `language` is the
-/// caller's, as the settings have it.
+/// they were kept, and the collections kept. Never fetched: Radarr refreshes
+/// its library through these routes, and what a film suggests is not worth a
+/// call to TMDB per film. `language` is the caller's, as the settings have
+/// it.
 pub async fn beside(state: &AppState, items: &[MediaItem], language: &str) -> Vec<Beside> {
-    let locale = crate::service::language::tmdb_locale(None, language);
+    let wanted = crate::service::collection::language_of(&crate::service::language::tmdb_locale(
+        None, language,
+    ));
+
+    // The collections the films are filed under, as kept, read at once.
+    let mut ids: Vec<i64> = items.iter().filter_map(|i| i.collection_tmdb_id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let kept = match repo::collection::by_tmdb_ids(&state.db, &ids).await {
+        Ok(kept) => kept,
+        Err(e) => {
+            // What a film suggests is not worth failing it over.
+            tracing::warn!(
+                error = format_args!("{e:#}"),
+                "could not read the collections kept"
+            );
+            Default::default()
+        }
+    };
 
     // Made before they are run, rather than by a closure the stream keeps:
     // the handlers awaiting this did not compile around one, its `FnOnce`
     // not general enough for the lifetimes it borrows.
     let each: Vec<_> = items
         .iter()
-        .map(|item| beside_one(state, item, &locale))
+        .map(|item| beside_one(state, item, &kept, &wanted))
         .collect();
 
     futures::stream::iter(each)
@@ -358,21 +386,33 @@ pub async fn beside(state: &AppState, items: &[MediaItem], language: &str) -> Ve
         .await
 }
 
-async fn beside_one(state: &AppState, item: &MediaItem, locale: &str) -> Beside {
+async fn beside_one(
+    state: &AppState,
+    item: &MediaItem,
+    kept: &std::collections::HashMap<i64, crate::domain::Collection>,
+    language: &str,
+) -> Beside {
     let Some(tmdb_id) = item.external_ids.tmdb else {
         return Beside::default();
     };
     let mut beside = kept_beside(state, item).await;
 
-    // TMDB's own record of the collection, in the caller's language, where
-    // the catalogue's pages or Radarr asked for it lately: the snapshot's is
-    // in the language the works are stored in, and as old as the film's.
-    if let Some(collection) = item.collection_tmdb_id
-        && let Some(named) = cached(state, &collection_key(collection, locale))
-            .await
-            .and_then(|record| named_collection(collection, &record))
-    {
-        beside.collection = Some(named);
+    // The collection as kept, named in the caller's language, its pictures
+    // where this server keeps them: the snapshot's name is in the language
+    // the works are stored in, and as old as the film's.
+    if let Some(collection) = item.collection_tmdb_id.and_then(|id| kept.get(&id)) {
+        beside.collection = Some(NamedCollection {
+            tmdb_id: collection.tmdb_id,
+            name: collection.texts_in(language).0.to_string(),
+            poster: collection
+                .poster
+                .as_deref()
+                .and_then(|url| state.media.elsewhere(url)),
+            fanart: collection
+                .backdrop
+                .as_deref()
+                .and_then(|url| state.media.elsewhere(url)),
+        });
     }
 
     // A film whose snapshots recommend nothing — taken before TMDB's
@@ -718,6 +758,9 @@ async fn local_search(state: &AppState, term: &str, year: Option<i32>) -> Result
 
 async fn fetch_from_tmdb(state: &AppState, tmdb_id: i64) -> Result<Option<MediaItem>> {
     if let Some(item) = gather::movie(state, Some(tmdb_id), None).await? {
+        // Its collection beside it, when the one kept is due: the film is
+        // answered without waiting for it.
+        crate::service::collection::keep_for_later(state, &item);
         return Ok(Some(item));
     }
 
@@ -1020,22 +1063,42 @@ mod tests {
         assert_eq!(recommended(&found[0]), [604, 605]);
         assert_eq!(found[1], Beside::default());
 
-        // TMDB's own record of the collection, kept by the catalogue's pages
-        // in the caller's language, names it in that language.
-        let record =
-            serde_json::json!({ "id": 2344, "name": "Matrix - Saga", "poster_path": "/fr.jpg" });
-        state
-            .caches
-            .lists
-            .insert(
-                collection_key(2344, "fr-FR"),
-                Bytes::from(serde_json::to_vec(&record).expect("written")),
-            )
-            .await;
+        // The collection kept names it in the caller's language, with its
+        // pictures.
+        repo::collection::write(
+            &state.db,
+            &crate::domain::Collection {
+                id: String::new(),
+                tmdb_id: 2344,
+                name: "The Matrix Collection".into(),
+                overview: None,
+                poster: Some("https://image.tmdb.org/t/p/original/kept.jpg".into()),
+                backdrop: None,
+                language: Some("eng".into()),
+                translations: vec![crate::domain::Translation {
+                    language: "fra".into(),
+                    title: Some("Matrix - Saga".into()),
+                    overview: None,
+                    tagline: None,
+                    is_manual: false,
+                }],
+                parts: Vec::new(),
+                refreshed_at: String::new(),
+            },
+        )
+        .await
+        .expect("kept");
         let in_french = beside(&state, std::slice::from_ref(&matrix), "fr-FR").await;
+        let named = in_french[0].collection.as_ref().expect("its collection");
+        assert_eq!(named.name, "Matrix - Saga");
         assert_eq!(
-            in_french[0].collection.as_ref().map(|c| c.name.as_str()),
-            Some("Matrix - Saga")
+            named.poster.as_deref(),
+            Some("https://image.tmdb.org/t/p/original/kept.jpg")
+        );
+        let in_english = beside(&state, std::slice::from_ref(&matrix), "en-US").await;
+        assert_eq!(
+            in_english[0].collection.as_ref().map(|c| c.name.as_str()),
+            Some("The Matrix Collection")
         );
 
         // A film whose snapshots recommend nothing is sent what the editor
@@ -1163,5 +1226,146 @@ mod tests {
             .await
             .expect("answered");
         assert!(later.is_empty(), "{later:?}");
+    }
+
+    /// TMDB knowing no film by any other site's id, and nothing else.
+    fn tmdb_knows_nothing(
+        asked: &crate::api::relay::testing::Asked,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        use axum::http::StatusCode;
+        use serde_json::json;
+
+        if asked.path.starts_with("/3/find/") {
+            return (
+                StatusCode::OK,
+                json!({ "movie_results": [], "person_results": [], "tv_results": [],
+                        "tv_episode_results": [], "tv_season_results": [] }),
+            );
+        }
+        (
+            StatusCode::NOT_FOUND,
+            json!({ "success": false, "status_code": 34 }),
+        )
+    }
+
+    /// A film held as it is, nothing due.
+    async fn held_film(state: &AppState, title: &str, ids: ExternalIds, manual: bool) -> MediaItem {
+        let mut film = MediaItem::empty(MediaKind::Movie);
+        film.id = crate::db::new_id();
+        film.title = title.into();
+        film.slug = crate::domain::make_slug(title, None);
+        film.created_at = crate::db::now();
+        film.updated_at = crate::db::now();
+        film.is_manual = manual;
+        film.external_ids = ids;
+        repo::item::upsert(
+            &state.db,
+            repo::item::ItemWrite {
+                item: &film,
+                replace_children: true,
+            },
+        )
+        .await
+        .expect("stored");
+        film
+    }
+
+    /// The user's decision of 3 November, for films: where TMDB knows no
+    /// film by an IMDb id, the links find the one held here — and never
+    /// change the id Radarr holds it by.
+    #[tokio::test]
+    async fn a_film_tmdb_does_not_know_by_imdb_is_found_held_and_keeps_its_id() {
+        use crate::{
+            api::relay::testing::{self, StandIn},
+            service::bridge::{Site, keep_for_tests},
+        };
+
+        let stand_in = StandIn::start(tmdb_knows_nothing).await;
+        let state = testing::server(&stand_in).await;
+        let film = held_film(
+            &state,
+            "Pellicule reliée P5",
+            ExternalIds {
+                tmdb: Some(990_910),
+                ..Default::default()
+            },
+            false,
+        )
+        .await;
+        let typed = held_film(
+            &state,
+            "Pellicule tapée P5",
+            ExternalIds {
+                imdb: Some("tt9909040".into()),
+                ..Default::default()
+            },
+            true,
+        )
+        .await;
+        let elsewhere = held_film(
+            &state,
+            "Pellicule contredite P5",
+            ExternalIds {
+                tmdb: Some(990_930),
+                imdb: Some("tt9909039".into()),
+                ..Default::default()
+            },
+            false,
+        )
+        .await;
+        keep_for_tests(
+            &state,
+            &[
+                (Site::Imdb, "tt9909010", 990_910),
+                (Site::TmdbMovie, "990910", 990_910),
+                (Site::Imdb, "tt9909020", 990_920),
+                (Site::TmdbMovie, "990920", 990_920),
+                (Site::Imdb, "tt9909030", 990_930),
+                (Site::TmdbMovie, "990930", 990_930),
+                (Site::Imdb, "tt9909040", 990_940),
+                (Site::TmdbMovie, "990940", 990_940),
+            ],
+        )
+        .await;
+
+        // By an IMDb id it does not carry: found, under its own TMDB id.
+        let searched = search(&state, "imdb:tt9909010", None)
+            .await
+            .expect("answered");
+        let looked_up: Vec<MediaItem> = by_imdb_id(&state, "tt9909010")
+            .await
+            .expect("answered")
+            .into_iter()
+            .collect();
+        for found in [searched, looked_up] {
+            assert_eq!(
+                found.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(),
+                [film.id.as_str()]
+            );
+            assert_eq!(client_id(&found[0]), Some(990_910));
+        }
+
+        // By TMDB's id, the film entered by hand that carries its IMDb id:
+        // under the number Radarr was handed for it, TMDB not asked.
+        let found = search(&state, "tmdb:990940", None).await.expect("answered");
+        assert_eq!(found[0].id, typed.id);
+        assert_eq!(client_id(&found[0]), Some(ids::own(&typed.id)));
+        assert!(stand_in.asked_at("/3/movie/990940").is_empty());
+
+        // Held nowhere: fetched by the TMDB id the links give.
+        let _ = by_imdb_id(&state, "tt9909020").await;
+        assert!(!stand_in.asked_at("/3/movie/990920").is_empty());
+        // Never by one a film held here goes by, which carries another IMDb
+        // id.
+        let _ = by_imdb_id(&state, "tt9909030").await;
+        assert!(stand_in.asked_at("/3/movie/990930").is_empty());
+        assert_eq!(
+            now_held(&state, &elsewhere)
+                .await
+                .external_ids
+                .imdb
+                .as_deref(),
+            Some("tt9909039")
+        );
     }
 }

@@ -27,7 +27,8 @@ opens it to a reader with no credential:
 the list of works, one work, the totals, what the filters offer
 (`/api/v1/facets`), the schedule (`/api/v1/calendar`), a season chart
 (`/api/v1/seasons/{year}/{season}`), a person's credits
-(`/api/v1/people/{tmdbId}`) and the feeds ([Calendars and feeds](exports.md#calendars-and-feeds)). Nothing else — not what TMDB lists for a season
+(`/api/v1/people/{tmdbId}`), the pages of a genre, a network, a year or a decade, a company,
+a keyword and a character (`/api/v1/characters/{id}`), and the feeds ([Calendars and feeds](exports.md#calendars-and-feeds)). Nothing else — not what TMDB lists for a season
 (`…/candidates`), which is asked of TMDB on this server's key. Which works failed their last
 refresh is not among them: that filter is ignored for anyone but an
 administrator. It is an allowlist

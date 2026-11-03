@@ -27,6 +27,7 @@ const named = <K extends string>(load: () => Promise<Record<K, React.ComponentTy
 const Season = named(() => import('./routes/Season'), 'Season')
 const Episode = named(() => import('./routes/Episode'), 'Episode')
 const Person = named(() => import('./routes/Person'), 'Person')
+const Character = named(() => import('./routes/Character'), 'Character')
 const People = named(() => import('./routes/People'), 'People')
 const Calendar = named(() => import('./routes/Calendar'), 'Calendar')
 const Seasons = named(() => import('./routes/Seasons'), 'Seasons')
@@ -150,6 +151,7 @@ function Router() {
             <Route path="/person/:tmdbId" element={<Person />} />
             <Route path="/people" element={<People />} />
             <Route path="/people/:id" element={<Person />} />
+            <Route path="/characters/:id" element={<Character />} />
             <Route path="/calendar" element={<Calendar />} />
             <Route path="/lists" element={<Lists />} />
             <Route path="/stats" element={<Figures />} />

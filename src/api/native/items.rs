@@ -132,9 +132,10 @@ pub struct ListQuery {
     /// the catalogue, as `refreshFailed`; `GET /admin/gaps` counts each.
     pub missing: Option<String>,
     /// `relevance` — how well each work answers `term`, the default when
-    /// there is one — `popularity` (the default otherwise), `rating`,
-    /// `release`, `title`, `added`, `refreshed`, `runtime`, `lastAired` or
-    /// `episodes`.
+    /// there is one — `popularity` (the default otherwise: TMDB's figure, or,
+    /// for a work TMDB gives none, the one worked out here from TVmaze's
+    /// weight and the daily rise of IMDb's votes), `rating`, `release`,
+    /// `title`, `added`, `refreshed`, `runtime`, `lastAired` or `episodes`.
     pub sort: Option<String>,
     /// `asc` or `desc`; each sort has its own default.
     pub order: Option<String>,

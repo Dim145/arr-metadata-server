@@ -4,9 +4,9 @@ Clients that ask TMDB, TheTVDB or AniList themselves — Jellyseerr and Overseer
 Yamtrack, Jellyfin's TheTVDB plugin, the anime trackers — reach those services
 through this server once their names resolve here. Each request is handed on to
 the real service, and its answer is handed back with the fields locked in this
-catalogue written in; or, where an administrator chose so, TMDB's and TheTVDB's
-relays answer the works this catalogue holds themselves, in the service's shape,
-and ask the service for the rest. The routes are the TMDB relay (`/3/*`, and the public lists of
+catalogue written in; or, where an administrator chose so, TMDB's, TheTVDB's and
+AniList's relays answer the works this catalogue holds themselves, in the service's
+shape, and ask the service for the rest. The routes are the TMDB relay (`/3/*`, and the public lists of
 `/4/list/*`), the TheTVDB relay (`/v4/*`) and the AniList relay
 (`graphql.anilist.co`, on the clients' door) — and, where an administrator chose it,
 TMDB's pictures under `/tmdb-images/*`, on the interface's door.
@@ -135,8 +135,9 @@ own, the TMDB ids of the works changed here in the window asked — from the sta
 `start_date` to the end of `end_date`, the last day when no start is asked, fourteen
 days at the most: a lock put on or lifted, something added or taken out by hand, a
 refresh that changed a value. Each is written as TMDB lists one,
-`{"id": …, "adult": …}`, none twice, a title for adults only where this server shows
-them, and `total_results` counts them. TMDB's page is kept a quarter of an hour and
+`{"id": …, "adult": …}`, none twice, a title for adults only for a caller shown them
+by its key's or its address rule's policy (see [Adult titles](access.md#adult-titles)),
+and `total_results` counts them. TMDB's page is kept a quarter of an hour and
 the works changed here are laid on it at each answer, so a change shows at once: a
 client that keeps itself in step by changes, as Yamtrack does, fetches a work
 corrected here again without waiting for its own full refresh. When TMDB fails, the
@@ -159,7 +160,7 @@ server's key; see
 | `series/{id}/episodes/{order}[/{lang}]` | each episode's title, overview, date, runtime and still, told by its TheTVDB id in every order (`official`, `default`, `dvd`, `absolute`…), and by its numbers too in the aired order. This is what Seerr's TheTVDB option reads |
 | `seasons/{id}`, `seasons/{id}/extended` | the season's locked title as its name, its chosen poster, its episodes |
 | `episodes/{id}[/extended]`, `episodes/{id}/translations/{lang}` | the episode's title, overview, date, runtime and still, and its translations |
-| `updates` | on the first page (`page=0`, or none), after TheTVDB's own records, an `update` record for each series and film of the catalogue that changed here since `since` — a lock set or lifted, something added or taken out by hand, a refresh that changed a value — by its TheTVDB id, under `entityType` `series` or `movies`, written as TheTVDB documents an `EntityUpdate`; none TheTVDB lists already, none for another `type`, for `action=delete` or on a later page; fourteen days back at the most. This is what Jellyfin's plugin syncs by |
+| `updates` | on the first page (`page=0`, or none), after TheTVDB's own records, an `update` record for each series and film of the catalogue that changed here since `since` — a lock set or lifted, something added or taken out by hand, a refresh that changed a value — by its TheTVDB id, under `entityType` `series` or `movies`, written as TheTVDB's own feed writes an update, without the merge's fields its swagger describes; none TheTVDB lists already, none for another `type`, for `action=delete` or on a later page; fourteen days back at the most. This is what Jellyfin's plugin syncs by |
 
 A TheTVDB record names a work in its original language, which no client asks for by
 name: its own `name` and `overview` take the lock as the catalogue holds the work,
@@ -347,9 +348,10 @@ the operator's own clients: the pictures are TMDB's and their owners'.
 
 ## Answering from the catalogue
 
-The TMDB and TheTVDB relays can answer the works this catalogue holds themselves,
-in their service's shape, without asking the service. **Opening & APIs** chooses it
-relay by relay, with `tmdb.relayMode` and `tvdb.relayMode`:
+The TMDB, TheTVDB and AniList relays can answer the works this catalogue holds
+themselves, in their service's shape, without asking the service. **Opening & APIs**
+chooses it relay by relay, with `tmdb.relayMode`, `tvdb.relayMode` and
+`anilist.relayMode`:
 
 | Value | A work held here | Anything else |
 |---|---|---|
@@ -357,15 +359,21 @@ relay by relay, with `tmdb.relayMode` and `tvdb.relayMode`:
 | `local-first` | this server's own document, in the service's shape | the service's |
 
 A work is held here when its id in the service's dialect names it, it is switched
-on, and it is not for adults where this server hides them. Its document is written
-from the catalogue — the merged values, the locks, the translations held, without
+on, and it is not for adults where the caller is not shown them: the policy of the
+key or the address rule it came with decides, as it does for Sonarr and Radarr (see
+[Adult titles](access.md#adult-titles)) — for a work's document, for the
+catalogue's works in a search, and for the relations an AniList entry lists. Its
+document is written from the catalogue — the merged values, the locks, the
+translations held, without
 what a person hid — then, for what the catalogue does not keep, from the service's
 own document of the work as it was last fetched, and is empty or null, as the
 service writes it, where neither says anything. Neither the service nor a key of
 its own is needed: such a document is answered before any key is looked for, with
 `Content-Type: application/json;charset=utf-8` and no `Age`, and counted under
 `ams_relay_local_total{relay="tmdb"}` or `{relay="tvdb"}`. Everything else goes
-through the relay as before. AniList's relay always asks AniList.
+through the relay as before. An AniList answer written here goes with
+`Content-Type: application/json`, as AniList's do, and is counted under
+`{relay="anilist"}`.
 
 ### TMDB's clients
 
@@ -385,7 +393,14 @@ through the relay as before. AniList's relay always asks AniList.
   when TMDB's numbering could not be read, or when the catalogue lacks it for a
   series TMDB knows.
 - `/3/find/{id}` by an IMDb, TheTVDB, Wikidata or TVRage id; by TheTVDB's, the
-  number Sonarr keeps a series under too.
+  number Sonarr keeps a series under too. Where nothing is held under an IMDb,
+  TheTVDB or Wikidata id itself, the work held under another id of the item
+  Wikidata files it on, with `wikidata.enabled`: see
+  [Wikidata's links](sources.md#wikidatas-links).
+- `/3/collection/{id}`, with `images` and `translations` appended or asked on their
+  own, for a collection the catalogue keeps, one of whose films it holds and answers
+  under its TMDB id. A collection none of whose films is held here is TMDB's, kept
+  or not.
 - The first page of `/3/search/movie`, `/tv` and `/multi`: the works the catalogue
   finds by the term first — entered by hand and corrected ones among them — then
   TMDB's, none twice, `total_results` counting both. When TMDB fails and nothing
@@ -416,6 +431,22 @@ entered by hand — so that Seerr hands Sonarr a number Skyhook's dialect answer
 either mode, the relay gives that number in place of a `tvdb_id` TMDB leaves null
 for a series held here.
 
+With `relay` too, a `/3/find` TMDB answers with no work at all is answered with the
+work held here under the id asked, as `local-first` answers it — or, with
+`wikidata.enabled`, the one held under another id of the item Wikidata files it on:
+TMDB does not know every id a work carries, nor anything of a work it does not
+list. The work goes by the id its clients know it by, whichever id led to it.
+
+A collection is written over TMDB's own answer as the catalogue last kept it, its
+keys as TMDB wrote them, with the catalogue's values laid on it: a film held is
+written as its own document is, locks and translations included, and a film not
+held as TMDB listed it. In another language than the catalogue's, the collection
+goes by TMDB's translation of its name, else by its original name, with the
+translated overview or none, and a film not held by its original title, with no
+overview, as TMDB writes them. Its pictures are TMDB's lists as kept, narrowed by
+`include_image_language`, else the poster and background kept; its translations
+are TMDB's as kept, else the catalogue's. See [Collections](data.md#collections).
+
 ### TheTVDB's clients
 
 A series or a film is answered here when the catalogue holds it under the id
@@ -427,30 +458,102 @@ language; a page of its episodes in any order it holds; its seasons and episodes
 by TheTVDB's ids or by the negative ids this server gives those TheTVDB has none
 for: all are written here, in TheTVDB's shape.
 
-For what the catalogue does not keep — the characters, lists and tags, the
-pictures' ids, the seasons of the other orders — TheTVDB's own record of the series
-as last fetched is read; the companies, the pictures' sizes and scores and the
+For what the catalogue does not keep — the lists and tags, the pictures' ids, the
+seasons of the other orders — TheTVDB's own record of the series as last fetched is
+read; the companies, the pictures' sizes and scores and the
 trailers are the catalogue's, a work not refreshed since this version reading them
 from that record too. A record is in the work's own language, as TheTVDB writes
 one; a document in a language says what the catalogue holds in it and nothing
 else — an episode with no text in it has no name, as at TheTVDB. A text in a
 language held nowhere here is TheTVDB's to answer, or its `404` for a work it does
 not know; so is an order the catalogue holds none of, and everything that is not a
-series or a film — a person, a list, a company.
+series, a film or one of their characters — a person, a list, a company.
+
+A record's `characters` are the catalogue's characters first (see
+[Characters](data.md#characters)): each written over TheTVDB's record of the part,
+where the catalogue kept one, under the catalogue's name and picture for it,
+`isFeatured` for a lead, the actor its credit names; else as a record made here,
+under a negative id, played by its credit or voiced in the work's own language.
+TheTVDB's other people follow — the crew, the guests, the parts beyond
+`tvdb.castLimit` — then the credits added by hand. A character played by a credit somebody hid is left out, as
+TheTVDB's record of the part is; a work that keeps no character yet lists TheTVDB's
+as before. `characters/{id}` is one of them asked alone, by TheTVDB's id of the
+part or by the negative id given here, written as TheTVDB writes a character asked
+alone — the series or the film it is of as its name, picture and year, its lists as
+lists — from the first work held that lists it and the caller may see. A TheTVDB
+id held nowhere here is TheTVDB's to answer; a negative id held nowhere, or a
+character played by a hidden credit, is a `404`.
 
 A search lists, on its first page, the series and films the catalogue finds by the
 term before TheTVDB's own results, none twice, and counts them with TheTVDB's; when
 TheTVDB fails, the catalogue's alone. A search by an id elsewhere
-(`/search/remoteid/`, an IMDb or TMDB id) does the same. With `relay`, the pages of
+(`/search/remoteid/`, an IMDb or TMDB id) does the same, and lists, where nothing is
+held under the id itself, the works held under another id of the item Wikidata
+files it on, with `wikidata.enabled`. With `relay`, the pages of
 the orders this server answers itself (see [What is written into the
 answers](#what-is-written-into-the-answers)) are written as they always were.
+
+### AniList's clients
+
+A query is answered here when every field it asks at its root rests on entries this
+server holds, and everything it asks of each can be written as AniList writes it:
+
+- `Media` by AniList's id, or, beside `type: ANIME`, by MyAnimeList's;
+- `Page` listing entries named by their ids — `id_in`, or `idMal_in` beside
+  `type: ANIME` — narrowed by `type`, `format`, `status`, `season`, `seasonYear`,
+  `genre`, `isAdult`, `countryOfOrigin`, their days, episodes and length, and sorted
+  as AniList sorts, its members' trends and favourites aside; or listing such
+  entries' episodes on their schedules (`airingSchedules` by `mediaId_in`);
+- `GenreCollection`, AniList's nineteen genres.
+
+An entry held here is a work, or one of its seasons or cours as the anime identifier
+list places it on the work's episodes; a work entered by hand that AniList does not
+name is held under the number its catalogue id makes, the one every other dialect
+hands it; with `wikidata.enabled`, a work the catalogue ties to no AniList id is held
+under the one Wikidata ties to it, where nothing makes that ambiguous. The query is
+read as GraphQL reads it — variables and their defaults, fragments, aliases,
+`@include` and `@skip`, `__typename` — and the entry is written from the catalogue:
+its days, status, count, season, next episodes and schedule from its episodes as
+served, corrections included; the work's English title and overview, pictures,
+trailer and characters, with who voices them, for an entry that is the whole work;
+then AniList's own document of the work's entry as last fetched — its romaji and
+native titles, other names, tags, studios, score, count of members and relations —
+and MyAnimeList's description of a season or cour. A character, a voice or an
+episode on the schedule AniList's ids do not name here is given a number this server
+makes, the same at every answer. What only AniList's members make — favourites,
+trends, rankings, recommendations — is null or empty, and this server's own
+popularity is never written as AniList's count.
+
+Anything else goes to AniList whole, as the relay sends it: an entry held nowhere
+here, one asked beside others that are not, a text searched for, a page of AniList's
+whole catalogue or schedule, a mutation, anything of an account or of somebody, a
+query signed with a person's own token, and anything only AniList can say — the id
+of a tag or a studio the catalogue has not kept, a season's characters, the full
+list of AniList's tags. A query about entries held here that asks for a field
+AniList's schema does not have is refused here with `400`, in AniList's own words
+and shape.
+
+A query is answered here only while it stays within what a client sends: a request
+of 64 KB at the most, fifty entries, thirty-two fragments spread sixteen deep, two
+thousand argument values, an answer of 2 MB nested sixty-four deep. Anything longer,
+deeper or wider goes to AniList whole, as does a query this server cannot read its
+catalogue for. Works and relations for adults follow the key's or the address
+rule's adult policy, as Sonarr's and Radarr's do.
+
+The characters kept of an entry are the first page of AniList's list, twenty-five,
+the leads first. Where AniList lists more, that page is all that is known of them:
+a query asking for it as it was kept — its first page and no longer, sorted by role
+first, as Jellyfin's `[ROLE, FAVOURITES_DESC]` is — is answered here, the order kept
+standing for the one asked within a role; another page, a longer one, how many
+there are (`pageInfo`), the characters of one role, and a list sorted otherwise
+first or not at all go to AniList.
 
 ## Answers worth knowing
 
 | Answer | When |
 |---|---|
 | `200` with `Age` | The service failed, and what was kept answered instead (see [When a service fails](#when-a-service-fails)). |
-| `400` | A TheTVDB sign-in that is none — no key, or a key named both `apikey` and `apiKey` — or, under `/tmdb-images/`, a size or a name that is not TMDB's; or, with `tvdb.relayMode = local-first`, a page of a held series' episodes narrowed to a number with no season (`episodeNumber` without `season`), refused as TheTVDB refuses it. |
+| `400` | A TheTVDB sign-in that is none — no key, or a key named both `apikey` and `apiKey` — or, under `/tmdb-images/`, a size or a name that is not TMDB's; or, with `tvdb.relayMode = local-first`, a page of a held series' episodes narrowed to a number with no season (`episodeNumber` without `season`), refused as TheTVDB refuses it; or, with `anilist.relayMode = local-first`, a query about entries held here that asks for what AniList's schema does not have, refused as AniList refuses it. |
 | `401`, `own_key_required` | With `client`, a key issued here was presented. |
 | `401` | Under a key policy, no key this server takes was presented. |
 | `403` | A member's key while **Members too** is off (`relay_not_for_members`), or a write, or TheTVDB's operator account asked for with a key issued here. |

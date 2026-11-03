@@ -31,6 +31,7 @@ import { POSTER } from '../lib/transitions'
 import { NotFound, Unavailable } from './NotFound'
 import { NumberingBanner } from './admin/editor/NumberingBanner'
 import { FootActions } from './work/bar'
+import { Characters } from './work/characters'
 import { Plate } from './work/Plate'
 import { Companies, Identifiers, Ratings, Record, Releases, WhereToWatch, useWatch, watchable } from './work/record'
 import {
@@ -130,6 +131,7 @@ export function Work() {
     { id: 'details', label: t.work.details },
     watchable(watch.data) ? { id: 'watch', label: t.work.watch } : undefined,
     credits.length ? { id: 'cast', label: t.work.cast } : undefined,
+    item.characters?.length ? { id: 'characters', label: t.character.section } : undefined,
     crewShown(item) ? { id: 'crew', label: t.work.crew } : undefined,
     item.kind === 'series' && seasonNumbers(item).some((n) => episodesOf(item, n).length)
       ? { id: 'seasons', label: t.work.seasons }
@@ -190,6 +192,7 @@ export function Work() {
 
         <div className="min-w-0 space-y-14 lg:col-start-1 lg:row-start-2">
           <CastList credits={credits} people={item.people?.byCredit} />
+          <Characters item={item} />
           <CrewList item={item} />
           {item.kind === 'series' ? <Seasons item={item} /> : null}
           <Gallery item={item} />

@@ -124,7 +124,8 @@ country writes it, read in `region` — by default the country the caller is ans
 `collection`, `company` (a network or a company by this server's id for it, a work's
 `companies[].company.id`, whatever it did for the work) and `keywordId` (one of TMDB's keywords by
 this server's id for it, a work's `keywordEntities[].id`), and sorts by `runtime`, `lastAired` and
-`episodes` besides. `network=` and `keyword=` still take a name, as the works' texts give it — the
+`episodes` besides. `sort=popularity` follows TMDB's figure, or, for a work TMDB gives none, the one
+worked out here (see [The popularity worked out here](sources.md#the-popularity-worked-out-here)). `network=` and `keyword=` still take a name, as the works' texts give it — the
 network's or the studio's, and any source's keyword, AniList's tags among them. `GET
 /api/v1/facets` takes the same filters and adds the countries and the ratings they leave to choose
 from.
@@ -208,11 +209,20 @@ the work names them by (see [The tagline, the countries and the companies](data.
 /api/v1/companies/{id}` is a network's or a company's page, by this server's id for it, and `GET
 /api/v1/keywords/{id}` a keyword's: they answer as the pages above do — `filter` is `{"company":
 …}` or `{"keywordId": …}` — with the entity itself besides, `company` (its kind, `network` or
-`company`, its TMDB and TheTVDB ids, its logo's address at its source and its country) or `keyword`
-(its TMDB id), and for a company `roles`, how many of the works it did what for (`network`,
-`production`, `studio`, `distributor`). A company credited on nothing the caller may see is a
-`404`, as an id nothing has is; neither carries a programmer's note. The network's page by the slug
-of its name, `/networks/{slug}`, stands beside it, and reads the works' texts.
+`company`, its TMDB and TheTVDB ids, its logo — the media store's copy where it keeps one — and its
+country) or `keyword` (its TMDB id), and for a company `roles`, how many of the works it did what for
+(`network`, `production`, `studio`, `distributor`). A company credited on nothing the caller may see
+is a `404`, as an id nothing has is; neither carries a programmer's note. The network's page by the
+slug of its name, `/networks/{slug}`, stands beside it, and reads the works' texts.
+
+`GET /api/v1/characters/{id}` is a character's page, by this server's id for it — a work's
+`characters[].character.id` (see [Characters](data.md#characters)): the character itself — its name,
+the one in its own script with the language it is in (`nativeNameLang`), its picture, TheTVDB's,
+AniList's and MyAnimeList's ids — and every work the caller may see it in, the newest first
+(`appearances`): what it is there (`role`), who plays it (`performer`, the person a credit of the work
+the caller is shown is filed under — none where a lock hides that credit) and who voices it in each
+dub (`voices`); `works` holds those works as cards. A character in nothing the caller may see is a
+`404`.
 
 ## A season
 
@@ -239,7 +249,7 @@ once, then whenever it changes, whichever instance made the change. A comment ev
 seconds keeps a quiet stream open; it ends after five minutes, and its `retry` asks the client to
 open another. `refresh.replay` fills into every work, from the answers kept with it and without
 asking anybody, what a refresh would bring of the networks and companies, TMDB's keywords and
-videos, its pictures' languages and its crew's departments; see [The Jobs
+videos, its pictures' languages, its crew's departments and TheTVDB's characters; see [The Jobs
 page](interface.md#the-jobs-page). The periodic tasks' schedules, a batch of works and the import
 rules are described with the pages they are on: [When it runs](interface.md#when-it-runs),
 [Importing many works at once](editing.md#importing-many-works-at-once) and

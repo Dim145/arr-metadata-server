@@ -27,6 +27,54 @@ pub const TMDB_AIRED: &str = "tmdb-aired";
 /// What TMDB's own numbering is called.
 pub const TMDB_AIRED_LABEL: &str = "TMDB (aired)";
 
+/// The key of a series' numbering as it was served when TheTVDB stopped
+/// knowing the series — deleted it, merged it into another, or answered
+/// twice that it has no such series — kept as an order and frozen as the
+/// aired numbering: Sonarr's files stay where they are, and the episodes that
+/// air afterwards are placed after it (`service::numbering`). No TheTVDB
+/// season type is spelt so, and no group's key: a group's id is hexadecimal.
+pub const TVDB_LAST: &str = "tvdb-last";
+
+/// What that numbering is called.
+pub const TVDB_LAST_LABEL: &str = "TheTVDB (as last given)";
+
+/// Why a series is numbered as TheTVDB last gave it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TvdbDropped {
+    /// TheTVDB answered at two refreshes in a row, the most part of a day
+    /// apart, that it has no such series.
+    Missing,
+    /// Its feed of updates says it deleted the series.
+    Deleted,
+    /// Its feed of updates says it deleted the series as a duplicate of
+    /// another, which it keeps.
+    Merged,
+}
+
+impl TvdbDropped {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Deleted => "deleted",
+            Self::Merged => "merged",
+        }
+    }
+}
+
+impl FromStr for TvdbDropped {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.trim() {
+            "missing" => Self::Missing,
+            "deleted" => Self::Deleted,
+            "merged" => Self::Merged,
+            other => anyhow::bail!("unknown reason a series was dropped: {other}"),
+        })
+    }
+}
+
 /// The longest key an order is asked for by: a TMDB group's is `tmdb-` and
 /// twenty-four hexadecimal digits.
 pub const KEY_MOST: usize = 40;
@@ -285,6 +333,27 @@ mod tests {
         assert_eq!(OrderKind::of_tmdb(5), Some(OrderKind::StoryArc));
         assert_eq!(OrderKind::of_tmdb(7), Some(OrderKind::Tv));
         assert_eq!(OrderKind::of_tmdb(8), None);
+    }
+
+    #[test]
+    fn the_numbering_thetvdb_last_gave_has_a_key_of_its_own() {
+        assert!(is_key(TVDB_LAST));
+        assert!(TVDB_LAST.len() <= KEY_MOST);
+        // None of TheTVDB's season types, nor TMDB's, nor one made here.
+        assert_eq!(OrderKind::of_tvdb(TVDB_LAST), OrderKind::TvdbAlt);
+        assert!(!TVDB_LAST.starts_with(TMDB_GROUP) && !TVDB_LAST.starts_with(MADE_HERE));
+        for why in [
+            TvdbDropped::Missing,
+            TvdbDropped::Deleted,
+            TvdbDropped::Merged,
+        ] {
+            assert_eq!(why.as_str().parse::<TvdbDropped>().unwrap(), why);
+            assert_eq!(
+                serde_json::to_value(why).unwrap(),
+                serde_json::json!(why.as_str())
+            );
+        }
+        assert!("gone".parse::<TvdbDropped>().is_err());
     }
 
     #[test]

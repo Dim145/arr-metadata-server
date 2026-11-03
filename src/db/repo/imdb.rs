@@ -186,6 +186,79 @@ pub async fn episode_ids(db: &Db) -> Result<Vec<String>> {
         .collect()
 }
 
+// ─── the votes, day by day ───────────────────────────────────────────────────
+
+/// How many days of votes are kept: a week of change, and the day before it.
+pub const VOTE_DAYS: i64 = 8;
+
+/// Keep how many votes the list gave each of these works on `day`
+/// (`2026-11-02`), in place of what an earlier reading of the same day kept;
+/// forget the days before the last [`VOTE_DAYS`], and the works no longer
+/// held. In one transaction.
+pub async fn keep_votes(db: &Db, day: &str, votes: &[(String, i64)]) -> Result<()> {
+    let first_kept = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+        .map_err(|e| anyhow::anyhow!("{day:?} is not a day: {e}"))?
+        - chrono::Duration::days(VOTE_DAYS - 1);
+    // One row a work: a list that repeated a line would have one statement
+    // write a row twice, which PostgreSQL refuses.
+    let votes: Vec<(&String, i64)> = votes
+        .iter()
+        .map(|(tconst, count)| (tconst, *count))
+        .collect::<HashMap<&String, i64>>()
+        .into_iter()
+        .collect();
+
+    let mut tx = db.begin_write().await?;
+    for chunk in votes.chunks(CHUNK) {
+        let sql = format!(
+            "INSERT INTO imdb_votes (tconst, day, votes) VALUES {}
+             ON CONFLICT (tconst, day) DO UPDATE SET votes = excluded.votes",
+            vec!["(?, ?, ?)"; chunk.len()].join(", ")
+        );
+        let mut args = AnyArguments::default();
+        for &(tconst, count) in chunk {
+            for result in [
+                args.add(tconst.clone()),
+                args.add(day.to_string()),
+                args.add(count),
+            ] {
+                result.map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
+        }
+        sqlx::query_with(db.sql(&sql), args)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query(db.sql("DELETE FROM imdb_votes WHERE day < ?"))
+        .bind(first_kept.format("%Y-%m-%d").to_string())
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(db.sql(
+        "DELETE FROM imdb_votes
+         WHERE tconst NOT IN (SELECT value FROM media_external_id WHERE source = 'imdb')",
+    ))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The votes kept of every work, by IMDb id, the oldest day first.
+pub async fn votes(db: &Db) -> Result<HashMap<String, Vec<(String, i64)>>> {
+    let rows =
+        sqlx::query(db.sql("SELECT tconst, day, votes FROM imdb_votes ORDER BY tconst, day"))
+            .fetch_all(db.pool())
+            .await?;
+
+    let mut kept: HashMap<String, Vec<(String, i64)>> = HashMap::new();
+    for row in &rows {
+        kept.entry(row.text("tconst")?)
+            .or_default()
+            .push((row.text("day")?, row.big("votes")?));
+    }
+    Ok(kept)
+}
+
 // ─── the titles by region ────────────────────────────────────────────────────
 
 /// One title IMDb gives a work, as `title.akas` lists it.
@@ -573,6 +646,55 @@ async fn forget(db: &Db, head: &str, values: &[String]) -> Result<u64> {
 mod tests {
     use super::*;
     use crate::db::testing::db;
+
+    #[tokio::test]
+    async fn a_week_and_a_day_of_votes_are_kept_for_the_works_held() {
+        let db = db().await;
+        let mut work = crate::domain::MediaItem::empty(crate::domain::MediaKind::Movie);
+        work.title = "Votes Kept By The Day".into();
+        work.slug = crate::domain::make_slug(&work.title, None);
+        work.external_ids.imdb = Some("tt8800001".into());
+        crate::db::repo::item::upsert(
+            &db,
+            crate::db::repo::item::ItemWrite {
+                item: &work,
+                replace_children: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        keep_votes(&db, "2026-10-20", &[("tt8800001".into(), 100)])
+            .await
+            .unwrap();
+        keep_votes(&db, "2026-10-26", &[("tt8800001".into(), 160)])
+            .await
+            .unwrap();
+        // Read twice the same day: the later count stands.
+        keep_votes(&db, "2026-11-02", &[("tt8800001".into(), 200)])
+            .await
+            .unwrap();
+        keep_votes(
+            &db,
+            "2026-11-02",
+            &[("tt8800001".into(), 230), ("tt8800002".into(), 50)],
+        )
+        .await
+        .unwrap();
+
+        // The first day is more than a week before the last; the work not
+        // held keeps nothing.
+        let kept = votes(&db).await.unwrap();
+        assert_eq!(
+            kept["tt8800001"],
+            [
+                ("2026-10-26".to_string(), 160),
+                ("2026-11-02".to_string(), 230)
+            ]
+        );
+        assert_eq!(kept.len(), 1);
+        assert!(keep_votes(&db, "yesterday", &[]).await.is_err());
+    }
 
     #[tokio::test]
     async fn ratings_are_replaced_and_read_back() {

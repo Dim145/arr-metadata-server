@@ -701,7 +701,8 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
             true
         }
         // Two works side by side, and the catalogue by a genre, a network,
-        // a year, a decade, a company or a keyword: its pages.
+        // a year, a decade, a company or a keyword: its pages; and a
+        // character's.
         "/api/v1/compare" => true,
         rest if [
             "/api/v1/genres/",
@@ -710,6 +711,7 @@ fn browsable(method: &axum::http::Method, path: &str) -> bool {
             "/api/v1/decades/",
             "/api/v1/companies/",
             "/api/v1/keywords/",
+            "/api/v1/characters/",
         ]
         .iter()
         .any(|prefix| {
@@ -1029,7 +1031,11 @@ mod browse_tests {
         assert!(allowed(
             "/api/v1/keywords/0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
         ));
+        assert!(allowed(
+            "/api/v1/characters/0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+        ));
         assert!(!allowed("/api/v1/companies/x/y"));
+        assert!(!allowed("/api/v1/characters/x/y"));
         assert!(!allowed("/api/v1/genres/drama/x"));
         assert!(!allowed("/api/v1/genres/"));
         assert!(allowed("/api/v1/compare"));

@@ -1,0 +1,511 @@
+{
+ "data": {
+  "jellyfin": {
+   "id": 21519,
+   "title": {
+    "romaji": "Kimi no Na wa.",
+    "english": "Your Name.",
+    "native": "君の名は。",
+    "userPreferred": "Kimi no Na wa."
+   },
+   "startDate": {
+    "year": 2016,
+    "month": 8,
+    "day": 26
+   },
+   "endDate": {
+    "year": 2016,
+    "month": 8,
+    "day": 26
+   },
+   "coverImage": {
+    "medium": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/small/bx21519-SUo3ZQuCbYhJ.png",
+    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21519-SUo3ZQuCbYhJ.png",
+    "extraLarge": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21519-SUo3ZQuCbYhJ.png"
+   },
+   "bannerImage": "https://s4.anilist.co/file/anilistcdn/media/anime/banner/21519-1ayMXgNlmByb.jpg",
+   "format": "MOVIE",
+   "type": "ANIME",
+   "status": "FINISHED",
+   "episodes": 1,
+   "chapters": null,
+   "volumes": null,
+   "season": "SUMMER",
+   "seasonYear": 2016,
+   "description": "Mitsuha Miyamizu, a high school girl,…",
+   "averageScore": 85,
+   "meanScore": 85,
+   "genres": [
+    "Drama",
+    "Romance",
+    "Supernatural"
+   ],
+   "synonyms": [
+    "Your Name. - Gestern, heute und für immer",
+    "Mi a Neved?",
+    "你的名字。"
+   ],
+   "duration": 107,
+   "tags": [
+    {
+     "id": 154,
+     "name": "Body Swapping",
+     "rank": 95,
+     "category": "Theme-Fantasy",
+     "isMediaSpoiler": false
+    },
+    {
+     "id": 96,
+     "name": "Time Manipulation",
+     "rank": 93,
+     "category": "Theme-Sci-Fi",
+     "isMediaSpoiler": true
+    },
+    {
+     "id": 321,
+     "name": "Urban Fantasy",
+     "rank": 84,
+     "category": "Setting-Universe",
+     "isMediaSpoiler": false
+    }
+   ],
+   "nextAiringEpisode": null,
+   "studios": {
+    "edges": [
+     {
+      "node": {
+       "id": 291,
+       "name": "CoMix Wave",
+       "isAnimationStudio": true
+      },
+      "isMain": true
+     },
+     {
+      "node": {
+       "id": 352,
+       "name": "Kadokawa Pictures Japan",
+       "isAnimationStudio": false
+      },
+      "isMain": false
+     },
+     {
+      "node": {
+       "id": 102,
+       "name": "Funimation",
+       "isAnimationStudio": false
+      },
+      "isMain": false
+     }
+    ]
+   },
+   "characters": {
+    "edges": [
+     {
+      "node": {
+       "id": 121514,
+       "name": {
+        "first": "Mitsuha",
+        "last": "Miyamizu",
+        "full": "Mitsuha Miyamizu"
+       },
+       "image": {
+        "medium": "https://s4.anilist.co/file/anilistcdn/character/medium/b121514-MGI7JRluscpz.png",
+        "large": "https://s4.anilist.co/file/anilistcdn/character/large/b121514-MGI7JRluscpz.png"
+       }
+      },
+      "role": "MAIN",
+      "voiceActors": [
+       {
+        "id": 121515,
+        "name": {
+         "first": "Mone",
+         "last": "Kamishiraishi",
+         "full": "Mone Kamishiraishi",
+         "native": "上白石萌音"
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n121515-RA4atoxdBxD1.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n121515-RA4atoxdBxD1.jpg"
+        },
+        "language": "Japanese"
+       },
+       {
+        "id": 95396,
+        "name": {
+         "first": "Stephanie",
+         "last": "Sheh",
+         "full": "Stephanie Sheh",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n95396-tNpkTyDD9Y1g.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95396-tNpkTyDD9Y1g.jpg"
+        },
+        "language": "English"
+       },
+       {
+        "id": 137359,
+        "name": {
+         "first": "Laura",
+         "last": "Jenni",
+         "full": "Laura Jenni",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n137359-7SEYUmUsi9GS.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n137359-7SEYUmUsi9GS.jpg"
+        },
+        "language": "German"
+       }
+      ]
+     },
+     {
+      "node": {
+       "id": 121516,
+       "name": {
+        "first": "Taki",
+        "last": "Tachibana",
+        "full": "Taki Tachibana"
+       },
+       "image": {
+        "medium": "https://s4.anilist.co/file/anilistcdn/character/medium/b121516-kuPVJLNsH5uE.png",
+        "large": "https://s4.anilist.co/file/anilistcdn/character/large/b121516-kuPVJLNsH5uE.png"
+       }
+      },
+      "role": "MAIN",
+      "voiceActors": [
+       {
+        "id": 95947,
+        "name": {
+         "first": "Ryuunosuke",
+         "last": "Kamiki",
+         "full": "Ryuunosuke Kamiki",
+         "native": "神木隆之介"
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n95947-tFFSGE4ErP8B.png",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95947-tFFSGE4ErP8B.png"
+        },
+        "language": "Japanese"
+       },
+       {
+        "id": 116351,
+        "name": {
+         "first": "Maximilian",
+         "last": "Belle",
+         "full": "Maximilian Belle",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n116351-7eX6ac2MeGn6.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n116351-7eX6ac2MeGn6.jpg"
+        },
+        "language": "German"
+       },
+       {
+        "id": 95833,
+        "name": {
+         "first": "Michael",
+         "last": "Sinterniklaas",
+         "full": "Michael Sinterniklaas",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/833.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/833.jpg"
+        },
+        "language": "English"
+       }
+      ]
+     },
+     {
+      "node": {
+       "id": 121522,
+       "name": {
+        "first": "Miki",
+        "last": "Okudera",
+        "full": "Miki Okudera"
+       },
+       "image": {
+        "medium": "https://s4.anilist.co/file/anilistcdn/character/medium/b121522-TeGSD6ESVtc0.jpg",
+        "large": "https://s4.anilist.co/file/anilistcdn/character/large/b121522-TeGSD6ESVtc0.jpg"
+       }
+      },
+      "role": "SUPPORTING",
+      "voiceActors": [
+       {
+        "id": 101329,
+        "name": {
+         "first": "Masami",
+         "last": "Nagasawa",
+         "full": "Masami Nagasawa",
+         "native": "長澤まさみ"
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n101329-pgUq3x00yTou.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n101329-pgUq3x00yTou.jpg"
+        },
+        "language": "Japanese"
+       },
+       {
+        "id": 128605,
+        "name": {
+         "first": "Laura",
+         "last": "Maire",
+         "full": "Laura Maire",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/n128605-ouc4x3F9CWf8.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n128605-ouc4x3F9CWf8.jpg"
+        },
+        "language": "German"
+       },
+       {
+        "id": 108705,
+        "name": {
+         "first": "Laura",
+         "last": "Post",
+         "full": "Laura Post",
+         "native": null
+        },
+        "image": {
+         "medium": "https://s4.anilist.co/file/anilistcdn/staff/medium/13705.jpg",
+         "large": "https://s4.anilist.co/file/anilistcdn/staff/large/13705.jpg"
+        },
+        "language": "English"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "yamtrack": {
+   "id": 21519,
+   "idMal": 32281,
+   "siteUrl": "https://anilist.co/anime/21519",
+   "title": {
+    "romaji": "Kimi no Na wa.",
+    "english": "Your Name.",
+    "native": "君の名は。"
+   },
+   "coverImage": {
+    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21519-SUo3ZQuCbYhJ.png"
+   },
+   "description": "Mitsuha Miyamizu, a high school girl,…",
+   "format": "MOVIE",
+   "status": "FINISHED",
+   "startDate": {
+    "year": 2016,
+    "month": 8,
+    "day": 26
+   },
+   "endDate": {
+    "year": 2016,
+    "month": 8,
+    "day": 26
+   },
+   "season": "SUMMER",
+   "seasonYear": 2016,
+   "episodes": 1,
+   "duration": 107,
+   "chapters": null,
+   "source": "ORIGINAL",
+   "genres": [
+    "Drama",
+    "Romance",
+    "Supernatural"
+   ],
+   "averageScore": 85,
+   "stats": {
+    "scoreDistribution": [
+     {
+      "score": 10,
+      "amount": 1643
+     },
+     {
+      "score": 20,
+      "amount": 791
+     },
+     {
+      "score": 30,
+      "amount": 1902
+     }
+    ]
+   },
+   "studios": {
+    "nodes": [
+     {
+      "name": "CoMix Wave"
+     }
+    ]
+   },
+   "nextAiringEpisode": null,
+   "relations": {
+    "edges": [
+     {
+      "relationType": "CHARACTER",
+      "node": {
+       "id": 97962,
+       "type": "ANIME"
+      }
+     },
+     {
+      "relationType": "ADAPTATION",
+      "node": {
+       "id": 97337,
+       "type": "MANGA"
+      }
+     },
+     {
+      "relationType": "SIDE_STORY",
+      "node": {
+       "id": 97789,
+       "type": "MANGA"
+      }
+     }
+    ]
+   },
+   "recommendations": {
+    "nodes": [
+     {
+      "mediaRecommendation": {
+       "id": 20954
+      }
+     },
+     {
+      "mediaRecommendation": {
+       "id": 106286
+      }
+     },
+     {
+      "mediaRecommendation": {
+       "id": 1689
+      }
+     }
+    ]
+   }
+  },
+  "taiga": {
+   "id": 21519,
+   "title": {
+    "romaji": "Kimi no Na wa.",
+    "english": "Your Name.",
+    "native": "君の名は。"
+   },
+   "format": "MOVIE",
+   "status": "FINISHED",
+   "description": "Mitsuha Miyamizu, a high school girl,…",
+   "startDate": {
+    "year": 2016,
+    "month": 8,
+    "day": 26
+   },
+   "endDate": {
+    "year": 2016,
+    "month": 8,
+    "day": 26
+   },
+   "episodes": 1,
+   "duration": 107,
+   "countryOfOrigin": "JP",
+   "trailer": {
+    "id": "k4xGqY5IDBE",
+    "site": "youtube"
+   },
+   "updatedAt": 1793653247,
+   "coverImage": {
+    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21519-SUo3ZQuCbYhJ.png"
+   },
+   "genres": [
+    "Drama",
+    "Romance",
+    "Supernatural"
+   ],
+   "synonyms": [
+    "Your Name. - Gestern, heute und für immer",
+    "Mi a Neved?",
+    "你的名字。"
+   ],
+   "averageScore": 85,
+   "popularity": 726372,
+   "tags": [
+    {
+     "name": "Body Swapping",
+     "rank": 95
+    },
+    {
+     "name": "Time Manipulation",
+     "rank": 93
+    },
+    {
+     "name": "Urban Fantasy",
+     "rank": 84
+    }
+   ],
+   "studios": {
+    "nodes": [
+     {
+      "name": "CoMix Wave"
+     },
+     {
+      "name": "Kadokawa Pictures Japan"
+     },
+     {
+      "name": "Funimation"
+     }
+    ]
+   },
+   "nextAiringEpisode": null
+  },
+  "kometa": {
+   "id": 21519,
+   "title": {
+    "romaji": "Kimi no Na wa.",
+    "english": "Your Name."
+   }
+  },
+  "kometaRelations": {
+   "id": 21519,
+   "relations": {
+    "edges": [
+     {
+      "node": {
+       "id": 97962,
+       "type": "ANIME"
+      },
+      "relationType": "CHARACTER"
+     },
+     {
+      "node": {
+       "id": 97337,
+       "type": "MANGA"
+      },
+      "relationType": "ADAPTATION"
+     },
+     {
+      "node": {
+       "id": 97789,
+       "type": "MANGA"
+      },
+      "relationType": "SIDE_STORY"
+     }
+    ],
+    "nodes": [
+     {
+      "id": 97962,
+      "type": "ANIME"
+     },
+     {
+      "id": 97337,
+      "type": "MANGA"
+     },
+     {
+      "id": 97789,
+      "type": "MANGA"
+     }
+    ]
+   }
+  }
+ }
+}

@@ -23,13 +23,23 @@ use serde_json::{Value, json};
 use crate::{
     config,
     db::{new_id, now},
-    domain::{CoverType, ExternalIds, Image, MediaItem, MediaKind, Rating, Relation},
+    domain::{
+        CoverType, ExternalIds, Image, MediaItem, MediaKind, Rating, Relation,
+        person::{Character, CharacterCredit, CharacterRole, CharacterVoice, in_own_script},
+    },
     providers::{PATIENCE, Pacer, alternative_title, plain_text},
 };
 
-/// One entry, whole. `{scores}` is where the [`SCORES`] go: see [`scored`].
+/// One entry, whole. `{scores}` is where the [`SCORES`] go: see [`scored`];
+/// `{characters}`, [`CHARACTERS`], unless AniList refused them.
 ///
 /// Relations in their third version, which adds `SAME_UNIVERSE` to the second.
+/// Its tags and every studio by their ids, each studio with whether it is a
+/// main one and an animation studio, and how many of AniList's members list
+/// it (`popularity`): what the answer kept is read by when AniList's own
+/// clients are answered here (`wire::anilist`), as AniList's schema has them
+/// — its count sorts them as AniList does, never weighed against this
+/// server's popularity. The main studio is the work's.
 const QUERY: &str = "query ($id: Int) {
   Media(id: $id, type: ANIME) {
     id idMal format
@@ -39,8 +49,9 @@ const QUERY: &str = "query ($id: Int) {
     {scores}
     stats { scoreDistribution { score amount } }
     genres
-    tags { name rank isMediaSpoiler isGeneralSpoiler }
-    studios(isMain: true) { nodes { name } }
+    popularity
+    tags { id name rank isMediaSpoiler isGeneralSpoiler category }
+    studios { edges { isMain node { id name isAnimationStudio } } }
     isAdult
     coverImage { extraLarge }
     startDate { year }
@@ -55,8 +66,25 @@ const QUERY: &str = "query ($id: Int) {
         }
       }
     }
+    {characters}
   }
 }";
+
+/// The entry's characters, its leads first, and who voices each in every
+/// dub AniList knows of — `voiceActors` with no language names them all,
+/// Japanese first (measured on 2 November 2026: Attack on Titan's 25 come with
+/// 168 voices in 8 languages, the whole answer 49 kB). With how many it has
+/// and whether there are more than these (`pageInfo`): kept in the answer,
+/// for AniList's own clients to be told whether the list they are given is
+/// whole (`wire::anilist`).
+const CHARACTERS: &str = "characters(sort: [ROLE, RELEVANCE, ID], perPage: 25) {
+      pageInfo { total hasNextPage }
+      edges {
+        role
+        node { id name { full native } image { large } }
+        voiceActors(sort: [RELEVANCE, ID]) { id name { full native } languageV2 image { large } }
+      }
+    }";
 
 /// Just enough of an entry to show it as another work's relation: the entry a
 /// Fan-Kai was cut from, say.
@@ -75,6 +103,10 @@ const ENTRY: &str = "query ($id: Int) {
 /// for as long as AniList still knows it.
 const SCORES: [&str; 2] = ["weightedScore", "averageScore"];
 
+/// The bit [`CHARACTERS`] has in [`AnilistClient::dropped`], after the
+/// [`SCORES`]'.
+const CHARACTERS_BIT: u8 = 1 << SCORES.len();
+
 /// Tags ranked below this are ones a minority of voters agreed with.
 const TAG_RANK: i32 = 60;
 
@@ -88,7 +120,9 @@ pub struct AnilistClient {
     instance: String,
     gate: crate::providers::Gate,
     /// The [`SCORES`] AniList refused a query for, a bit each by their place
-    /// there: a field it no longer knows is not asked for again.
+    /// there: a field it no longer knows is not asked for again. The
+    /// [`CHARACTERS`] too, at [`CHARACTERS_BIT`], when a query refused with
+    /// them was answered without.
     dropped: AtomicU8,
 }
 
@@ -120,7 +154,10 @@ impl AnilistClient {
     ///
     /// A query refused because AniList no longer knows one of the [`SCORES`]
     /// is sent again without it, and so is every one after: a deprecated
-    /// field going away must cost the figure it carried, not the entry.
+    /// field going away must cost the figure it carried, not the entry. One
+    /// refused for any other reason while it asked for the [`CHARACTERS`] is
+    /// sent once more without them, and when that one is answered they are
+    /// not asked for again: the characters are worth less than the entry.
     pub async fn media(&self, id: i64, kind: MediaKind) -> Result<Option<(Value, MediaItem)>> {
         let raw = loop {
             let dropped = self.dropped.load(Ordering::Relaxed);
@@ -130,17 +167,33 @@ impl AnilistClient {
                 Err(error) => error,
             };
             // One this query did not ask for is not one to leave out.
-            let Some(unknown) = error
+            if let Some(unknown) = error
                 .downcast_ref::<UnknownScore>()
                 .filter(|u| dropped & u.bit() == 0)
-            else {
+            {
+                if self.dropped.fetch_or(unknown.bit(), Ordering::Relaxed) & unknown.bit() == 0 {
+                    tracing::warn!(
+                        field = SCORES[unknown.0],
+                        "AniList no longer knows this score; it is not asked for again"
+                    );
+                }
+                continue;
+            }
+            if dropped & CHARACTERS_BIT != 0 || error.downcast_ref::<Refused>().is_none() {
+                return Err(error);
+            }
+            let Ok(answer) = self.ask(&scored(dropped | CHARACTERS_BIT), id).await else {
                 return Err(error);
             };
-            if self.dropped.fetch_or(unknown.bit(), Ordering::Relaxed) & unknown.bit() == 0 {
+            if self.dropped.fetch_or(CHARACTERS_BIT, Ordering::Relaxed) & CHARACTERS_BIT == 0 {
                 tracing::warn!(
-                    field = SCORES[unknown.0],
-                    "AniList no longer knows this score; it is not asked for again"
+                    error = format_args!("{error:#}"),
+                    "AniList refused an entry's characters; they are not asked for again"
                 );
+            }
+            match answer {
+                Some(raw) => break raw,
+                None => return Ok(None),
             }
         };
 
@@ -208,10 +261,11 @@ impl AnilistClient {
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" ");
-            anyhow::bail!(
+            return Err(Refused(format!(
                 "AniList returned {status}: {}",
                 crate::providers::clip(&reason, crate::providers::MESSAGE_CHARS)
-            );
+            ))
+            .into());
         }
         if !status.is_success() {
             let reason = crate::providers::error_text(response).await;
@@ -228,10 +282,11 @@ impl AnilistClient {
             }
             // GraphQL reports its errors in the body, with a 200 as often as not.
             if let Some(errors) = raw.get("errors") {
-                anyhow::bail!(
+                return Err(Refused(format!(
                     "AniList refused the query: {}",
                     crate::providers::clip(&errors.to_string(), crate::providers::MESSAGE_CHARS)
-                );
+                ))
+                .into());
             }
             return Ok(None);
         }
@@ -240,7 +295,8 @@ impl AnilistClient {
     }
 }
 
-/// [`QUERY`], asking for the [`SCORES`] whose bits are not in `dropped`.
+/// [`QUERY`], asking for the [`SCORES`] whose bits are not in `dropped`, and
+/// for the [`CHARACTERS`] unless their bit is.
 fn scored(dropped: u8) -> String {
     let scores: Vec<&str> = SCORES
         .iter()
@@ -248,8 +304,27 @@ fn scored(dropped: u8) -> String {
         .filter(|(at, _)| dropped & (1 << at) == 0)
         .map(|(_, field)| *field)
         .collect();
-    QUERY.replace("{scores}", &scores.join(" "))
+    let characters = match dropped & CHARACTERS_BIT {
+        0 => CHARACTERS,
+        _ => "",
+    };
+    QUERY
+        .replace("{scores}", &scores.join(" "))
+        .replace("{characters}", characters)
 }
+
+/// AniList refusing a query, in its own words: a 400, or the errors GraphQL
+/// answers in place of the entry.
+#[derive(Debug)]
+struct Refused(String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 /// AniList refusing a query because it no longer knows one of the
 /// [`SCORES`]: the field's place there.
@@ -323,6 +398,54 @@ struct Media {
     cover_image: Option<Cover>,
     start_date: Option<Date>,
     relations: Option<Relations>,
+    characters: Option<Characters>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Characters {
+    edges: Option<Vec<CharacterEdge>>,
+}
+
+/// A character of the entry: what it is there — `MAIN`, `SUPPORTING`,
+/// `BACKGROUND` — and who voices it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CharacterEdge {
+    role: Option<String>,
+    node: Option<CharacterNode>,
+    voice_actors: Option<Vec<Staff>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CharacterNode {
+    id: i64,
+    #[serde(default)]
+    name: Name,
+    image: Option<Picture>,
+}
+
+/// One of AniList's staff — here, a voice — and the language they voice in:
+/// `Japanese`, `English`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Staff {
+    id: i64,
+    #[serde(default)]
+    name: Name,
+    language_v2: Option<String>,
+    image: Option<Picture>,
+}
+
+/// A character's or a person's name: whole, and in its own script.
+#[derive(Debug, Default, Deserialize)]
+struct Name {
+    full: Option<String>,
+    native: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Picture {
+    large: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -388,8 +511,16 @@ struct Tag {
 
 #[derive(Debug, Deserialize)]
 struct Studios {
+    edges: Option<Vec<StudioEdge>>,
+}
+
+/// One of the studios of an entry, and whether it is one of its main ones.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StudioEdge {
     #[serde(default)]
-    nodes: Vec<Named>,
+    is_main: bool,
+    node: Option<Named>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -431,11 +562,13 @@ fn to_item(media: &Media, kind: MediaKind) -> MediaItem {
         .map(plain_text)
         .filter(|s| !s.is_empty());
     item.year = media.start_date.as_ref().and_then(|d| d.year);
+    // The first of its main studios, as AniList lists them.
     item.studio = media
         .studios
-        .as_ref()
-        .and_then(|s| s.nodes.first())
-        .map(|n| n.name.clone());
+        .iter()
+        .flat_map(|s| s.edges.iter().flatten())
+        .filter(|edge| edge.is_main)
+        .find_map(|edge| trimmed(edge.node.as_ref().map(|n| n.name.as_str())));
     item.genres = media.genres.clone();
     item.keywords = media
         .tags
@@ -517,9 +650,186 @@ fn to_item(media: &Media, kind: MediaKind) -> MediaItem {
     }
 
     item.relations = relations(media);
+    item.characters = characters(media);
 
     item.updated_at = now();
     item
+}
+
+/// A text AniList gives, trimmed, when there is any.
+fn trimmed(text: Option<&str>) -> Option<String> {
+    text.map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(String::from)
+}
+
+/// A picture AniList gives, unless it is the one it gives for none
+/// (`…/default.jpg`) or is not over https.
+fn picture(image: Option<&Picture>) -> Option<String> {
+    image?
+        .large
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| url.starts_with("https://") && !url.ends_with("/default.jpg"))
+        .map(String::from)
+}
+
+/// The entry's characters, its leads first, as AniList lists them, each once:
+/// its name — and in its own script — its picture, what it is to the entry,
+/// and who voices it in each dub of a language this server can name, a
+/// language at a time in AniList's order. A character without a name is
+/// none; who plays it here is for the merge to find among the cast.
+fn characters(media: &Media) -> Vec<CharacterCredit> {
+    let mut out: Vec<CharacterCredit> = Vec::new();
+    let edges = media
+        .characters
+        .iter()
+        .flat_map(|c| c.edges.iter().flatten());
+    for edge in edges {
+        let Some(node) = &edge.node else { continue };
+        let Some(name) = trimmed(node.name.full.as_deref()) else {
+            continue;
+        };
+        if out.iter().any(|c| c.character.anilist_id == Some(node.id)) {
+            continue;
+        }
+
+        let mut voices: Vec<CharacterVoice> = Vec::new();
+        for staff in edge.voice_actors.iter().flatten() {
+            let (Some(language), Some(voice)) = (
+                staff.language_v2.as_deref().and_then(dub_language),
+                trimmed(staff.name.full.as_deref()),
+            ) else {
+                continue;
+            };
+            if voices
+                .iter()
+                .any(|v| v.language == language && v.name == voice)
+            {
+                continue;
+            }
+            let sort_order = voices.iter().filter(|v| v.language == language).count();
+            voices.push(CharacterVoice {
+                language: language.to_string(),
+                native_name: staff
+                    .name
+                    .native
+                    .as_deref()
+                    .and_then(in_own_script)
+                    .filter(|native| *native != voice),
+                name: voice,
+                image: picture(staff.image.as_ref()),
+                anilist_id: Some(staff.id),
+                mal_id: None,
+                sort_order: i32::try_from(sort_order).unwrap_or(i32::MAX),
+            });
+        }
+
+        out.push(CharacterCredit {
+            character: Character {
+                id: String::new(),
+                native_name: node
+                    .name
+                    .native
+                    .as_deref()
+                    .and_then(in_own_script)
+                    .filter(|native| *native != name),
+                name,
+                image: picture(node.image.as_ref()),
+                tvdb_id: None,
+                anilist_id: Some(node.id),
+                mal_id: None,
+            },
+            role: edge.role.as_deref().and_then(character_role),
+            sort_order: i32::try_from(out.len()).unwrap_or(i32::MAX),
+            credit_id: None,
+            voices,
+            source: Some("anilist".to_string()),
+        });
+    }
+    out
+}
+
+/// Whether an answer of AniList's was asked for the entry's characters. One
+/// asked without them — AniList refused them once, and they are not asked
+/// for again ([`CHARACTERS_BIT`]) — says nothing of them, which is not
+/// saying the entry has none: the characters it gave before are kept by
+/// (`merge::provenance::characters_given`), as a source's that did not
+/// answer are.
+pub fn asked_characters(raw: &Value) -> bool {
+    raw.pointer("/data/Media")
+        .and_then(Value::as_object)
+        .is_some_and(|media| media.contains_key("characters"))
+}
+
+/// The entry's characters, read off AniList's answer as it is kept, as
+/// [`characters`] reads them off a fresh one. None from an answer asked
+/// without them, or that is not an entry's.
+pub fn characters_of(raw: &Value) -> Vec<CharacterCredit> {
+    Media::deserialize(&raw["data"]["Media"])
+        .map(|media| characters(&media))
+        .unwrap_or_default()
+}
+
+/// What a character is to an entry, as AniList says.
+fn character_role(role: &str) -> Option<CharacterRole> {
+    match role.trim().to_ascii_uppercase().as_str() {
+        "MAIN" => Some(CharacterRole::Main),
+        "SUPPORTING" => Some(CharacterRole::Supporting),
+        "BACKGROUND" => Some(CharacterRole::Background),
+        _ => None,
+    }
+}
+
+/// A dub's language as AniList names it — `Japanese`, `Portuguese` — in ISO
+/// 639-3, as the model keeps languages. One this server cannot name is none:
+/// its voices are left out rather than filed under a guess.
+fn dub_language(name: &str) -> Option<&'static str> {
+    Some(match name.trim().to_ascii_lowercase().as_str() {
+        "japanese" => "jpn",
+        "english" => "eng",
+        "korean" => "kor",
+        "chinese" => "zho",
+        "mandarin" => "cmn",
+        "cantonese" => "yue",
+        "taiwanese" => "nan",
+        "french" => "fra",
+        "german" => "deu",
+        "italian" => "ita",
+        "spanish" => "spa",
+        "portuguese" => "por",
+        "hebrew" => "heb",
+        "hungarian" => "hun",
+        "arabic" => "ara",
+        "filipino" => "fil",
+        "tagalog" => "tgl",
+        "catalan" => "cat",
+        "finnish" => "fin",
+        "turkish" => "tur",
+        "dutch" => "nld",
+        "swedish" => "swe",
+        "norwegian" => "nor",
+        "danish" => "dan",
+        "polish" => "pol",
+        "czech" => "ces",
+        "slovak" => "slk",
+        "russian" => "rus",
+        "ukrainian" => "ukr",
+        "greek" => "ell",
+        "romanian" => "ron",
+        "thai" => "tha",
+        "vietnamese" => "vie",
+        "indonesian" => "ind",
+        "malaysian" | "malay" => "msa",
+        "hindi" => "hin",
+        "urdu" => "urd",
+        "bengali" => "ben",
+        "tamil" => "tam",
+        "telugu" => "tel",
+        "nepali" => "nep",
+        "persian" => "fas",
+        _ => return None,
+    })
 }
 
 /// The entries AniList files beside this one: prequels and sequels first, then
@@ -627,7 +937,10 @@ mod tests {
                 { "name": "Twist", "rank": 90, "isMediaSpoiler": true, "isGeneralSpoiler": false },
                 { "name": "Rare", "rank": 20, "isMediaSpoiler": false, "isGeneralSpoiler": false }
             ],
-            "studios": { "nodes": [{ "name": "WIT STUDIO" }] },
+            "studios": { "edges": [
+                { "isMain": false, "node": { "id": 6145, "name": "Pony Canyon", "isAnimationStudio": false } },
+                { "isMain": true, "node": { "id": 858, "name": "WIT STUDIO", "isAnimationStudio": true } }
+            ] },
             "isAdult": false,
             "coverImage": { "extraLarge": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx16498.jpg" },
             "startDate": { "year": 2013 },
@@ -865,12 +1178,153 @@ mod tests {
         assert_eq!(score(&media), Some(8.5), "nought is no score");
     }
 
+    /// As AniList answers `characters` (measured on 2 November 2026): its
+    /// leads first, each with every dub's voice, a default picture for one
+    /// it has none of.
+    fn with_characters() -> Media {
+        let mut media = attack_on_titan();
+        media.characters = Some(
+            serde_json::from_value(json!({ "edges": [
+                { "role": "MAIN",
+                  "node": { "id": 40882, "name": { "full": "Eren Yeager", "native": "エレン・イェーガー" },
+                            "image": { "large": "https://s4.anilist.co/file/anilistcdn/character/large/b40882.png" } },
+                  "voiceActors": [
+                    { "id": 95185, "name": { "full": "Yuuki Kaji", "native": "梶裕貴" }, "languageV2": "Japanese",
+                      "image": { "large": "https://s4.anilist.co/file/anilistcdn/staff/large/n95185.png" } },
+                    { "id": 95186, "name": { "full": "Bryce Papenbrook", "native": null }, "languageV2": "English",
+                      "image": { "large": "https://s4.anilist.co/file/anilistcdn/staff/large/default.jpg" } },
+                    { "id": 95187, "name": { "full": "Martial Le Minoux", "native": "Martial Le Minoux" },
+                      "languageV2": "French", "image": null },
+                    { "id": 95188, "name": { "full": "Somebody", "native": null }, "languageV2": "Klingon" },
+                    { "id": 95189, "name": { "full": " ", "native": null }, "languageV2": "German" }
+                  ] },
+                { "role": "SUPPORTING",
+                  "node": { "id": 45627, "name": { "full": "Levi", "native": "リヴァイ" },
+                            "image": { "large": "https://s4.anilist.co/file/anilistcdn/character/large/default.jpg" } },
+                  "voiceActors": null },
+                { "role": "MAIN", "node": { "id": 40882, "name": { "full": "Eren Yeager" } } },
+                { "role": "BACKGROUND", "node": { "id": 1, "name": { "full": "  " } } },
+                { "role": "BACKGROUND", "node": null }
+            ] }))
+            .unwrap(),
+        );
+        media
+    }
+
+    #[test]
+    fn the_characters_come_with_what_they_are_to_it_and_every_dubs_voice() {
+        let item = to_item(&with_characters(), MediaKind::Series);
+        // Its name, in its own script, AniList's id, its role, its place.
+        type Read<'a> = (
+            &'a str,
+            Option<&'a str>,
+            Option<i64>,
+            Option<CharacterRole>,
+            i32,
+        );
+        let read: Vec<Read<'_>> = item
+            .characters
+            .iter()
+            .map(|c| {
+                (
+                    c.character.name.as_str(),
+                    c.character.native_name.as_deref(),
+                    c.character.anilist_id,
+                    c.role,
+                    c.sort_order,
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (
+                    "Eren Yeager",
+                    Some("エレン・イェーガー"),
+                    Some(40882),
+                    Some(CharacterRole::Main),
+                    0
+                ),
+                (
+                    "Levi",
+                    Some("リヴァイ"),
+                    Some(45627),
+                    Some(CharacterRole::Supporting),
+                    1
+                ),
+            ],
+            "each once, and none without a name"
+        );
+        let eren = &item.characters[0];
+        assert!(
+            eren.character
+                .image
+                .as_deref()
+                .is_some_and(|i| i.contains("b40882"))
+        );
+        assert_eq!(
+            item.characters[1].character.image, None,
+            "AniList's picture of nobody"
+        );
+        assert_eq!(eren.source.as_deref(), Some("anilist"));
+        assert_eq!(eren.credit_id, None, "who plays it is the merge's to find");
+
+        // The dub, the voice, in their own script, AniList's id, a portrait.
+        type Voice<'a> = (&'a str, &'a str, Option<&'a str>, Option<i64>, bool);
+        let voices: Vec<Voice<'_>> = eren
+            .voices
+            .iter()
+            .map(|v| {
+                (
+                    v.language.as_str(),
+                    v.name.as_str(),
+                    v.native_name.as_deref(),
+                    v.anilist_id,
+                    v.image.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            voices,
+            [
+                ("jpn", "Yuuki Kaji", Some("梶裕貴"), Some(95185), true),
+                ("eng", "Bryce Papenbrook", None, Some(95186), false),
+                ("fra", "Martial Le Minoux", None, Some(95187), false),
+            ],
+            "a language this server cannot name, and a voice without a name, left out"
+        );
+        assert!(eren.voices.iter().all(|v| v.sort_order == 0));
+        assert!(item.characters[1].voices.is_empty());
+    }
+
     #[test]
     fn both_scores_and_the_third_version_of_relations_are_asked_for() {
         let query = scored(0);
         assert!(query.contains("weightedScore averageScore"), "{query}");
         assert!(query.contains("relationType(version: 3)"), "{query}");
         assert!(!query.contains("{scores}"), "{query}");
+        assert!(query.contains("characters(sort: [ROLE, RELEVANCE, ID]"));
+        assert!(query.contains("voiceActors(sort: [RELEVANCE, ID])"));
+        // How many there are, and whether there are more than those asked.
+        assert!(
+            query.contains("perPage: 25) {\n      pageInfo { total hasNextPage }\n      edges {"),
+            "{query}"
+        );
+        assert!(!query.contains("{characters}"), "{query}");
+        // The tags and the studios by their ids, as AniList's own clients
+        // read them from the answer kept.
+        assert!(
+            query.contains("tags { id name rank isMediaSpoiler isGeneralSpoiler category }"),
+            "{query}"
+        );
+        assert!(
+            query.contains("studios { edges { isMain node { id name isAnimationStudio } } }"),
+            "{query}"
+        );
+        assert!(query.contains("\n    popularity\n"), "{query}");
+        let without = scored(CHARACTERS_BIT);
+        assert!(!without.contains("characters(") && !without.contains("{characters}"));
+        assert!(without.contains("weightedScore averageScore"));
 
         let without = scored(UnknownScore(1).bit());
         assert!(without.contains("weightedScore"), "{without}");
@@ -880,6 +1334,21 @@ mod tests {
         let neither = scored(UnknownScore(0).bit() | UnknownScore(1).bit());
         assert!(!neither.contains("weightedScore") && !neither.contains("averageScore"));
         assert!(neither.contains("relations"), "{neither}");
+    }
+
+    /// An answer asked for the characters says so, though it has none; one
+    /// asked without them says nothing of them.
+    #[test]
+    fn an_answer_asked_without_its_characters_says_nothing_of_them() {
+        let none = json!({ "data": { "Media": { "id": 1, "characters": {
+            "pageInfo": { "total": 0, "hasNextPage": false },
+            "edges": []
+        } } } });
+        assert!(asked_characters(&none), "asked for, and none");
+        assert!(!asked_characters(
+            &json!({ "data": { "Media": { "id": 1 } } })
+        ));
+        assert!(!asked_characters(&json!({ "data": { "Media": null } })));
     }
 
     #[test]
@@ -907,6 +1376,24 @@ mod tests {
     /// is refused as GraphQL refuses one, with a 400, and the others are
     /// answered with Attack on Titan. And the queries it was sent.
     async fn without_the_former_score() -> (String, Arc<Mutex<Vec<String>>>) {
+        stand_in(|query| {
+            query.contains("averageScore").then(|| {
+                json!({ "errors": [{
+                    "message": "Cannot query field \"averageScore\" on type \"Media\". Did you mean \"weightedScore\"?",
+                    "status": 400,
+                    "locations": [{ "line": 7, "column": 5 }]
+                }], "data": null })
+            })
+        })
+        .await
+    }
+
+    /// An AniList that answers Attack on Titan, but for a query `refuses`
+    /// names the errors of: those are answered with a 400. And the queries
+    /// it was sent.
+    async fn stand_in(
+        refuses: impl Fn(&str) -> Option<Value> + Send + 'static,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -940,24 +1427,16 @@ mod tests {
                     .ok()
                     .and_then(|b| b["query"].as_str().map(String::from))
                     .unwrap_or_default();
-                let (status, answer) = if query.contains("averageScore") {
-                    (
-                        "400 Bad Request",
-                        json!({ "errors": [{
-                            "message": "Cannot query field \"averageScore\" on type \"Media\". Did you mean \"weightedScore\"?",
-                            "status": 400,
-                            "locations": [{ "line": 7, "column": 5 }]
-                        }], "data": null }),
-                    )
-                } else {
-                    (
+                let (status, answer) = match refuses(&query) {
+                    Some(errors) => ("400 Bad Request", errors),
+                    None => (
                         "200 OK",
                         json!({ "data": { "Media": {
                             "id": 16498,
                             "title": { "romaji": "Shingeki no Kyojin" },
                             "weightedScore": 86
                         } } }),
-                    )
+                    ),
                 };
                 seen.lock().push(query);
                 let answer = answer.to_string();
@@ -1009,5 +1488,43 @@ mod tests {
             assert!(query.contains("weightedScore"), "{query}");
             assert!(!query.contains("averageScore"), "{query}");
         }
+    }
+
+    /// An AniList that refuses the characters — a query it finds too costly,
+    /// say — still answers for the entry, and is not asked for them again.
+    #[tokio::test]
+    async fn characters_anilist_refuses_cost_one_refusal_and_never_the_entry() {
+        let (at, asked) = stand_in(|query| {
+            query.contains("characters(").then(|| {
+                json!({ "errors": [{ "message": "Max query complexity", "status": 400 }], "data": null })
+            })
+        })
+        .await;
+        let mut anilist = AnilistClient::new(
+            reqwest::Client::new(),
+            &config::Anilist {
+                upstream: at,
+                enabled: true,
+                passthrough: false,
+            },
+            "a test".into(),
+        );
+        anilist.pacer = Pacer::new(std::time::Duration::ZERO);
+
+        for _ in 0..2 {
+            let (raw, item) = anilist
+                .media(16498, MediaKind::Series)
+                .await
+                .unwrap()
+                .expect("the entry, without its characters");
+            assert_eq!(item.rating("anilist").and_then(|r| r.value), Some(8.6));
+            assert!(item.characters.is_empty());
+            // Not asked for them: it says nothing of them.
+            assert!(!asked_characters(&raw));
+        }
+        let asked = asked.lock().clone();
+        assert_eq!(asked.len(), 3, "refused once, and only once: {asked:#?}");
+        assert!(asked[0].contains("characters("));
+        assert!(asked[1..].iter().all(|q| !q.contains("characters(")));
     }
 }

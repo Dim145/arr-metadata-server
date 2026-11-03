@@ -54,6 +54,8 @@ reading: the same series, with what v5 reads besides.
   numbers — one TheTVDB does not list, or one it stopped answering for (see
   [Who numbers a series](#who-numbers-a-series)) — or `fankai`, or `local` for a
   series [entered by hand](#works-entered-by-hand) that nothing elsewhere names.
+  A series TheTVDB no longer knows stays `tvdb` while the numbering it was served
+  by is frozen (see [A series TheTVDB no longer knows](#a-series-thetvdb-no-longer-knows)).
 
 The language is three letters, as Sonarr writes it (`eng`, `fra`). The series is
 answered in it when the catalogue holds it so; otherwise in the caller's own
@@ -73,7 +75,10 @@ Sonarr takes a series for deleted on a `404` and keeps what it has on anything
 else, so the doubt goes to the `502`, which it asks again at its next refresh. A
 search is the same: nothing found while a source did not answer is a `502`, not
 the empty list Sonarr reads as "no such series", and a name the catalogue holds
-is answered whether or not the sources do. On both editions.
+is answered whether or not the sources do. On both editions. With TVmaze's index
+kept (`tvmaze.index`), the series it lists by that name — or, for a `tvdb:`,
+`imdb:` or `tmdb:` lookup, under that id — are answered in the `502`'s place,
+under their TheTVDB ids: see [TVmaze's index](sources.md#tvmazes-index).
 
 Sonarr v5 is a pre-release: this was checked against 5.0.0.2701
 ([Verified against](integration.md#verified-against)).
@@ -175,6 +180,12 @@ Radarr is sent, on `/v1/movie/{id}`, `/v1/movie/imdb/{id}` and `/v1/movie/bulk`:
   [Data](data.md#release-dates-and-certifications-by-country);
 - the **jobs** TMDB gives the writers (the screenplay, the story, the novel) and
   the producers a film keeps beside its directors.
+
+`/v1/movie/collection/{id}`, where Radarr reads a collection, answers with the
+collection the catalogue keeps — its name and overview in the language the Radarr
+is answered in where TMDB has them in it, its pictures from the media store, its
+films each naming it — and asks TMDB once for one never kept: see
+[Collections](data.md#collections).
 
 `/v1/movie/changed` names the films changed here too — fetched again, a lock put
 on, changed or lifted — with or without TMDB.
@@ -368,7 +379,11 @@ as `item.renumbered`, by `system`, with how many moved and the first three:
 
 A [notification destination](notifications.md) can be told of `item.renumbered`
 like any action of the trail. An episode added or gone, one made by hand, and a
-numbering kept because TheTVDB did not answer are not moves.
+numbering kept because TheTVDB did not answer are not moves. Nothing is told
+either while an order is frozen as the series' aired numbering — by a person, or
+as TheTVDB last gave a series it [no longer knows](#a-series-thetvdb-no-longer-knows):
+that order is what the clients are sent, and the series' own episodes moving
+moves nothing they are sent.
 
 To keep a series numbered as it stands while TheTVDB renumbers it, make an order
 from its aired one and freeze it: see
@@ -502,6 +517,85 @@ series at once; TheTVDB still silent, TMDB keeps it. Through the API:
 Sonarr renumbers a series TMDB numbers otherwise than TheTVDB: TMDB cuts some
 series' seasons its own way, One Piece's into more seasons than TheTVDB's. The
 setting is how long TheTVDB is waited for before that.
+
+### A series TheTVDB no longer knows
+
+TheTVDB deletes series — duplicates, mostly, which it merges into the record it
+keeps — and answers `404` for their ids from then on. The real service drops such
+a series: Sonarr says it was removed from TheTVDB, and keeps it unrefreshed until
+it is deleted and added again under another id, its files matched anew.
+
+This server goes on serving it, under the TheTVDB id Sonarr holds it by. A
+refresh TheTVDB answers `404` for keeps the numbering TheTVDB gave last, as a
+refresh it does not answer does, and the work says so (*refreshed in part*).
+When TheTVDB has answered so at two refreshes in a row, twenty hours apart at
+the least — or when its feed of updates says it deleted the series, or merged
+it into another (the task **TheTVDB's deleted series**, below) — the numbering
+the series is served by then is kept as an order, *TheTVDB (as last given)*
+(`tvdb-last`), frozen as the aired numbering: Sonarr v4, Sonarr v5 asking for
+`official`, Plex with no order named, the TheTVDB relay's `official` pages and
+the `.nfo` documents are answered in it, and Sonarr's files stay where they are.
+Sonarr v5 is sent `metadataSource` `tvdb` while it is frozen, whoever numbers the
+work itself.
+
+The episodes that air afterwards are placed after its last episode, by the day
+they aired, read from TMDB's own numbering (`tmdb-aired`), else from TVmaze
+(`tvmaze.enabled`):
+
+- an episode of a TMDB season that holds episodes of the kept numbering goes on
+  in the season of the last of them — `S03E10` kept, `S03E11` next — and one of
+  a season TMDB opened since opens the season after the last;
+- a special goes after the last special kept;
+- absolute numbers go on where the kept ones have them;
+- an episode placed once keeps its place at every refresh after.
+
+An episode TMDB lists that aired while TheTVDB still knew the series, and that
+TheTVDB's numbering left out, is not added: what aired then was TheTVDB's to
+number. The work itself is numbered by TMDB meanwhile, as when TheTVDB stops
+answering for it — its page and its editor show TMDB's seasons, under the
+banner — and keeps the TheTVDB id. The audit trail says so
+(`item.numbering_fallback`, by `system`), and a
+[notification destination](notifications.md) that wants `numbering.fallback`
+is told; the episodes the work's own numbering moves are not told as
+[renumbered](#renumbered-episodes), since none of them moves in what Sonarr is
+sent.
+
+It lasts until TheTVDB knows the series again: its numbering is then taken back
+of itself, and the one kept forgotten (`item.numbering_restored`). **Back to
+TheTVDB** refreshes the series at once; it changes nothing while TheTVDB still
+has no such series. With `numbering.fallbackAfter` at `0` nothing of this
+happens: TheTVDB's numbering stands as it was last given, and nothing that airs
+afterwards is added.
+
+**A series TheTVDB merged into another** is the same series, which TheTVDB goes
+on numbering under the id it kept. The work takes that id at its next refresh,
+and is read from TheTVDB under it from then on — TheTVDB failing under it is
+waited out as any silence is; it keeps answering to the one it had, as a work
+[merged here](#after-a-merge) does: Sonarr asking by either is
+given the work, under the id it asked by. The numbering kept is the one Sonarr
+matched its files by, before the merge, and the episodes that air afterwards
+come from TheTVDB under the new id, placed after it: the series TheTVDB kept may
+cut its seasons otherwise. TheTVDB answering under the new id does not give the
+numbering back; **Back to TheTVDB** does, and Sonarr then renumbers the series
+as TheTVDB numbers it under the new id, at its next refresh: press it once the
+series is added again under that id, or once that numbering is found to be the
+same. Where the
+catalogue holds the series TheTVDB kept as another work already, the two are
+duplicates here as they were there: the work keeps its own id, numbered as a
+series TheTVDB deleted, until they are merged.
+
+The task **TheTVDB's deleted series** (`tvdb.deleted`) reads TheTVDB's feed of
+updates once a day for the series it deleted, or merged into another, since the
+last reading — seven days back the first time and at the most, an hour before the
+last reading began otherwise, so that what TheTVDB filed late is read all the
+same. A series the catalogue holds under one of those ids has the numbering it is
+served by kept and frozen at once, as above, and is refreshed; a work that only
+answers to such an id, holding another of TheTVDB's, is left as it is. The task
+runs only while TheTVDB is configured and `numbering.fallbackAfter` is above `0`;
+the Jobs page lists it and runs it by hand, and its runs say how many series
+TheTVDB deleted and which of those held here had their numbering kept. A reading
+TheTVDB does not answer, or one that could not keep a series' numbering, fails —
+the others it kept staying kept — and the next one starts from the same instant.
 
 ## Skyhook as a source
 

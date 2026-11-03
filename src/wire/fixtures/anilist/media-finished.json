@@ -1,0 +1,499 @@
+{
+ "data": {
+  "Media": {
+   "id": 154587,
+   "idMal": 52991,
+   "title": {
+    "romaji": "Sousou no Frieren",
+    "english": "Frieren: Beyond Journey’s End",
+    "native": "葬送のフリーレン",
+    "userPreferred": "Sousou no Frieren"
+   },
+   "type": "ANIME",
+   "format": "TV",
+   "status": "FINISHED",
+   "statusV2": "FINISHED",
+   "description": "The adventure is over but life…",
+   "descriptionHtml": "<p>The adventure is over but life…</p>",
+   "startDate": {
+    "year": 2023,
+    "month": 9,
+    "day": 29
+   },
+   "endDate": {
+    "year": 2024,
+    "month": 3,
+    "day": 22
+   },
+   "season": "FALL",
+   "seasonYear": 2023,
+   "seasonInt": 234,
+   "episodes": 28,
+   "duration": 24,
+   "chapters": null,
+   "volumes": null,
+   "countryOfOrigin": "JP",
+   "isLicensed": true,
+   "source": "MANGA",
+   "sourceV3": "MANGA",
+   "hashtag": "#フリーレン #frieren",
+   "trailer": {
+    "id": "tR8YH0G67Rk",
+    "site": "youtube",
+    "thumbnail": "https://i.ytimg.com/vi/tR8YH0G67Rk/hqdefault.jpg"
+   },
+   "updatedAt": 1793653250,
+   "coverImage": {
+    "extraLarge": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx154587-qQTzQnEJJ3oB.jpg",
+    "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx154587-qQTzQnEJJ3oB.jpg",
+    "medium": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/small/bx154587-qQTzQnEJJ3oB.jpg",
+    "color": "#bbf1a1"
+   },
+   "bannerImage": "https://s4.anilist.co/file/anilistcdn/media/anime/banner/154587-ivXNJ23SM1xB.jpg",
+   "genres": [
+    "Adventure",
+    "Drama",
+    "Fantasy"
+   ],
+   "synonyms": [
+    "Frieren at the Funeral",
+    "장송의 프리렌",
+    "Frieren - Oltre la Fine del Viaggio"
+   ],
+   "averageScore": 91,
+   "weightedScore": 91,
+   "meanScore": 91,
+   "popularity": 495753,
+   "isLocked": false,
+   "trending": 14,
+   "favourites": 56859,
+   "tags": [
+    {
+     "id": 1310,
+     "name": "Travel",
+     "description": "Centers around character(s) moving between places…",
+     "category": "Theme-Other",
+     "rank": 96,
+     "isGeneralSpoiler": false,
+     "isMediaSpoiler": false,
+     "isAdult": false,
+     "userId": 5879797
+    },
+    {
+     "id": 29,
+     "name": "Magic",
+     "description": "Prominently features magical elements or the…",
+     "category": "Theme-Fantasy",
+     "rank": 95,
+     "isGeneralSpoiler": false,
+     "isMediaSpoiler": false,
+     "isAdult": false,
+     "userId": 5879797
+    },
+    {
+     "id": 598,
+     "name": "Elf",
+     "description": "Prominently features a character who is…",
+     "category": "Cast-Traits",
+     "rank": 91,
+     "isGeneralSpoiler": false,
+     "isMediaSpoiler": false,
+     "isAdult": false,
+     "userId": 5879797
+    }
+   ],
+   "relations": {
+    "edges": [
+     {
+      "id": 77775,
+      "relationType": "ADAPTATION",
+      "relationTypeV2": "SOURCE",
+      "relationTypeV3": "SOURCE",
+      "isMainStudio": false,
+      "node": {
+       "id": 118586,
+       "idMal": 126287,
+       "type": "MANGA",
+       "format": "MANGA",
+       "status": "RELEASING",
+       "title": {
+        "romaji": "Sousou no Frieren",
+        "english": "Frieren: Beyond Journey’s End",
+        "native": "葬送のフリーレン",
+        "userPreferred": "Sousou no Frieren"
+       },
+       "coverImage": {
+        "large": "https://s4.anilist.co/file/anilistcdn/media/manga/cover/medium/bx118586-CXKgWikBFQgS.jpg"
+       },
+       "startDate": {
+        "year": 2020,
+        "month": 4,
+        "day": 28
+       },
+       "isAdult": false
+      }
+     },
+     {
+      "id": 90462,
+      "relationType": "CHARACTER",
+      "relationTypeV2": "CHARACTER",
+      "relationTypeV3": "CHARACTER",
+      "isMainStudio": false,
+      "node": {
+       "id": 169811,
+       "idMal": 56805,
+       "type": "ANIME",
+       "format": "MUSIC",
+       "status": "FINISHED",
+       "title": {
+        "romaji": "Yuusha",
+        "english": "The Brave",
+        "native": "勇者",
+        "userPreferred": "Yuusha"
+       },
+       "coverImage": {
+        "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx169811-tsuH0SJVJy40.jpg"
+       },
+       "startDate": {
+        "year": 2023,
+        "month": 9,
+        "day": 29
+       },
+       "isAdult": false
+      }
+     },
+     {
+      "id": 90701,
+      "relationType": "SIDE_STORY",
+      "relationTypeV2": "SIDE_STORY",
+      "relationTypeV3": "SIDE_STORY",
+      "isMainStudio": false,
+      "node": {
+       "id": 170068,
+       "idMal": 56885,
+       "type": "ANIME",
+       "format": "ONA",
+       "status": "FINISHED",
+       "title": {
+        "romaji": "Sousou no Frieren: ●● no Mahou",
+        "english": null,
+        "native": "葬送のフリーレン ～●●の魔法～",
+        "userPreferred": "Sousou no Frieren: ●● no Mahou"
+       },
+       "coverImage": {
+        "large": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx170068-ijY3tCP8KoWP.jpg"
+       },
+       "startDate": {
+        "year": 2023,
+        "month": 10,
+        "day": 11
+       },
+       "isAdult": false
+      }
+     }
+    ],
+    "nodes": [
+     {
+      "id": 118586,
+      "type": "MANGA"
+     },
+     {
+      "id": 169811,
+      "type": "ANIME"
+     },
+     {
+      "id": 170068,
+      "type": "ANIME"
+     }
+    ],
+    "pageInfo": {
+     "total": null,
+     "perPage": null,
+     "currentPage": null,
+     "lastPage": null,
+     "hasNextPage": false
+    }
+   },
+   "studios": {
+    "edges": [
+     {
+      "id": 35657,
+      "isMain": true,
+      "node": {
+       "id": 11,
+       "name": "MADHOUSE",
+       "isAnimationStudio": true,
+       "siteUrl": "https://anilist.co/studio/11"
+      }
+     }
+    ],
+    "nodes": [
+     {
+      "id": 11,
+      "name": "MADHOUSE"
+     }
+    ],
+    "pageInfo": {
+     "total": null
+    }
+   },
+   "mainStudios": {
+    "nodes": [
+     {
+      "id": 11,
+      "name": "MADHOUSE",
+      "isAnimationStudio": true
+     }
+    ]
+   },
+   "isAdult": false,
+   "nextAiringEpisode": null,
+   "airingSchedule": {
+    "nodes": [
+     {
+      "id": 374988,
+      "airingAt": 1696600800,
+      "timeUntilAiring": -97053910,
+      "episode": 5,
+      "mediaId": 154587
+     },
+     {
+      "id": 374989,
+      "airingAt": 1697205600,
+      "timeUntilAiring": -96449110,
+      "episode": 6,
+      "mediaId": 154587
+     },
+     {
+      "id": 374990,
+      "airingAt": 1697810400,
+      "timeUntilAiring": -95844310,
+      "episode": 7,
+      "mediaId": 154587
+     }
+    ],
+    "edges": [
+     {
+      "id": null,
+      "node": {
+       "episode": 5
+      }
+     },
+     {
+      "id": null,
+      "node": {
+       "episode": 6
+      }
+     },
+     {
+      "id": null,
+      "node": {
+       "episode": 7
+      }
+     }
+    ],
+    "pageInfo": {
+     "total": 500,
+     "perPage": 3,
+     "currentPage": 1,
+     "lastPage": 166,
+     "hasNextPage": true
+    }
+   },
+   "upcoming": {
+    "nodes": [],
+    "pageInfo": {
+     "hasNextPage": false
+    }
+   },
+   "stats": {
+    "scoreDistribution": [
+     {
+      "score": 10,
+      "amount": 1159
+     },
+     {
+      "score": 20,
+      "amount": 224
+     },
+     {
+      "score": 30,
+      "amount": 406
+     }
+    ],
+    "statusDistribution": [
+     {
+      "status": "CURRENT",
+      "amount": 74312
+     },
+     {
+      "status": "PLANNING",
+      "amount": 94189
+     },
+     {
+      "status": "COMPLETED",
+      "amount": 306668
+     }
+    ]
+   },
+   "siteUrl": "https://anilist.co/anime/154587",
+   "externalLinks": [
+    {
+     "id": 57541,
+     "url": "https://frieren-anime.jp/",
+     "site": "Official Site",
+     "type": "INFO"
+    },
+    {
+     "id": 57542,
+     "url": "https://twitter.com/anime_frieren",
+     "site": "Twitter",
+     "type": "SOCIAL"
+    },
+    {
+     "id": 75027,
+     "url": "https://www.crunchyroll.com/series/GG5H5XQX4/frieren-beyond-journeys-end",
+     "site": "Crunchyroll",
+     "type": "STREAMING"
+    }
+   ],
+   "streamingEpisodes": [
+    {
+     "title": "Episode 1 - The Journey's End",
+     "thumbnail": "https://img1.ak.crunchyroll.com/i/spire1-tmb/0a540e01e5d00a998a241d1ea23181ad1695991424_full.jpg",
+     "url": "http://www.crunchyroll.com/watch/G2XU04E88/the-journeys-end",
+     "site": "Crunchyroll"
+    },
+    {
+     "title": "Episode 2 - It Didn't Have…",
+     "thumbnail": "https://img1.ak.crunchyroll.com/i/spire1-tmb/747ed837208f39c176f3bf2b21e619cf1695997330_full.jpg",
+     "url": "http://www.crunchyroll.com/watch/G8WUNGZ48/it-didnt-have-to-be-magic",
+     "site": "Crunchyroll"
+    },
+    {
+     "title": "Episode 3 - Killing Magic",
+     "thumbnail": "https://img1.ak.crunchyroll.com/i/spire1-tmb/f5297f95ee0122d9fa2338bc02e2f0841695997426_full.jpg",
+     "url": "http://www.crunchyroll.com/watch/GZ7UV2Z0K/killing-magic",
+     "site": "Crunchyroll"
+    }
+   ],
+   "rankings": [
+    {
+     "id": 1,
+     "rank": 1,
+     "type": "RATED",
+     "format": "TV",
+     "year": null,
+     "season": null,
+     "allTime": true,
+     "context": "highest rated all time"
+    },
+    {
+     "id": 550,
+     "rank": 50,
+     "type": "POPULAR",
+     "format": "TV",
+     "year": null,
+     "season": null,
+     "allTime": true,
+     "context": "most popular all time"
+    },
+    {
+     "id": 10604,
+     "rank": 1,
+     "type": "RATED",
+     "format": "TV",
+     "year": 2023,
+     "season": null,
+     "allTime": false,
+     "context": "highest rated"
+    }
+   ],
+   "recommendations": {
+    "nodes": [
+     {
+      "id": 231594,
+      "rating": 298,
+      "mediaRecommendation": {
+       "id": 457
+      }
+     },
+     {
+      "id": 231596,
+      "rating": 257,
+      "mediaRecommendation": {
+       "id": 486
+      }
+     }
+    ],
+    "pageInfo": {
+     "total": 500
+    }
+   },
+   "characters": {
+    "edges": [
+     {
+      "id": 390010,
+      "role": "MAIN",
+      "node": {
+       "id": 176754,
+       "name": {
+        "full": "Frieren"
+       }
+      }
+     },
+     {
+      "id": 390012,
+      "role": "MAIN",
+      "node": {
+       "id": 183965,
+       "name": {
+        "full": "Fern"
+       }
+      }
+     }
+    ],
+    "pageInfo": {
+     "total": 500
+    }
+   },
+   "staff": {
+    "edges": [
+     {
+      "id": 724620,
+      "role": "ADR Producer (English)",
+      "node": {
+       "id": 95472,
+       "name": {
+        "full": "Colleen Clinkenbeard"
+       }
+      }
+     },
+     {
+      "id": 727354,
+      "role": "ADR Director (French)",
+      "node": {
+       "id": 96613,
+       "name": {
+        "full": "Brigitte Lecordier"
+       }
+      }
+     }
+    ]
+   },
+   "trends": {
+    "nodes": [
+     {
+      "date": 1662994800,
+      "trending": 2182
+     },
+     {
+      "date": 1663081200,
+      "trending": 1372
+     }
+    ]
+   },
+   "__typename": "Media"
+  }
+ }
+}

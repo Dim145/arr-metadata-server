@@ -33,7 +33,7 @@ use crate::{
 
 pub use crate::{
     db::repo::order::{AIRED, AIRED_LABEL},
-    domain::orders::{KEY_MOST, MADE_HERE, TMDB_AIRED, TMDB_GROUP},
+    domain::orders::{KEY_MOST, MADE_HERE, TMDB_AIRED, TMDB_GROUP, TVDB_LAST},
 };
 
 /// The most places one order holds: the longest series ever made is far
@@ -108,13 +108,13 @@ pub struct Placed<'a> {
 pub fn placements<'a>(item: &'a MediaItem, order: &'a EpisodeOrder) -> Vec<Placed<'a>> {
     let held = Held::of(item);
     let tmdbs = order.source == crate::providers::names::TMDB;
-    let own_numbering = order.key == TMDB_AIRED;
+    let looked = Look::of(order);
     let mut seen = HashSet::new();
     order
         .episodes
         .iter()
         .filter_map(|place| {
-            let (episode, own) = match held.find(place, own_numbering) {
+            let (episode, own) = match held.find(place, looked) {
                 Some(episode) => (Cow::Borrowed(episode), false),
                 None => (Cow::Owned(own_episode(place, place.record.as_ref()?)), true),
             };
@@ -164,6 +164,14 @@ pub fn served<'a>(item: &'a MediaItem, order: &'a EpisodeOrder) -> Vec<Placed<'a
     if order.source != LOCAL && !order.is_frozen {
         return placed;
     }
+    // The numbering TheTVDB last gave places what aired since itself, after
+    // its last episode (`service::numbering`): the work's own episodes are
+    // TMDB's meanwhile, and under TMDB's numbers they would stand beside
+    // the same episodes placed. What was added here by hand is served all
+    // the same, whenever it is dated: the order is written again at every
+    // refresh, and the day it was last written says nothing of when a
+    // person added an episode.
+    let by_hand_only = order.key == TVDB_LAST;
 
     let cutoff = order.updated_at.get(..10).unwrap_or_default();
     let taken: HashSet<(i32, i32)> = placed
@@ -179,11 +187,14 @@ pub fn served<'a>(item: &'a MediaItem, order: &'a EpisodeOrder) -> Vec<Placed<'a
         .episodes
         .iter()
         .filter(|episode| !placed_ids.contains(episode.id.as_str()))
-        .filter(|episode| match episode.air_date.as_deref() {
-            Some(day) => day.get(..10).unwrap_or(day) > cutoff,
-            // Not dated yet: one still to air, in a season of its own; an
-            // undated special says nothing of when it came.
-            None => episode.season_number > 0,
+        .filter(|episode| match by_hand_only {
+            true => episode.is_manual,
+            false => match episode.air_date.as_deref() {
+                Some(day) => day.get(..10).unwrap_or(day) > cutoff,
+                // Not dated yet: one still to air, in a season of its own; an
+                // undated special says nothing of when it came.
+                None => episode.season_number > 0,
+            },
         })
         .filter(|episode| !taken.contains(&(episode.season_number, episode.episode_number)))
         .map(|episode| Placed {
@@ -314,6 +325,11 @@ pub fn offered<'a>(item: &'a MediaItem, orders: &'a [EpisodeOrder]) -> Vec<&'a E
         if order.key == TMDB_AIRED {
             return false;
         }
+        // The numbering TheTVDB last gave is the aired order while it is
+        // frozen as it, and an order of its own once thawed.
+        if order.key == TVDB_LAST {
+            return order.is_frozen;
+        }
         match order.kind {
             OrderKind::TvdbAlt | OrderKind::Custom => false,
             OrderKind::Aired => mine <= aired_size,
@@ -424,10 +440,10 @@ pub fn size(item: &MediaItem, order: &EpisodeOrder) -> usize {
 pub fn resolved(item: &MediaItem, order: &EpisodeOrder) -> EpisodeOrder {
     let held = Held::of(item);
     let tmdbs = order.source == crate::providers::names::TMDB;
-    let own_numbering = order.key == TMDB_AIRED;
+    let looked = Look::of(order);
     let mut resolved = order.clone();
     for place in &mut resolved.episodes {
-        if let Some(episode) = held.find(place, own_numbering) {
+        if let Some(episode) = held.find(place, looked) {
             place.episode_id = Some(episode.id.clone());
             place.tvdb_id = episode.tvdb_id.or(place.tvdb_id);
             place.tmdb_id = if tmdbs {
@@ -549,26 +565,38 @@ impl<'a> Held<'a> {
     /// The episode a place names: by TheTVDB's id first, the one Sonarr
     /// knows it by, then TMDB's, then the row it was kept in.
     ///
-    /// In TMDB's own numbering (`own_numbering`), not by TMDB's id when the
-    /// episode of that id aired days apart from the place's record: the
+    /// In TMDB's own numbering ([`Look::TmdbOwn`]), not by TMDB's id when
+    /// the episode of that id aired days apart from the place's record: the
     /// merge gives an episode TheTVDB numbers the TMDB id of TMDB's at the
     /// same numbers, which is another episode where the two number a series
     /// otherwise. The episode TMDB's place stands for is then named by its
     /// TheTVDB id or its row, when it is known ([`linked`]), and the place
     /// is otherwise served from its record.
-    fn find(&self, place: &PlacedEpisode, own_numbering: bool) -> Option<&'a Episode> {
+    ///
+    /// In the numbering TheTVDB last gave ([`Look::Kept`]), by no id the
+    /// episode found aired days apart from the place's record — TMDB numbers
+    /// the work meanwhile, and its episodes keep TheTVDB's ids as best they
+    /// can — and by TMDB's id where TheTVDB's names none the work holds: the
+    /// series TheTVDB merged it into has ids of its own for each episode.
+    fn find(&self, place: &PlacedEpisode, look: Look) -> Option<&'a Episode> {
+        let fits = |found: &Episode| match look {
+            Look::Plain => true,
+            Look::TmdbOwn | Look::Kept => !aired_apart(place.record.as_ref(), found),
+        };
         if let Some(id) = place.tvdb_id
-            && let Some(found) = self.by_tvdb.get(&id)
+            && let Some(found) = self.by_tvdb.get(&id).copied()
+            && (look != Look::Kept || fits(found))
         {
             return Some(found);
         }
         // A place that names its episode by TheTVDB's id names one the work
         // does not hold when that id is not found: TMDB's id, filled in by
-        // the merge where the numbers matched, is no surer.
-        if place.tvdb_id.is_none()
+        // the merge where the numbers matched, is no surer — but for the
+        // numbering TheTVDB last gave.
+        if (place.tvdb_id.is_none() || look == Look::Kept)
             && let Some(id) = place.tmdb_id
-            && let Some(found) = self.by_tmdb.get(&id)
-            && !(own_numbering && aired_apart(place.record.as_ref(), found))
+            && let Some(found) = self.by_tmdb.get(&id).copied()
+            && fits(found)
         {
             return Some(found);
         }
@@ -576,6 +604,26 @@ impl<'a> Held<'a> {
             .episode_id
             .as_deref()
             .and_then(|row| self.by_row.get(row).copied())
+    }
+}
+
+/// How an order's places are looked for among the episodes the work holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Look {
+    Plain,
+    /// TMDB's own numbering: see [`Held::find`].
+    TmdbOwn,
+    /// The numbering TheTVDB last gave: see [`Held::find`].
+    Kept,
+}
+
+impl Look {
+    fn of(order: &EpisodeOrder) -> Self {
+        match order.key.as_str() {
+            TMDB_AIRED => Self::TmdbOwn,
+            TVDB_LAST => Self::Kept,
+            _ => Self::Plain,
+        }
     }
 }
 
@@ -615,7 +663,7 @@ fn own_episode(place: &PlacedEpisode, record: &OrderRecord) -> Episode {
 }
 
 /// The record of an episode, to carry in a place of its own.
-fn record_of(episode: &Episode) -> OrderRecord {
+pub(crate) fn record_of(episode: &Episode) -> OrderRecord {
     OrderRecord {
         title: episode.title.clone(),
         overview: episode.overview.clone(),
@@ -1606,5 +1654,41 @@ mod tests {
         let empty = vec![aired_order("tvdb"), tmdb_aired(Vec::new())];
         assert!(offered(&it, &empty).is_empty());
         assert!(in_use(&it, &empty, TMDB_AIRED).is_none());
+    }
+
+    /// The numbering TheTVDB last gave, frozen and written again since: an
+    /// episode a person added by hand is served whenever it is dated — the
+    /// day the order was last written says nothing of when it was added —
+    /// and the work's own episodes it does not place are not, under their
+    /// own numbers.
+    #[test]
+    fn the_numbering_thetvdb_last_gave_serves_every_episode_added_by_hand() {
+        let mut it = series();
+        let mut by_hand = blank_episode(1, 3);
+        by_hand.id = "row-by-hand".into();
+        by_hand.title = "Added By Hand".into();
+        by_hand.air_date = Some("2005-04-02".into());
+        by_hand.is_manual = true;
+        it.episodes.push(by_hand);
+
+        let mut last = order(
+            TVDB_LAST,
+            crate::providers::names::TVDB,
+            OrderKind::Aired,
+            vec![place(11, 1, 1), place(12, 1, 2)],
+        );
+        last.is_frozen = true;
+        // Written again at a refresh, long after.
+        last.updated_at = "2026-11-03T00:00:00.000Z".into();
+        let orders = vec![aired_order("tmdb"), last];
+        assert_eq!(
+            numbers(&as_official(&it, &orders).expect("frozen")),
+            [
+                (1, 1, "Episode 11".to_string(), false),
+                (1, 2, "Episode 12".to_string(), false),
+                (1, 3, "Added By Hand".to_string(), false),
+            ],
+            "the second season's episode, TMDB's, is not served under its own numbers"
+        );
     }
 }

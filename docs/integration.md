@@ -450,6 +450,15 @@ answers what it kept of the same query, a day old at the most, or `429` with
 the seconds left. A client's query is never spaced out as this server's own
 fetches are.
 
+With **AniList relay mode** set to *local-first* (`anilist.relayMode`), the anime
+this server holds — each of their seasons and cours, their characters and
+schedules — are answered from the catalogue, corrections and works entered by
+hand included, in AniList's own shape and without AniList: Yamtrack, Taiga and
+Kometa read an entry so, Seanime its entries by their ids, and Jellyfin's plugin
+an entry refreshed since this version kept the ids of its tags and studios.
+Searches by title, and pages of AniList's whole catalogue, are still AniList's.
+See [Answering from the catalogue](relays.md#anilists-clients).
+
 Both relays are switches on **Opening & APIs** (`api.tvdb`, `api.anilist`),
 listed with the others; a member's key is kept off every relay until *Members
 too* is on there. Whose key the TMDB and TheTVDB relays ask with is a choice

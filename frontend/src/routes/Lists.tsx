@@ -136,15 +136,9 @@ function CollectionCards({ cards }: { cards: CollectionCard[] }) {
             to={`/collections/${collection.tmdbId}`}
             className="plate group flex gap-4 rounded-panel border border-rule bg-ink-raised p-4 transition-colors duration-150 hover:border-rule-bright"
           >
+            {/* The copy the media store keeps of it, where it keeps one. */}
             {collection.poster ? (
-              <img
-                src={collection.poster}
-                alt=""
-                width={64}
-                height={96}
-                loading="lazy"
-                className="h-24 w-16 shrink-0 rounded-sm object-cover"
-              />
+              <Artwork url={collection.poster} role="thumb" alt="" className="h-24 w-16 shrink-0 rounded-sm object-cover" />
             ) : (
               <span className="h-24 w-16 shrink-0 rounded-sm bg-ink-high" />
             )}
@@ -217,16 +211,32 @@ export function CollectionDetail() {
           <Glyph name="chevronLeft" className="size-4" />
           {t.collections.label}
         </Link>
-        <div className="mt-2">
-          <Label>{t.collections.one}</Label>
+        {/* Its poster beside its name, as the catalogue keeps them: its
+            name and synopsis in the reader's language where TMDB has them
+            in it, its pictures from the media store where it keeps them. */}
+        <div className="mt-2 flex flex-col gap-6 sm:flex-row sm:items-end">
+          {page.data.poster ? (
+            <div className="w-28 shrink-0 sm:w-36">
+              <Artwork
+                url={page.data.poster}
+                role="poster"
+                eager
+                alt=""
+                className="aspect-2/3 w-full rounded-plate border border-rule-bright object-cover shadow-[var(--shadow-plate)]"
+              />
+            </div>
+          ) : null}
+          <div className="min-w-0">
+            <Label>{t.collections.one}</Label>
+            <h1 className="mt-2 font-display text-3xl font-medium text-bone sm:text-4xl">{name}</h1>
+            {page.data.overview ? (
+              <p className="mt-3 max-w-prose text-sm leading-relaxed text-bone-dim">{page.data.overview}</p>
+            ) : null}
+            <p className="mt-2 font-mono text-sm text-bone-faint tabular-nums">
+              {t.collections.held(items.length, parts.length)}
+            </p>
+          </div>
         </div>
-        <h1 className="mt-2 font-display text-3xl font-medium text-bone sm:text-4xl">{name}</h1>
-        {page.data.overview ? (
-          <p className="mt-3 max-w-prose text-sm leading-relaxed text-bone-dim">{page.data.overview}</p>
-        ) : null}
-        <p className="mt-2 font-mono text-sm text-bone-faint tabular-nums">
-          {t.collections.held(items.length, parts.length)}
-        </p>
       </header>
 
       {items.length ? (
@@ -246,7 +256,7 @@ export function CollectionDetail() {
             {parts.map((part) => (
               <li key={part.tmdbId} className="flex items-center gap-3 px-4 py-2">
                 {part.poster ? (
-                  <img src={part.poster} alt="" width={32} height={48} loading="lazy" className="h-12 w-8 shrink-0 rounded-sm object-cover" />
+                  <Artwork url={part.poster} role="thumb" alt="" className="h-12 w-8 shrink-0 rounded-sm object-cover" />
                 ) : (
                   <span className="h-12 w-8 shrink-0 rounded-sm bg-ink-high" />
                 )}

@@ -1822,28 +1822,27 @@ mod updates {
         }
     }
 
-    /// One record of `updates` for a work changed here, as TheTVDB's
-    /// documentation describes one (`EntityUpdate`, swagger 4.7.10), every
-    /// field in its order and of its type: an update (`methodInt` 2, `method`
-    /// `update`) of the record `recordId` of the kind `entityType`, by nobody
-    /// TheTVDB knows (`userId` 0), at the instant it changed (`timeStamp`), merged
-    /// into nothing (`mergeToId` 0). `seriesId` is for an episode's record
-    /// alone, and left out; what the documentation does not say the meaning
-    /// of — `extraInfo`, `recordType`, `mergeToEntityType` — is empty. A
-    /// client that syncs by this list reads the record again, as after an
-    /// edit at TheTVDB, and meets the locks laid into it.
+    /// One record of `updates` for a work changed here, as TheTVDB's own
+    /// records of an update come (its feed, read on 3 November 2026): an
+    /// update (`methodInt` 2, `method` `update`) of the record `recordId` of
+    /// the kind `entityType`, by nobody TheTVDB knows (`userId` 0), at the
+    /// instant it changed (`timeStamp`); `recordType` and `extraInfo` empty,
+    /// as TheTVDB writes them. `seriesId` is for an episode's record alone,
+    /// and `mergeToId` and `mergeToType` for a record deleted as the
+    /// duplicate of another: both left out, as TheTVDB leaves them out of an
+    /// update — not the swagger's `mergeToEntityType`, a name the feed does
+    /// not use. A client that syncs by this list reads the record again, as
+    /// after an edit at TheTVDB, and meets the locks laid into it.
     pub(super) fn record(changed: &Changed) -> Value {
         json!({
-            "entityType": changed.kind.entity_type(),
+            "recordType": "",
+            "recordId": changed.tvdb_id,
             "methodInt": 2,
             "method": "update",
             "extraInfo": "",
             "userId": 0,
-            "recordType": "",
-            "recordId": changed.tvdb_id,
             "timeStamp": changed.at,
-            "mergeToId": 0,
-            "mergeToEntityType": "",
+            "entityType": changed.kind.entity_type(),
         })
     }
 
@@ -1929,7 +1928,9 @@ mod updates {
 /// A work is answered here where the catalogue holds it under the id asked
 /// — TheTVDB's own, or one this server made, as Skyhook hands it Sonarr —
 /// switched on, and one the caller may see; a season or an episode, where
-/// its work is. Anything else is TheTVDB's to answer, as before: a work the
+/// its work is; one of its characters, by TheTVDB's id of the part or the
+/// one made here of a character TheTVDB has none for, where its work is.
+/// Anything else is TheTVDB's to answer, as before: a work the
 /// catalogue does not hold, what is not written here — a person, a list, a
 /// company — and a work's text in a language the catalogue holds none in,
 /// where TheTVDB knows the work. One it does not know is answered TheTVDB's
@@ -1952,7 +1953,7 @@ mod local {
         domain::{EpisodeOrder, ExternalSource, MediaItem, MediaKind},
         error::AppResult,
         service::{
-            self, ids, language,
+            self, bridge, ids, language,
             orders::{self, Placed},
         },
         state::AppState,
@@ -1990,6 +1991,10 @@ mod local {
         Search,
         /// `search/remoteid/{id}`.
         RemoteId(String),
+        /// `characters/{id}`: TheTVDB's id of a part, or one this server
+        /// made of its own for a character TheTVDB has none for, which is
+        /// negative.
+        Character(i64),
     }
 
     /// Recognise the reads the relay may answer itself. A work's id is
@@ -2047,6 +2052,7 @@ mod local {
             ["search", "remoteid", id] => {
                 Asked::RemoteId(urlencoding::decode(id).ok()?.into_owned())
             }
+            ["characters", id] => Asked::Character(child(id)?),
             _ => return None,
         })
     }
@@ -2173,6 +2179,7 @@ mod local {
             Asked::MovieText(id, segment) => reader.movie_text(id, &segment).await?,
             Asked::Search => return reader.search(parts, credential, &query).await,
             Asked::RemoteId(id) => return reader.remote(parts, credential, &id).await,
+            Asked::Character(id) => reader.character(id).await?,
         };
         Ok(answer.map(|(status, document)| respond(parts, status, &document)))
     }
@@ -2384,6 +2391,75 @@ mod local {
             };
             take_hidden(&mut data, &found.item, &source);
             Ok(Some((StatusCode::OK, wire::success(data))))
+        }
+
+        /// `characters/{id}`: one of the characters of a work held here, as
+        /// the work's record lists it — TheTVDB's record of the part under
+        /// what the catalogue says of it — by TheTVDB's id of the part, or
+        /// by the one made here of a character TheTVDB has none for. One the
+        /// catalogue keeps nothing of is TheTVDB's; one made here that
+        /// names nothing any more, none there is.
+        async fn character(&self, id: i64) -> Answer {
+            let character = if id > 0 {
+                repo::character::by_tvdb(&self.state.db, id).await?
+            } else {
+                let mut found = None;
+                for own in repo::character::ids_without_tvdb(&self.state.db).await? {
+                    let made = wire::character_id(&crate::domain::person::Character {
+                        id: own.clone(),
+                        name: String::new(),
+                        native_name: None,
+                        image: None,
+                        tvdb_id: None,
+                        anilist_id: None,
+                        mal_id: None,
+                    });
+                    if made == id {
+                        found = repo::character::get(&self.state.db, &own).await?;
+                        break;
+                    }
+                }
+                found
+            };
+            let not_held = || (id < 0).then(|| (StatusCode::NOT_FOUND, wire::not_found()));
+            let Some(character) = character else {
+                return Ok(not_held());
+            };
+            for appearance in
+                repo::character::works_of(&self.state.db, &character.id, self.adult).await?
+            {
+                let Some(item) = service::load(self.state, &appearance.work_id).await? else {
+                    continue;
+                };
+                let kind = item.kind;
+                let record = kind == MediaKind::Series;
+                let Some(found) = self.found(item, kind, record, Languages::None).await? else {
+                    continue;
+                };
+                if !found
+                    .item
+                    .characters
+                    .iter()
+                    .any(|played| played.character.id == character.id)
+                {
+                    continue;
+                }
+                let source = self.source();
+                let work = found.work(&self.stored, &source);
+                // Taken out as the work's own record takes out a person hid —
+                // by the credit that plays it, or by TheTVDB's record of the
+                // part: then there is none of it to give.
+                let mut listed = json!({
+                    "characters": work.character_record(&character.id).into_iter().collect::<Vec<_>>()
+                });
+                take_hidden(&mut listed, &found.item, &source);
+                let data = listed["characters"].as_array_mut().and_then(Vec::pop);
+                return Ok(Some(match data {
+                    Some(data) => (StatusCode::OK, wire::success(data)),
+                    None => (StatusCode::NOT_FOUND, wire::not_found()),
+                }));
+            }
+            Ok(not_held())
         }
 
         /// `series/{id}/translations/{lang}`: TheTVDB's where the catalogue
@@ -2674,7 +2750,10 @@ mod local {
         }
 
         /// `search/remoteid/{id}`: the works the catalogue holds under that
-        /// id elsewhere — IMDb's, or TMDB's — before TheTVDB's own.
+        /// id elsewhere — IMDb's, or TMDB's — before TheTVDB's own. Held
+        /// under none, those held under another id of the item Wikidata
+        /// files that one on ([`bridge::held`]): the links kept find the
+        /// works held, never one that is not.
         async fn remote(
             &self,
             parts: &Parts,
@@ -2689,16 +2768,24 @@ mod local {
             } else {
                 return Ok(None);
             };
-            let mut hits = Vec::new();
+            let mut held = Vec::new();
             for source in sources {
                 let Some(media) =
                     repo::item::find_id_by_external(&self.state.db, *source, id).await?
                 else {
                     continue;
                 };
-                let Some(item) = service::load(self.state, &media).await? else {
-                    continue;
-                };
+                if let Some(item) = service::load(self.state, &media).await? {
+                    held.push(item);
+                }
+            }
+            if held.is_empty() {
+                for site in sources.iter().copied().filter_map(bridge::Site::of_source) {
+                    held.extend(bridge::held(self.state, site, id).await?);
+                }
+            }
+            let mut hits = Vec::new();
+            for item in held {
                 let kind = item.kind;
                 if let Some(found) = self.found(item, kind, false, Languages::None).await? {
                     let source = self.source();
@@ -3952,14 +4039,21 @@ mod tests {
         assert!(changed_any);
         let records = page["data"].as_array().unwrap();
         assert_eq!(records.len(), 4, "81189 is TheTVDB's already");
-        // Every field of the swagger's `EntityUpdate` but an episode's
-        // `seriesId`.
+        // The fields TheTVDB's own record of an update carries, and no more:
+        // no `seriesId` (an episode's), no `mergeToId` nor `mergeToType` (a
+        // merge's), no `mergeToEntityType` (the swagger's alone).
         assert_eq!(
             records[2],
-            json!({ "entityType": "series", "methodInt": 2, "method": "update",
-                    "extraInfo": "", "userId": 0, "recordType": "", "recordId": 990_201,
-                    "timeStamp": 1_761_960_000, "mergeToId": 0, "mergeToEntityType": "" })
+            json!({ "recordType": "", "recordId": 990_201, "methodInt": 2, "method": "update",
+                    "extraInfo": "", "userId": 0, "timeStamp": 1_761_960_000,
+                    "entityType": "series" })
         );
+        let theirs_keys = |record: &Value| {
+            let mut keys: Vec<String> = record.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(theirs_keys(&records[0]), theirs_keys(&records[2]));
         assert_eq!(records[3]["entityType"], json!("movies"));
         assert_eq!(records[3]["recordId"], json!(990_202));
         assert_eq!(page["links"]["total_items"], json!(4));
@@ -4087,6 +4181,174 @@ mod relayed {
                 json!({ "status": "failure", "message": "NotFound" }),
             ),
         }
+    }
+
+    /// A character of a series held here, answered here where the relay
+    /// answers first: TheTVDB's record of the part under the catalogue's
+    /// word, one TheTVDB has no record of under the id made here, none for
+    /// a person hid; one the catalogue keeps nothing of is TheTVDB's.
+    #[tokio::test]
+    async fn a_character_of_a_series_held_here_is_answered_here() {
+        use crate::{
+            db::repo,
+            domain::person::{Character, CharacterCredit, CharacterRole, CharacterVoice},
+        };
+
+        let stand_in = StandIn::start(tvdb).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        testing::choose(&state, "tvdb.relayMode", "local-first").await;
+
+        let actor = |name: &str, tmdb: i64| -> crate::domain::Credit {
+            serde_json::from_value(json!({
+                "id": crate::db::new_id(), "creditType": "actor", "personName": name,
+                "characterName": "A Part", "tmdbPersonId": tmdb, "sortOrder": 0,
+                "isManual": false,
+            }))
+            .expect("a credit")
+        };
+        let played =
+            |name: &str, tvdb: Option<i64>, anilist: Option<i64>, credit: Option<String>| {
+                CharacterCredit {
+                    character: Character {
+                        id: String::new(),
+                        name: name.into(),
+                        native_name: None,
+                        image: None,
+                        tvdb_id: tvdb,
+                        anilist_id: anilist,
+                        mal_id: None,
+                    },
+                    role: Some(CharacterRole::Main),
+                    sort_order: 0,
+                    credit_id: credit,
+                    voices: Vec::new(),
+                    source: Some("tvdb".into()),
+                }
+            };
+        let mut item = MediaItem::empty(MediaKind::Series);
+        item.title = "The Local Characters".into();
+        item.slug = "the-local-characters".into();
+        item.original_language = Some("jpn".into());
+        item.external_ids.tvdb = Some(990_701);
+        let (shown, hidden) = (
+            actor("Shown Actor", 990_911),
+            actor("Hidden Actor", 990_912),
+        );
+        let mut drawn = played("Drawn One", None, Some(990_731), None);
+        drawn.voices = vec![CharacterVoice {
+            language: "jpn".into(),
+            name: "A Seiyuu".into(),
+            native_name: None,
+            image: None,
+            anilist_id: None,
+            mal_id: None,
+            sort_order: 0,
+        }];
+        item.characters = vec![
+            played("The Kin", Some(990_721), None, Some(shown.id.clone())),
+            drawn,
+            played(
+                "Hidden's Part",
+                Some(990_722),
+                None,
+                Some(hidden.id.clone()),
+            ),
+        ];
+        for (at, character) in item.characters.iter_mut().enumerate() {
+            character.sort_order = at as i32;
+        }
+        item.credits = vec![shown, hidden];
+        testing::store(
+            &state,
+            &item,
+            &[("credit:actor:tmdb:990912", "hidden", "", json!(true))],
+        )
+        .await;
+        repo::snapshot::put(
+            &state.db,
+            &item.id,
+            "tvdb",
+            &json!({ "status": "success", "data": {
+                "id": 990701, "name": "The Local Characters", "originalLanguage": "jpn",
+                "characters": [
+                    { "id": 990721, "name": "The Kin, as TheTVDB names it", "peopleId": 77,
+                      "personName": "Shown Actor", "peopleType": "Actor", "type": 3,
+                      "url": "https://thetvdb.com/people/77-shown-actor", "isFeatured": false }
+                ]
+            } })
+            .to_string(),
+            None,
+        )
+        .await
+        .expect("TheTVDB's record is kept");
+        let mut held = repo::item::get(&state.db, &item.id).await.unwrap().unwrap();
+        repo::item::load_children(&state.db, &mut held)
+            .await
+            .unwrap();
+        let made = held
+            .characters
+            .iter()
+            .find(|c| c.character.name == "Drawn One")
+            .map(|c| crate::wire::tvdb::character_id(&c.character))
+            .expect("the drawn one, kept");
+        assert!(made < 0);
+
+        let (status, kin) = get(&state, "/v4/characters/990721", &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(kin["status"], json!("success"));
+        assert_eq!(
+            kin["data"]["name"],
+            json!("The Kin"),
+            "the catalogue's word"
+        );
+        assert_eq!(
+            kin["data"]["peopleId"],
+            json!(77),
+            "TheTVDB's record of the part"
+        );
+        assert_eq!(kin["data"]["isFeatured"], json!(true));
+        assert_eq!(kin["data"]["personName"], json!("Shown Actor"));
+
+        let (status, drawn) = get(&state, &format!("/v4/characters/{made}"), &key).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(drawn["data"]["id"], json!(made));
+        assert_eq!(
+            drawn["data"]["personName"],
+            json!("A Seiyuu"),
+            "its original voice"
+        );
+
+        let (status, _) = get(&state, "/v4/characters/990722", &key).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "played by a person hid");
+        let (status, _) = get(&state, "/v4/characters/-5", &key).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "made here of nothing");
+        for path in [
+            "/v4/characters/990721",
+            "/v4/characters/990722",
+            "/v4/characters/-5",
+        ] {
+            assert!(
+                stand_in.asked_at(path).is_empty(),
+                "{path}: TheTVDB not asked"
+            );
+        }
+
+        let (_, record) = get(&state, "/v4/series/990701/extended", &key).await;
+        let names: Vec<&str> = record["data"]["characters"]
+            .as_array()
+            .expect("its people")
+            .iter()
+            .filter_map(|c| c["name"].as_str())
+            .collect();
+        assert_eq!(names, ["The Kin", "Drawn One"], "not the hidden one's part");
+
+        get(&state, "/v4/characters/990799", &key).await;
+        assert_eq!(
+            stand_in.asked_at("/v4/characters/990799").len(),
+            1,
+            "one the catalogue keeps nothing of is TheTVDB's"
+        );
     }
 
     /// The server, with a series TheTVDB knows as 81189 locked here: its
@@ -5697,5 +5959,50 @@ mod relayed {
         assert_eq!(listed(&alone), ["990501"]);
         assert_eq!(alone["links"]["total_items"], json!(1));
         assert_eq!(down.asked_at("/v4/search").len(), 1, "TheTVDB asked first");
+    }
+
+    /// A series held under TheTVDB's id alone is found by its IMDb id, or by
+    /// TMDB's, through the item Wikidata files them on — and by neither once
+    /// the links are switched off, TheTVDB's answer then.
+    #[tokio::test]
+    async fn a_remote_id_the_work_held_does_not_carry_is_found_through_wikidatas_links() {
+        use crate::service::bridge::{Site, keep_for_tests};
+
+        let stand_in = StandIn::start(tvdb_beside_local).await;
+        let state = testing::server(&stand_in).await;
+        let key = issued(&state).await;
+        testing::choose(&state, "tvdb.relayMode", "local-first").await;
+        let mut beacon = MediaItem::empty(MediaKind::Series);
+        beacon.title = "The Bridged Beacon".into();
+        beacon.slug = "the-bridged-beacon".into();
+        beacon.external_ids.tvdb = Some(990_502);
+        testing::store(&state, &beacon, &[]).await;
+        keep_for_tests(
+            &state,
+            &[
+                (Site::Imdb, "tt9905020", 990_502),
+                (Site::TvdbSeries, "990502", 990_502),
+                (Site::TmdbTv, "990602", 990_502),
+            ],
+        )
+        .await;
+
+        for remote in ["tt9905020", "990602"] {
+            let (status, found) = get(&state, &format!("/v4/search/remoteid/{remote}"), &key).await;
+            assert_eq!(status, StatusCode::OK, "{remote}: {found}");
+            assert_eq!(
+                found["data"][0]["series"]["slug"],
+                json!("the-bridged-beacon"),
+                "{remote}: {found}"
+            );
+            assert_eq!(found["data"].as_array().map(Vec::len), Some(1), "{remote}");
+        }
+
+        testing::choose(&state, "wikidata.enabled", "false").await;
+        let (_, theirs) = get(&state, "/v4/search/remoteid/tt9905020", &key).await;
+        assert!(
+            !theirs.to_string().contains("the-bridged-beacon"),
+            "{theirs}"
+        );
     }
 }

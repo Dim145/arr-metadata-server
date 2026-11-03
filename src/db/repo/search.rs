@@ -139,9 +139,12 @@ async fn read_names(
         Dialect::Postgres => " ORDER BY id FOR UPDATE",
         Dialect::Sqlite => " ORDER BY id",
     };
+    // How well known a work is: TMDB's popularity, else the one worked out
+    // here, as the lists sort it. The latter moving marks the works TMDB
+    // gives none (`repo::popularity::write`).
     let sql = format!(
-        "SELECT id, title, sort_title, original_title, original_language, year, popularity,
-                merged_into
+        "SELECT id, title, sort_title, original_title, original_language, year,
+                COALESCE(popularity, local_popularity) AS popularity, merged_into
          FROM media_item WHERE id IN ({marks}){lock}"
     );
     let mut works: BTreeMap<String, WorkNames> = BTreeMap::new();

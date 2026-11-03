@@ -1164,6 +1164,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/characters/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A character, and every work of the catalogue it is in that the caller
+         *     may see: what it is there, who plays it — as the work's credits, locks
+         *     and all, have it — and who voices it in each dub; the works as cards,
+         *     the newest first, their titles in the language asked for where one is
+         *     held.
+         */
+        get: operations["characters_page"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients": {
         parameters: {
             query?: never;
@@ -1293,11 +1316,14 @@ export interface paths {
         put?: never;
         /**
          * Download one of the lists the further sources work from, now.
-         * @description `anime-lists`, `imdb-ratings`, `imdb-akas` (IMDb's titles by region) or
-         *     `imdb-episodes`. Refused while the switch that needs the list is off, and
-         *     while another import is running. An import that takes longer than a
-         *     request is given carries on after the answer, 202, and is followed under
-         *     Jobs like any other: IMDb's titles, half a gigabyte, usually do.
+         * @description `anime-lists`, `imdb-ratings`, `imdb-akas` (IMDb's titles by region),
+         *     `imdb-episodes`, `tvmaze-index` (TVmaze's index of every series) or
+         *     `wikidata-ids` (Wikidata's links between the sites' ids). Refused while
+         *     the switch that needs the list is off, and while another import is
+         *     running. An import that takes longer than a request is given carries on
+         *     after the answer, 202, and is followed under Jobs like any other: IMDb's
+         *     titles, half a gigabyte, usually do, and TVmaze's index, read at TVmaze's
+         *     pace, always does.
          */
         post: operations["meta_import_dataset"];
         delete?: never;
@@ -2290,6 +2316,12 @@ export interface paths {
          *     numbered by TheTVDB again when it answers — even with an order frozen,
          *     which a return of TheTVDB's own accord leaves with TMDB. When it still
          *     does not answer, TMDB keeps the numbering, as before.
+         * @description For a series TheTVDB no longer knows, numbered as it was served then:
+         *     the series is refreshed at once, and TheTVDB numbers it again when it
+         *     knows it again. One TheTVDB merged into another is numbered by TheTVDB
+         *     under the id it kept from then on — the numbering it was served by is
+         *     forgotten, and Sonarr renumbers it at its next refresh — once the work
+         *     holds that id; while another work here holds it, nothing changes.
          */
         post: operations["orders_restore"];
         delete?: never;
@@ -3979,7 +4011,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * A collection and the movies in it.
+         * A collection and the movies in it, as the catalogue keeps it — asked of
+         *     TMDB once, the first time it is wanted, where it is not kept yet (see
+         *     [`crate::service::collection`]) — named in the caller's language where
+         *     TMDB has its name in it, its pictures where this server keeps them.
          * @description The parts carry search-level detail only: fetching each in full would be
          *     dozens of upstream calls for a list Radarr uses to offer suggestions. Each
          *     names the collection, as api.radarr.video's do: Radarr files a film under
@@ -5168,6 +5203,151 @@ export interface components {
             currentPassword: string;
             newPassword: string;
         };
+        /**
+         * @description A character, kept once for every work it is in: by the ids its sources
+         *     file it under — TheTVDB's record of the part, AniList's, MyAnimeList's.
+         */
+        Character: {
+            /**
+             * @description This server's id for it. Empty in a source's answer, until it is
+             *     stored.
+             */
+            id?: string;
+            name: string;
+            /** @description Their name in the script of the work's own language: フリーレン. */
+            nativeName?: string | null;
+            /**
+             * @description Their picture — drawn, or the actor in the part — an address as its
+             *     source gives it, like an image's.
+             */
+            image?: string | null;
+            /**
+             * Format: int64
+             * @description TheTVDB's id for its record of the part: one series' part, one actor's.
+             */
+            tvdbId?: number | null;
+            /** Format: int64 */
+            anilistId?: number | null;
+            /** Format: int64 */
+            malId?: number | null;
+        };
+        /** @description A work a character is in, and what it is there. */
+        CharacterAppearance: {
+            workId: string;
+            role?: components["schemas"]["CharacterRole"] | null;
+            performer?: components["schemas"]["CharacterPerformer"] | null;
+            /**
+             * @description Who voices it there in each dub, a language at a time — ISO 639-3,
+             *     `jpn`, `eng` — its own order within one.
+             */
+            voices?: components["schemas"]["CharacterVoice"][];
+        };
+        /**
+         * @description A character on a work: what it is to the work, where its source lists
+         *     it, who plays it and who voices it.
+         */
+        CharacterCredit: {
+            character: components["schemas"]["Character"];
+            role?: components["schemas"]["CharacterRole"] | null;
+            /** Format: int32 */
+            sortOrder: number;
+            /**
+             * @description The work's credit that plays it — an actor on screen, an anime's
+             *     original voice — by the credit's id among the work's own: what the
+             *     person and their portrait are read from. None where no credit of the
+             *     work is known to; one a lock hides is not among the credits served,
+             *     and is no performer to show.
+             */
+            creditId?: string | null;
+            /**
+             * @description Who voices it in each dub, a language at a time, its own order
+             *     within one.
+             */
+            voices?: components["schemas"]["CharacterVoice"][];
+            /** @description The source whose list it is: `tvdb`, `anilist`. */
+            source?: string | null;
+        };
+        /** @description A character, and the works of the catalogue it is in. */
+        CharacterPage: {
+            /** @description This server's id for it: its page is `/characters/{id}`. */
+            id: string;
+            name: string;
+            /** @description Its name in the script of its works' own language: フリーレン. */
+            nativeName?: string | null;
+            /**
+             * @description The language that name is in, as a page's `lang` takes it: `ja`.
+             *     None where neither its script nor its works say.
+             */
+            nativeNameLang?: string | null;
+            /** @description Its picture — drawn, or the actor in the part. */
+            image?: string | null;
+            /**
+             * Format: int64
+             * @description TheTVDB's id for its record of the part.
+             */
+            tvdbId?: number | null;
+            /**
+             * Format: int64
+             * @description AniList's id for it: `https://anilist.co/character/{id}`.
+             */
+            anilistId?: number | null;
+            /**
+             * Format: int64
+             * @description MyAnimeList's id for it: `https://myanimelist.net/character/{id}`.
+             */
+            malId?: number | null;
+            /** @description Every work it is in that the reader may see, the newest first. */
+            appearances: components["schemas"]["CharacterAppearance"][];
+            /** @description Those works, as cards, in the same order. */
+            works: components["schemas"]["MediaItem"][];
+        };
+        /**
+         * @description Who plays a character on a work: the person a credit of the work is
+         *     filed under.
+         */
+        CharacterPerformer: {
+            /** @description Their record's id: their page is `/people/{id}`. */
+            id: string;
+            name: string;
+            /** Format: int64 */
+            tmdbId?: number | null;
+            /** @description Their portrait. */
+            image?: string | null;
+        };
+        /**
+         * @description What a character is to a work, as AniList ranks them: one of its leads,
+         *     one beside them, or one in the background. TheTVDB's featured characters
+         *     are its leads, and the others beside them.
+         * @enum {string}
+         */
+        CharacterRole: "main" | "supporting" | "background";
+        /**
+         * @description Who voices a character in a dub: the dub's language and the voice as
+         *     the source names them, with the ids it files them under. An anime's
+         *     original voices are its Japanese dub.
+         */
+        CharacterVoice: {
+            /** @description ISO 639-3, as the rest of the model: `jpn`, `eng`, `fra`. */
+            language: string;
+            name: string;
+            /** @description Their name in their own script, where the source gives it: 種﨑敦美. */
+            nativeName?: string | null;
+            /** @description Their portrait, an address as the source gives it. */
+            image?: string | null;
+            /**
+             * Format: int64
+             * @description AniList's id for them, as one of its staff.
+             */
+            anilistId?: number | null;
+            /** Format: int64 */
+            malId?: number | null;
+            /**
+             * Format: int32
+             * @description Where the source puts them among the voices of the character in that
+             *     language, the most relevant first.
+             */
+            sortOrder: number;
+        };
         Chart: {
             /** Format: int32 */
             year: number;
@@ -5190,7 +5370,11 @@ export interface components {
         CollectionCard: {
             /** Format: int64 */
             tmdbId: number;
-            /** @description TMDB's name for it, where a key lets it be asked. */
+            /**
+             * @description TMDB's name for it, as the catalogue keeps it, in the reader's
+             *     language where TMDB has it in that one: none where it was never kept
+             *     and no key lets TMDB be asked.
+             */
             name: string | null;
             poster: string | null;
             /**
@@ -5549,7 +5733,9 @@ export interface components {
         Dataset: {
             /**
              * @description `imdb-ratings`, `imdb-akas` — IMDb's titles by region —,
-             *     `imdb-episodes` or `anime-lists`.
+             *     `imdb-episodes`, `anime-lists`, `tvmaze-index` — TVmaze's index of
+             *     every series — or `wikidata-ids` — Wikidata's links between the
+             *     sites' ids.
              */
             id: string;
             /** @description The task that downloads it, on the Jobs page. */
@@ -6170,6 +6356,8 @@ export interface components {
             imdbRatings: components["schemas"]["ListImport"] | null;
             imdbTitles: components["schemas"]["ListImport"] | null;
             imdbEpisodes: components["schemas"]["ListImport"] | null;
+            tvmazeIndex: components["schemas"]["ListImport"] | null;
+            wikidataIds: components["schemas"]["ListImport"] | null;
         };
         /**
          * @description How many works the register lists under each of its gaps: what each of
@@ -7180,6 +7368,15 @@ export interface components {
              */
             people?: components["schemas"]["People"];
             /**
+             * @description The characters of the work, its leads first: each with the ids its
+             *     sources file it under, its picture, what it is to the work, the
+             *     credit that plays it — `creditId`, among `credits` — and, for an
+             *     anime, who voices it in each dub. TheTVDB's and AniList's, one
+             *     character once whoever lists it; a credit's `characterName` stays
+             *     what it was.
+             */
+            characters?: components["schemas"]["CharacterCredit"][];
+            /**
              * @description The networks and the companies credited on the work, each with the
              *     ids its sources file it under, its logo and its country, in what it
              *     did for the work. The texts `network`, `studio` and
@@ -7669,9 +7866,30 @@ export interface components {
             /**
              * Format: int64
              * @description After how many TMDB numbers a series in TheTVDB's place: the
-             *     `numbering.fallbackAfter` setting, `0` when it never does.
+             *     `numbering.fallbackAfter` setting, `0` when it never does — nor keeps
+             *     the numbering of a series TheTVDB no longer knows.
              */
             fallbackAfter: number;
+            /**
+             * @description Since when TheTVDB no longer knows the series, and its numbering as
+             *     it was served then is kept, frozen as the aired numbering
+             *     (`tvdb-last`), the episodes aired since placed after it.
+             */
+            droppedSince?: string | null;
+            droppedWhy?: components["schemas"]["TvdbDropped"] | null;
+            /**
+             * Format: int64
+             * @description The series TheTVDB merged it into: the work takes its id at its next
+             *     refresh — unless another work here holds it — and answers to the one
+             *     it had besides; still said once the numbering is given back.
+             */
+            mergedInto?: number | null;
+            /**
+             * Format: int32
+             * @description How many refreshes in a row, the most part of a day apart, TheTVDB
+             *     answered that it has no such series.
+             */
+            missing: number;
             /**
              * @description The key of the order frozen as its aired numbering: what Sonarr
              *     asking for the aired order, Sonarr v4, Plex with no order named and
@@ -9446,7 +9664,7 @@ export interface components {
          * @description A task, sent under the name the history files its runs by.
          * @enum {string}
          */
-        TaskId: "refresh.sweep" | "refresh.all" | "refresh.replay" | "import.anime" | "import.imdb" | "imdb.akas" | "imdb.episodes" | "import.batch" | "import.rules" | "export.nfo" | "media.store" | "media.sweep" | "media.variants" | "media.avif" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild" | "listing.relist";
+        TaskId: "refresh.sweep" | "refresh.all" | "refresh.replay" | "import.anime" | "import.imdb" | "imdb.akas" | "imdb.episodes" | "import.tvmaze" | "import.wikidata" | "tvdb.deleted" | "import.batch" | "import.rules" | "export.nfo" | "media.store" | "media.sweep" | "media.variants" | "media.avif" | "tls.renew" | "update.check" | "arr.seed" | "backup.run" | "search.rebuild" | "listing.relist";
         /** @enum {string} */
         TaskMode: "scheduled" | "manual" | "off";
         /**
@@ -9606,6 +9824,11 @@ export interface components {
             Overview?: string | null;
             Language: string;
         };
+        /**
+         * @description Why a series is numbered as TheTVDB last gave it.
+         * @enum {string}
+         */
+        TvdbDropped: "missing" | "deleted" | "merged";
         /** @description What a TheTVDB client signs in with. */
         TvdbLoginRequest: {
             /**
@@ -10167,8 +10390,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description AniList's answer, with the fields locked here written into each entry that is a work of this catalogue. Reached by the name graphql.anilist.co on the clients' door; a GET with the query in the address is relayed too. When AniList fails — no answer, 429, 5xx, or 403 — its last answer to the same query stands in, with Age, a day old at the most; never for a query about somebody */
+            /** @description AniList's answer, with the fields locked here written into each entry that is a work of this catalogue. Reached by the name graphql.anilist.co on the clients' door; a GET with the query in the address is relayed too. When AniList fails — no answer, 429, 5xx, or 403 — its last answer to the same query stands in, with Age, a day old at the most; never for a query about somebody. With anilist.relayMode set to local-first, a query about entries this server holds — Media by AniList's id, or an anime's MyAnimeList id — is answered here in AniList's shape, without AniList */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description With anilist.relayMode set to local-first, a query about entries held here that asks for what AniList's schema does not have, refused here as AniList refuses it */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12395,6 +12625,48 @@ export interface operations {
             };
         };
     };
+    characters_page: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The reader's language: `fr`. The works' titles are read in it where
+                 *     they are written in it.
+                 */
+                language?: string;
+            };
+            header?: never;
+            path: {
+                /** @description This server's id for the character: a work's `characters[].character.id` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CharacterPage"];
+                };
+            };
+            /** @description The language is not one */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No character has that id, or none of its works is one the caller may see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     clients_list: {
         parameters: {
             query?: never;
@@ -12725,7 +12997,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description `anime-lists`, `imdb-ratings`, `imdb-akas` or `imdb-episodes` */
+                /** @description `anime-lists`, `imdb-ratings`, `imdb-akas`, `imdb-episodes`, `tvmaze-index` or `wikidata-ids` */
                 name: string;
             };
             cookie?: never;
@@ -13297,9 +13569,10 @@ export interface operations {
                 missing?: string;
                 /**
                  * @description `relevance` — how well each work answers `term`, the default when
-                 *     there is one — `popularity` (the default otherwise), `rating`,
-                 *     `release`, `title`, `added`, `refreshed`, `runtime`, `lastAired` or
-                 *     `episodes`.
+                 *     there is one — `popularity` (the default otherwise: TMDB's figure, or,
+                 *     for a work TMDB gives none, the one worked out here from TVmaze's
+                 *     weight and the daily rise of IMDb's votes), `rating`, `release`,
+                 *     `title`, `added`, `refreshed`, `runtime`, `lastAired` or `episodes`.
                  */
                 sort?: string;
                 /** @description `asc` or `desc`; each sort has its own default. */
@@ -13899,9 +14172,10 @@ export interface operations {
                 missing?: string;
                 /**
                  * @description `relevance` — how well each work answers `term`, the default when
-                 *     there is one — `popularity` (the default otherwise), `rating`,
-                 *     `release`, `title`, `added`, `refreshed`, `runtime`, `lastAired` or
-                 *     `episodes`.
+                 *     there is one — `popularity` (the default otherwise: TMDB's figure, or,
+                 *     for a work TMDB gives none, the one worked out here from TVmaze's
+                 *     weight and the daily rise of IMDb's votes), `rating`, `release`,
+                 *     `title`, `added`, `refreshed`, `runtime`, `lastAired` or `episodes`.
                  */
                 sort?: string;
                 /** @description `asc` or `desc`; each sort has its own default. */
@@ -15272,7 +15546,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description A series TMDB does not number, or one with no TheTVDB id */
+            /** @description A series TheTVDB numbers already, or one with no TheTVDB id */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16199,7 +16473,7 @@ export interface operations {
                 /**
                  * @description A task's name: `refresh.sweep`, `refresh.item`, `refresh.all`,
                  *     `import.anime`, `import.imdb`, `imdb.akas`, `imdb.episodes`,
-                 *     `export.nfo`.
+                 *     `import.tvmaze`, `import.wikidata`, `tvdb.deleted`, `export.nfo`.
                  */
                 kind?: string;
                 /** @description `running`, `succeeded` or `failed`. */
