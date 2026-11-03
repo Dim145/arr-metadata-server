@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-11-04
+
 ### Fixed
 
 - Reading Wikidata's links failed — "line 153945 of Wikidata's answer for
@@ -3125,7 +3127,8 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/Dim145/arr-metadata-server/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.12.0...v0.13.0
