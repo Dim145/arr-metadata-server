@@ -34,6 +34,13 @@ pub use file::valid_key;
 /// The path the media are served under, on this server.
 pub const ROUTE: &str = "/media/";
 
+/// How many copies of pictures are being made for the pages that ask for
+/// them at once — those waiting for their turn to be made counted: a page's
+/// first visit asks for a few dozen, and two are drawn at a time. A page
+/// that asks while as many are being made is sent the picture itself, for
+/// that time.
+pub const COPIES_AT_ONCE: usize = 32;
+
 /// The fields whose locked value is an address: a still put on an episode by
 /// hand, a theme put on a work, the poster and background a work or a season
 /// is to lead with.
@@ -50,6 +57,9 @@ pub struct Media {
     pub guard: crate::outbound::Guard,
     /// Rung by whatever put an address in line.
     pub notify: tokio::sync::Notify,
+    /// The places for copies being made as pages ask for them, taken before
+    /// anything is read for one: see [`COPIES_AT_ONCE`] and [`serve`].
+    pub copying: Arc<tokio::sync::Semaphore>,
     /// What the served addresses begin with: the public URL, so that a
     /// client elsewhere can follow them, or nothing, for the interface alone.
     base: String,
@@ -155,6 +165,7 @@ impl Media {
             http: crate::outbound::guarded_client(guard)?,
             guard,
             notify: tokio::sync::Notify::new(),
+            copying: Arc::new(tokio::sync::Semaphore::new(COPIES_AT_ONCE)),
             base: public_url
                 .map(|u| u.trim_end_matches('/').to_string())
                 .unwrap_or_default(),

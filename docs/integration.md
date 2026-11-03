@@ -174,6 +174,8 @@ That fetch is plain HTTP on the stack's own network, and what it installs is a
 root the container then trusts for everything — so over `http://` the script
 refuses to install anything it cannot check: set `AMS_CA_FINGERPRINT` to the
 SHA-256 shown on the Opening & APIs page, and anything else is refused. A
+fetched or pinned authority must be exactly one certificate: a file with a
+second PEM block is refused. A
 stack's very first start has no fingerprint to copy yet; `AMS_CA_INSECURE=1`
 accepts the fetch unpinned, with a warning in the container's log, on a
 network you control — `compose.integration.yaml` sets it until a fingerprint
@@ -262,7 +264,8 @@ that is not in that list — it carries `X-Forwarded-For`, `Forwarded` or
 `X-Real-IP` — is therefore refused on these surfaces, with a warning naming the
 proxy; Sonarr and Radarr calling directly never send one. From a trusted proxy
 every `X-Forwarded-For` line is read, in order, right to left past the other
-trusted hops; a hop that is no address leaves the client unknown, and an unknown
+trusted hops; a hop that is no address, or a trusted proxy that sends only
+`Forwarded` or `X-Real-IP`, leaves the client unknown, and an unknown
 client is refused by every allowlist rather than taken for the proxy.
 
 ### Changes need this server's own pages
@@ -744,9 +747,10 @@ An upstream named this way may be anywhere — a mirror on the same machine
 or the same network included: it is yours. Where it *redirects* is not: a
 hop to an address that only means something from where this server stands
 (loopback, link-local, a cloud's metadata service), written as an address
-or as a name that resolves there, is refused, and MyAnimeList's client id is
-never carried to another origin — scheme, host and port — than the one first
-asked.
+or as a name that resolves there, is refused, and the key or client id TMDB,
+Fanart.tv, TheTVDB and MyAnimeList are asked with is never carried to another
+origin — scheme, host and port — than the one first asked: an upstream that
+redirects `http://` to `https://` must be given as `https://`.
 
 ## When a provider does not answer
 

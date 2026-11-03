@@ -171,6 +171,10 @@ export function Lightbox({
  * no-cookie domain is the one this server's page policy lets frame, and the
  * frame sends YouTube this server's origin — which its player now refuses to
  * play without — and nothing more.
+ *
+ * The frame is sandboxed: YouTube's player runs, keeps its own origin's
+ * storage and goes full screen, and its links open in a window of their own;
+ * it can neither navigate this page, open a form, nor download anything.
  */
 export function Trailer({
   youtubeId,
@@ -207,6 +211,7 @@ export function Trailer({
             src={trailerEmbed(youtubeId)}
             title={heading}
             className="size-full"
+            sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox"
             allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
             allowFullScreen
             referrerPolicy="strict-origin"

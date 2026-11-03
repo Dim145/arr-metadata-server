@@ -174,3 +174,16 @@ background: whole after 255 s (258 080 names of works, 39 976 people,
 345 214 episodes), the search answering from what is written meanwhile. The
 file grows from 336 MB to 596 MB: the index's table, its FTS5 trigrams and
 its three indexes weigh 283 MB, less the 0022 index the migration drops.
+
+### The reads no cache answers go through three places
+
+The figures above were measured before the server took the reads no cache
+answers — a search nobody made lately, the facets of a new filter, a page of
+the catalogue in an order nobody asked for, the figures — three at a time
+(`src/cache/gate.rs`). Thirty-two connections asking for new ones now queue
+for those three places: the database's own limit is still what the rate is,
+but a request that waits more than three seconds is answered `503` with
+`Retry-After: 5`, which a load tool reports as an error. A scenario that
+repeats a request is not touched, since what the cache holds takes no place;
+a cold one is compared by the rate of its answers and the figures of those
+that were answered, not by its failures.

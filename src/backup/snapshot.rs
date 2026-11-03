@@ -31,9 +31,18 @@ pub struct Taken {
     pub migration: i64,
 }
 
-/// Copy `db` into a new SQLite file at `into`, which must not exist.
+/// Copy `db` into a new SQLite file at `into`, which must not exist, and is
+/// readable by this user only: the copy holds every account's password hash.
 pub async fn take(db: &Db, into: &Path) -> Result<Taken> {
     let migration = db.last_migration().await?;
+    // Made here, empty, rather than by SQLite with the permissions it
+    // defaults to: `VACUUM INTO` fills a file that is there and empty, and
+    // SQLite keeps the permissions it finds — the journal it makes beside
+    // the file takes the same.
+    drop(
+        super::private_file(into)
+            .with_context(|| format!("could not make the copy {}", into.display()))?,
+    );
     if db.dialect() == Dialect::Sqlite {
         // The path is bound, never written into the statement: a quote in a
         // directory's name cannot end the string it is in.
@@ -45,8 +54,9 @@ pub async fn take(db: &Db, into: &Path) -> Result<Taken> {
     }
     // A PostgreSQL is copied row by row. So is an SQLite that `VACUUM INTO`
     // wrote nothing of: one in memory, which sqlx opens in a shared cache
-    // the statement does not copy out of.
-    if !into.exists() {
+    // the statement does not copy out of. The file is there, empty, either
+    // way: nothing written is a length of nothing.
+    if tokio::fs::metadata(into).await?.len() == 0 {
         let target = open(into, true).await?;
         let copied = async {
             target.migrate_to(migration).await?;
@@ -178,6 +188,51 @@ mod tests {
         let copy = open(&into, false).await.unwrap();
         assert_eq!(titles(&copy).await, ["Held in memory"]);
         copy.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The copy holds what lets somebody into the server — every account's
+    /// hash — so it is written for its user alone, however it was made, and
+    /// a file that is there already is refused rather than written over.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_copy_is_readable_by_its_user_alone_and_never_written_over_a_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+        let dir = scratch();
+        // `VACUUM INTO`'s copy of a file.
+        let live = open(&dir.join("live.db"), true).await.unwrap();
+        live.migrate().await.unwrap();
+        stored(&live, "A Film").await;
+        let into = dir.join("from-a-file.sqlite");
+        take(&live, &into).await.unwrap();
+        assert_eq!(mode(&into), 0o600);
+        // The journal of its own, beside it, has the same permissions.
+        let again = open(&into, false).await.unwrap();
+        stored(&again, "Another").await;
+        for side in ["from-a-file.sqlite-wal", "from-a-file.sqlite-shm"] {
+            let side = dir.join(side);
+            if side.exists() {
+                assert_eq!(mode(&side), 0o600, "{}", side.display());
+            }
+        }
+        again.close().await;
+
+        // The copy row by row, which is how a PostgreSQL and a database in
+        // memory are copied.
+        let memory = crate::db::testing::sqlite().await;
+        stored(&memory, "Held in memory").await;
+        let into = dir.join("from-memory.sqlite");
+        take(&memory, &into).await.unwrap();
+        assert_eq!(mode(&into), 0o600);
+
+        let refused = take(&live, &into).await.err().expect("refused");
+        assert!(format!("{refused:#}").contains("from-memory.sqlite"));
+        let copy = open(&into, false).await.unwrap();
+        assert_eq!(titles(&copy).await, ["Held in memory"], "left as it was");
+        copy.close().await;
+        live.close().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 

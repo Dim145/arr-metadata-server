@@ -152,6 +152,7 @@ pub struct EpisodeHit {
     responses(
         (status = 200, body = Hits),
         (status = 400, description = "The term is too long, a kind is not one of work, person and episode, or the language is not a language tag"),
+        (status = 503, description = "As many such reads as the server answers at once are under way; `Retry-After` says when to ask again"),
     ),
 )]
 async fn find(
@@ -194,13 +195,27 @@ async fn find(
             .collect();
         format!("search:{}:{digest}", state.caches.stamp())
     };
-    if let Some(cached) = state.caches.searches.get(&key).await {
-        return Ok((
+    let kept = |cached: String| {
+        (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
             cached,
         )
-            .into_response());
+            .into_response()
+    };
+    if let Some(cached) = state.caches.searches.get(&key).await {
+        return Ok(kept(cached));
+    }
+
+    // A term nobody has searched for lately is looked for in the index, three
+    // times over: a few at a time, so that typing new ones faster than they
+    // are answered is no way to take the database from everybody else.
+    let Some(_place) = state.caches.cold.take().await else {
+        return Ok(crate::api::busy());
+    };
+    // Searched and answered meanwhile, perhaps, by a caller that waited too.
+    if let Some(cached) = state.caches.searches.get(&key).await {
+        return Ok(kept(cached));
     }
 
     let scope = |kind: Kind| Scope {
@@ -637,5 +652,45 @@ mod tests {
             Value::Array(Vec::new()),
             "punctuation alone finds nothing"
         );
+    }
+
+    /// The search of a visitor, whatever it is answered with.
+    async fn answered(state: &AppState, term: &str) -> Response {
+        let uri: Uri = format!("/search?term={term}").parse().expect("an address");
+        let Query(query) = Query::<SearchQuery>::try_from_uri(&uri).expect("a query");
+        find(
+            State(state.clone()),
+            Extension(Identity::Visitor),
+            Query(query),
+        )
+        .await
+        .expect("answered")
+    }
+
+    /// A term nobody searched for lately is looked for a few at a time: with
+    /// every place taken, the caller waits, and is turned away — told when to
+    /// come back — when none is free; a term kept is answered whatever.
+    #[tokio::test]
+    async fn a_term_nobody_searched_for_waits_for_a_place_and_is_turned_away_without_one() {
+        let state = crate::api::native::testing::server().await;
+        stored(&state, MediaKind::Movie, "Heat", |_| {}).await;
+        state
+            .caches
+            .cold
+            .wait_at_most(std::time::Duration::from_millis(30));
+
+        assert_eq!(answered(&state, "heat").await.status(), StatusCode::OK);
+
+        let mut held = Vec::new();
+        while state.caches.cold.free() > 0 {
+            held.push(state.caches.cold.take().await.expect("a place"));
+        }
+        assert_eq!(answered(&state, "heat").await.status(), StatusCode::OK);
+        let turned_away = answered(&state, "dune").await;
+        assert_eq!(turned_away.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(turned_away.headers().get(header::RETRY_AFTER).is_some());
+
+        held.pop();
+        assert_eq!(answered(&state, "dune").await.status(), StatusCode::OK);
     }
 }

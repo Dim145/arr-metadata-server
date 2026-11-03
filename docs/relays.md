@@ -270,6 +270,15 @@ service fails and the memory holds nothing — after a restart, for instance. On
 older than 180 days is neither served nor kept, and the server deletes it as it
 goes; a database transfer carries the others.
 
+A reference list is filed in the database under its path and the language and
+region the request names (`language`, `region`, `watch_region`), and under nothing
+else: not the rest of the query, not the caller's headers. A request that adds
+parameters of its own finds the row the others wrote, rather than making one. A
+language or a region that is not written as one — empty, longer than sixteen
+characters, anything but letters, digits, `-` and `_` — or that a request gives
+twice, is still answered, and kept in the database under none. A relay keeps at
+most 512 of them; past that, the oldest go first.
+
 `relays.staleIfError`, on unless an administrator turns it off, decides all of
 this: off, the service's failure is handed on as it came, and the reference lists,
 still written, are not read. It is set on **Opening & APIs**, under *When a service
@@ -287,6 +296,12 @@ never waits for that pause to end, nor longer than ten seconds for a place: it
 answers with what it kept, or `429` with the seconds left in `Retry-After`. A
 client's AniList query is never spaced out as the server's own fetches from AniList
 are.
+
+What a relay keeps in memory is filed under the path, the query and the headers it
+hands on that may change the answer: `Accept` and `Accept-Language` for TMDB, and
+for TheTVDB and AniList `Content-Type` too, which says how AniList reads a body.
+Two callers who ask with other headers are two entries; none is answered what the
+service said to the other.
 
 A client's `If-None-Match` and `If-Modified-Since` reach the service only with a
 request answered for that client alone, and handed back as the service wrote it: a

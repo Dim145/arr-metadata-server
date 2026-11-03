@@ -65,6 +65,28 @@ account, and no sign-up ever makes an administrator. Uninvited sign-ups are
 limited to `AMS_SIGNUPS_PER_HOUR` (5) per address — an IPv6 address counts by
 its /64 — and `AMS_SIGNUPS_PER_HOUR_TOTAL` (100) for the whole server.
 
+**Failed sign-ins** are counted for each account and address. After
+`AMS_SIGNIN_FAILURES_PER_ACCOUNT` attempts (10) on an account from one address —
+an IPv6 address counts by its /64 — in fifteen minutes, that address is refused
+without its password being looked at, until the window closes; the attempt is
+counted before the password is checked, so a burst sent together is held to the
+same ten. Somebody guessing at an account from their address shuts out that
+address, and not the account's owner at theirs. Guessing from many addresses is
+held by a bar for the account as a whole, five times as high; it does not apply to
+an address the account has signed in from in the last thirty days, so its owner's
+usual places get through with the right password. Failures of somebody with no
+credential — a refused password, a refused return from the identity provider —
+are written to the journal as one row for each address and kind in a minute:
+written at once, and amended when the minute is over to say how many there were
+and what the last of them typed. A return from the provider that was not started
+here, or with no provider set up, is not written at all.
+
+A key a person holds is theirs to pause, and an administrator's to pause for
+them from **Keys & network**: the pause then stands on the person, and until an
+administrator enables one of their keys from there, or lifts it on their page
+(`DELETE /users/{id}/keys-pause`), they can neither make a key nor resume one —
+deleting the paused key and making another is no way round it.
+
 The same page switches each API off — Sonarr's, Radarr's, the Plex provider, the
 TMDB, TheTVDB and AniList relays, and the native API's keys (the interface's own
 session is never cut). A switched-off API answers `503`, which Sonarr and Radarr
@@ -118,12 +140,27 @@ The flow is the authorization code with PKCE, a state and a nonce, carried in
 a cookie sealed with a key only the running server holds (`__Host-` over
 HTTPS); the ID token's signature — asymmetric only — issuer, audience, expiry
 and `at_hash` are checked. The issuer, and every endpoint it publishes, must be
-HTTPS unless it is a local address. A returning person is found by the
-provider's own identifier. Someone who already has an account here ties it to
-theirs at the provider from their account page, signed in, which proves both
-sides; nothing is ever tied by e-mail, since an address typed into a profile
-proves nothing. Otherwise, if allowed, an account is opened — a member's, or
-the role a claim gives (`groups`, a path such as `realm_access.roles`, or a
+HTTPS unless it is a local address, and none may be at a link-local, metadata,
+multicast or unspecified address — written as one, or a name that resolves to
+one; this machine's own loopback is the one such address a provider may have.
+The provider is reached directly, whatever `HTTP_PROXY` says, and every address
+it publishes is judged before it is asked for, its keys' included. A returning
+person is found by the provider's own identifier. Someone who already has an
+account here ties it to theirs at the provider from their account page: they give
+their current password, are sent to sign in at the provider, and the tie is made
+when they come back — which proves both halves are theirs. An account with no
+password of its own has the provider sign its person in again (`prompt=login`,
+`max_age=0`), and the provider's answer has to say when (`auth_time`). A session
+alone ties nothing: one left open, or taken, would tie whoever holds it, and the
+tie would outlive the password the account's owner then resets — nor does a
+sign-in begun before the account was changed, a password reset above all, finish
+its tie after it. Nothing is ever tied by e-mail, since an address typed into a
+profile proves nothing. The owner can untie the account from the same page while
+it has a password to sign in with — their other sessions are closed with it —
+and an administrator can from the member's page; an administrator's reset of a
+password unties the account too. The journal says who tied (`user.linked`) and
+who untied (`user.unlinked`). Otherwise, if allowed, an account is opened — a
+member's, or the role a claim gives (`groups`, a path such as `realm_access.roles`, or a
 namespaced `https://…/roles`, with the values that make an administrator or an
 editor). With a claim named, the provider decides the role at every sign-in,
 but never takes away the last administrator, and a sign-in whose claims did

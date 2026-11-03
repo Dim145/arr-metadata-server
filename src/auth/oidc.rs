@@ -14,7 +14,8 @@
 //! opens the account.
 
 use std::{
-    sync::LazyLock,
+    net::IpAddr,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
@@ -208,10 +209,18 @@ const SIGNATURES: [CoreJwsSigningAlgorithm; 10] = [
 const MAX_RESPONSE: usize = 1 << 20;
 
 /// Its own client, which never follows a redirect: a redirect is a URL the
-/// provider's answer chose, and the crate's advice is not to go there.
+/// provider's answer chose, and the crate's advice is not to go there. Nor
+/// does it reach an address only this machine can — a cloud's metadata
+/// service, a link-local one — however the address is written or the name
+/// that leads there ([`Resolver`], [`reachable`]), and it goes direct,
+/// whatever `HTTP_PROXY` says: a proxy resolves the name itself, out of the
+/// resolver's sight. It tells the provider no page it came from.
 static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .user_agent(concat!("arr-metadata-server/", env!("CARGO_PKG_VERSION")))
+        .dns_resolver(Arc::new(Resolver))
+        .no_proxy()
+        .referer(false)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
@@ -227,14 +236,23 @@ pub enum HttpError {
     Response(#[from] openidconnect::http::Error),
     #[error("the provider's answer is larger than {MAX_RESPONSE} bytes")]
     TooLarge,
+    #[error("this server will not ask for {0}")]
+    Refused(String),
 }
 
-/// One request to the provider, as the crate asks for it.
+/// One request to the provider, as the crate asks for it. Judged first, as
+/// every address the provider publishes is as it is read, so that the keys
+/// are not fetched from an address nobody should send a request to before
+/// the document that names it has been looked at.
 async fn send(request: HttpRequest) -> Result<HttpResponse, HttpError> {
     let (parts, body) = request.into_parts();
 
+    let url = url::Url::parse(&parts.uri.to_string())
+        .map_err(|e| HttpError::Refused(format!("{}, which is no address: {e}", parts.uri)))?;
+    reachable(&url).map_err(HttpError::Refused)?;
+
     let mut response = HTTP
-        .request(parts.method, parts.uri.to_string())
+        .request(parts.method, url)
         .headers(parts.headers)
         .body(body)
         .send()
@@ -259,12 +277,12 @@ async fn send(request: HttpRequest) -> Result<HttpResponse, HttpError> {
 /// Whether plain HTTP is acceptable for this address: this machine, or an
 /// address that only a home or office network routes — never the internet,
 /// where anyone on the way could swap the provider's keys for their own.
+/// Never a link-local one: that is where a cloud's metadata service answers,
+/// and no provider is there.
 pub fn http_allowed(url: &url::Url) -> bool {
     match url.host() {
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
-        Some(url::Host::Ipv6(ip)) => {
-            ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
-        }
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_private(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unique_local(),
         Some(url::Host::Domain(name)) => {
             let name = name.to_ascii_lowercase();
             name == "localhost"
@@ -277,8 +295,76 @@ pub fn http_allowed(url: &url::Url) -> bool {
     }
 }
 
+/// Why no address is asked that only this machine can reach.
+const NOWHERE: &str =
+    "no identity provider is at a link-local, metadata, multicast or unspecified address";
+
+/// Whether an address is one no provider is at: what this server's other
+/// clients refuse ([`crate::outbound::is_internal`]), but for this machine's
+/// loopback, where a provider installed beside this server answers.
+fn refused(ip: IpAddr) -> bool {
+    crate::outbound::is_internal(ip) && !loopback(ip)
+}
+
+/// Loopback, written either way: `127.0.0.0/8`, `::1`, and IPv4's written
+/// as IPv6 (`::ffff:127.0.0.1`).
+fn loopback(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback(),
+        IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+    }
+}
+
+/// Why this address is not to be asked, or nothing when it is: over HTTPS,
+/// or plain HTTP where that is acceptable ([`http_allowed`]), and not an
+/// address — written as one — that no provider is at. A name is the
+/// resolver's to judge, where the connection to it is made.
+pub fn reachable(url: &url::Url) -> Result<(), String> {
+    match url.scheme() {
+        "https" => {}
+        "http" if http_allowed(url) => {}
+        "http" => {
+            return Err(format!(
+                "{url} over plain HTTP; only a local address may be"
+            ));
+        }
+        _ => return Err(format!("{url}, which is neither https nor http")),
+    }
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) if refused(IpAddr::V4(ip)) => Err(format!("{url}: {NOWHERE}")),
+        Some(url::Host::Ipv6(ip)) if refused(IpAddr::V6(ip)) => Err(format!("{url}: {NOWHERE}")),
+        _ => Ok(()),
+    }
+}
+
+/// Resolves a provider's name as any other, refusing a name that resolves to
+/// an address no provider is at. Where the connection is made, so that a name
+/// cannot resolve one way when it is checked and another when it is used.
+#[derive(Clone, Copy, Debug, Default)]
+struct Resolver;
+
+impl reqwest::dns::Resolve for Resolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let found: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                .collect();
+            if found.iter().any(|a| refused(a.ip())) {
+                return Err(format!("{host} resolves to an address: {NOWHERE}").into());
+            }
+            Ok(Box::new(found.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 /// Every endpoint the provider published is as safe as its issuer: over
-/// HTTPS, unless plain HTTP is acceptable for that address.
+/// HTTPS, unless plain HTTP is acceptable for that address, and at no
+/// address that only this machine can reach. Judged before any of them is
+/// used — the keys' address too, as [`send`] judges it before fetching it.
 fn check_endpoints(metadata: &CoreProviderMetadata) -> Result<()> {
     let mut urls = vec![
         metadata.authorization_endpoint().url().clone(),
@@ -292,9 +378,7 @@ fn check_endpoints(metadata: &CoreProviderMetadata) -> Result<()> {
     }
 
     for url in urls {
-        if url.scheme() != "https" && !http_allowed(&url) {
-            bail!("the provider publishes {url} over plain HTTP; only a local address may be");
-        }
+        reachable(&url).map_err(|why| anyhow!("the provider publishes {why}"))?;
     }
     Ok(())
 }
@@ -351,9 +435,10 @@ async fn metadata(provider: &Provider, fresh: bool) -> Result<CoreProviderMetada
 
     let found = async {
         let issuer = IssuerUrl::new(provider.issuer.clone()).context("the issuer is not a URL")?;
+        // The crate's error says what failed and keeps why as its source.
         let metadata = CoreProviderMetadata::discover_async(issuer, &send)
             .await
-            .map_err(|e| anyhow!("discovery failed: {e}"))?;
+            .map_err(|e| anyhow::Error::new(e).context("discovery failed"))?;
         check_endpoints(&metadata)?;
         anyhow::Ok(metadata)
     }
@@ -412,6 +497,12 @@ pub struct Flow {
     /// The account to tie the provider's person to: set when a signed-in
     /// person asked for it from their account page.
     pub link: Option<String>,
+    /// Whether the person was asked to sign in at the provider afresh, and
+    /// the answer is to say that they did ([`signed_in_afresh`]): a tie asked
+    /// for by an account with no password to prove it by. A flow sealed
+    /// before this was written down reads as not.
+    #[serde(default)]
+    pub fresh: bool,
 }
 
 /// The cookie a flow travels in, named after its state so that two sign-ins
@@ -435,7 +526,14 @@ pub struct Started {
 }
 
 /// Begin: a state, a nonce and a PKCE pair, and the address at the provider.
-pub async fn start(provider: &Provider, next: String, link: Option<String>) -> Result<Started> {
+/// With `fresh` the provider is asked to have the person sign in again,
+/// whatever it holds a session for (`prompt=login`, `max_age=0`).
+pub async fn start(
+    provider: &Provider,
+    next: String,
+    link: Option<String>,
+    fresh: bool,
+) -> Result<Started> {
     let client = client(provider, metadata(provider, false).await?)?;
 
     let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
@@ -449,6 +547,11 @@ pub async fn start(provider: &Provider, next: String, link: Option<String>) -> R
     for scope in provider.scopes.iter().filter(|s| s.as_str() != "openid") {
         request = request.add_scope(Scope::new(scope.clone()));
     }
+    if fresh {
+        request = request
+            .add_prompt(CoreAuthPrompt::Login)
+            .set_max_age(Duration::ZERO);
+    }
     let (url, csrf, nonce) = request.url();
 
     Ok(Started {
@@ -461,6 +564,7 @@ pub async fn start(provider: &Provider, next: String, link: Option<String>) -> R
             next,
             at: chrono::Utc::now().timestamp(),
             link,
+            fresh,
         },
     })
 }
@@ -481,6 +585,12 @@ pub struct Vouched {
     pub next: String,
     /// The account a signed-in person asked to tie to this one.
     pub link: Option<String>,
+    /// Whether the provider signed the person in again for it: what a tie
+    /// asked for by an account with no password rests on.
+    pub fresh: bool,
+    /// When the flow began, in seconds since the epoch: what a tie was asked
+    /// for after, and is made only if the account has not changed since.
+    pub began: i64,
 }
 
 /// Why a return from the provider was not accepted, in words the sign-in
@@ -569,6 +679,15 @@ pub async fn finish(
         }
     }
 
+    // Asked to sign the person in again, the provider says when it did: a
+    // session it already held, and answered from, would be no proof of who is
+    // at the keyboard now.
+    if flow.fresh && !signed_in_afresh(claims.auth_time().map(|at| at.timestamp()), flow.at) {
+        return Err(Refusal::Invalid(
+            "the provider did not sign you in again, as it was asked to".into(),
+        ));
+    }
+
     let mut vouched = Vouched {
         issuer: claims.issuer().as_str().to_string(),
         subject: claims.subject().as_str().to_string(),
@@ -582,6 +701,8 @@ pub async fn finish(
         role: mapping.role(&claims.additional_claims().rest),
         next: flow.next,
         link: flow.link,
+        fresh: flow.fresh,
+        began: flow.at,
     };
 
     // What the ID token did not carry — providers differ on whether the
@@ -604,6 +725,18 @@ pub async fn finish(
     }
 
     Ok(vouched)
+}
+
+/// How far a provider's clock may be behind this server's, in seconds, for
+/// a sign-in it made at the very moment it was asked to to read as afresh.
+const FRESH_SKEW: i64 = 120;
+
+/// Whether an ID token's `auth_time`, in seconds since the epoch, says the
+/// person signed in at the provider since the flow began at `began`: a
+/// provider that was asked to (`max_age=0`) and did not say when, or said a
+/// time before, answered from a session it held already.
+fn signed_in_afresh(auth_time: Option<i64>, began: i64) -> bool {
+    auth_time.is_some_and(|at| at >= began - FRESH_SKEW)
 }
 
 /// The ID token's verifier, taking only the asymmetric signatures.
@@ -765,6 +898,190 @@ mod tests {
         assert!(ok("http://[fd00::1]/"));
         assert!(!ok("http://auth.example.org/"));
         assert!(!ok("http://8.8.8.8/"));
+        // Link-local is where a cloud's metadata service answers: no
+        // provider is, and plain HTTP is no reason to go there.
+        assert!(!ok("http://169.254.169.254/"));
+        assert!(!ok("http://[fe80::1]/"));
+    }
+
+    fn url(text: &str) -> url::Url {
+        url::Url::parse(text).unwrap()
+    }
+
+    /// What an address written as one may be, whatever the document that
+    /// names it says: nothing that only this machine can reach, but for its
+    /// own loopback — a provider installed beside this server answers there.
+    #[test]
+    fn an_address_no_provider_is_at_is_not_asked_but_for_loopback() {
+        for fine in [
+            "https://accounts.example.org/",
+            "https://10.0.0.5/keys",
+            "https://[fd12:3456::1]/keys",
+            "https://127.0.0.1:9443/keys",
+            "https://[::1]/keys",
+            "https://[::ffff:127.0.0.1]/keys",
+            "http://127.0.0.1:9000/application/o/x/",
+            "http://localhost:9000/",
+            "http://192.168.1.10:9000/",
+        ] {
+            assert_eq!(reachable(&url(fine)), Ok(()), "{fine}");
+        }
+        for refused in [
+            "https://169.254.169.254/latest/meta-data/",
+            "https://[fe80::1]/keys",
+            "https://[fd00:ec2::254]/",
+            "https://100.100.100.200/",
+            "https://0.0.0.0/",
+            "https://[::ffff:169.254.169.254]/",
+            "https://224.0.0.1/",
+            // Plain HTTP anywhere but a local address, and nothing but HTTP.
+            "http://8.8.8.8/",
+            "http://auth.example.org/",
+            "http://169.254.169.254/",
+            "ftp://accounts.example.org/",
+            "file:///etc/passwd",
+        ] {
+            assert!(reachable(&url(refused)).is_err(), "{refused}");
+        }
+    }
+
+    /// Every address the provider's document publishes is judged before any
+    /// is used — the keys' too, which discovery fetches by itself.
+    #[test]
+    fn the_endpoints_a_document_publishes_are_judged() {
+        let document = |changes: serde_json::Value| -> CoreProviderMetadata {
+            let mut document = serde_json::json!({
+                "issuer": "https://idp.example.org/",
+                "authorization_endpoint": "https://idp.example.org/authorize",
+                "token_endpoint": "https://idp.example.org/token",
+                "userinfo_endpoint": "https://idp.example.org/userinfo",
+                "jwks_uri": "https://idp.example.org/keys",
+                "response_types_supported": ["code"],
+                "subject_types_supported": ["public"],
+                "id_token_signing_alg_values_supported": ["RS256"],
+            });
+            for (key, value) in changes.as_object().unwrap() {
+                document[key] = value.clone();
+            }
+            serde_json::from_value(document).expect("a document")
+        };
+
+        assert!(check_endpoints(&document(serde_json::json!({}))).is_ok());
+        // A provider beside this server, on its own port.
+        assert!(
+            check_endpoints(&document(serde_json::json!({
+                "jwks_uri": "http://127.0.0.1:9000/keys",
+                "token_endpoint": "http://localhost:9000/token",
+            })))
+            .is_ok()
+        );
+
+        for (field, address) in [
+            ("jwks_uri", "https://169.254.169.254/keys"),
+            ("token_endpoint", "https://169.254.169.254/token"),
+            ("userinfo_endpoint", "https://[fe80::1]/userinfo"),
+            (
+                "authorization_endpoint",
+                "https://169.254.169.254/authorize",
+            ),
+            ("jwks_uri", "http://idp.example.org/keys"),
+            ("token_endpoint", "http://8.8.8.8/token"),
+        ] {
+            let refused =
+                check_endpoints(&document(serde_json::json!({ field: address }))).expect_err(field);
+            assert!(
+                format!("{refused:#}").contains(address),
+                "{field}: {refused:#}"
+            );
+        }
+    }
+
+    /// An address is judged before the request is sent, so the keys named
+    /// by a document are not asked of an address nobody should be sent to.
+    #[tokio::test]
+    async fn a_request_for_an_address_no_provider_is_at_is_not_sent() {
+        let ask = |address: &str| {
+            send(
+                openidconnect::http::Request::builder()
+                    .uri(address)
+                    .body(Vec::new())
+                    .unwrap(),
+            )
+        };
+
+        for address in [
+            "https://169.254.169.254/latest/meta-data/",
+            "https://[fe80::1]/keys",
+            "http://8.8.8.8/keys",
+        ] {
+            let refused = ask(address).await.expect_err(address);
+            assert!(matches!(refused, HttpError::Refused(_)), "{refused}");
+            assert!(refused.to_string().contains(address), "{refused}");
+        }
+    }
+
+    /// A name that resolves to an address no provider is at gets nowhere, at
+    /// the moment its connection is made; one that resolves to loopback, or
+    /// to a private network's, does.
+    #[tokio::test]
+    async fn a_name_that_resolves_to_such_an_address_is_not_connected_to() {
+        use reqwest::dns::Resolve as _;
+
+        let resolve = |name: &str| Resolver.resolve(name.parse().expect("a name"));
+
+        for refused in [
+            "169.254.169.254",
+            "100.100.100.200",
+            "0.0.0.0",
+            "224.0.0.1",
+            "fe80::1",
+        ] {
+            let Err(why) = resolve(refused).await else {
+                panic!("{refused} resolved");
+            };
+            assert!(
+                why.to_string().contains("no identity provider is at"),
+                "{refused}: {why}"
+            );
+        }
+        for fine in ["127.0.0.1", "::1", "10.1.2.3", "192.168.1.10"] {
+            let addresses: Vec<_> = resolve(fine)
+                .await
+                .unwrap_or_else(|e| panic!("{fine}: {e}"))
+                .collect();
+            assert!(!addresses.is_empty(), "{fine}");
+        }
+    }
+
+    /// The client builds with what it is given: the resolver that judges
+    /// each connection, no proxy, no referrer.
+    #[test]
+    fn the_client_for_a_provider_builds() {
+        LazyLock::force(&HTTP);
+    }
+
+    /// A tie asked for with no password is proved by the provider signing the
+    /// person in again: a time of sign-in before the flow began, or none at
+    /// all, is an old session answering.
+    #[test]
+    fn a_provider_asked_to_sign_the_person_in_again_must_say_it_did() {
+        let began = 1_800_000_000;
+        assert!(signed_in_afresh(Some(began + 20), began));
+        assert!(signed_in_afresh(Some(began), began));
+        // A provider's clock a little behind this server's.
+        assert!(signed_in_afresh(Some(began - FRESH_SKEW), began));
+        assert!(!signed_in_afresh(Some(began - FRESH_SKEW - 1), began));
+        assert!(!signed_in_afresh(Some(began - 3600), began));
+        assert!(!signed_in_afresh(None, began));
+    }
+
+    /// What a flow sealed before `fresh` existed reads as: not asked to.
+    #[test]
+    fn a_flow_sealed_without_the_mark_is_not_a_fresh_one() {
+        let old = r#"{"state":"s","nonce":"n","verifier":"v","next":"/","at":1,"link":"u1"}"#;
+        let flow: Flow = serde_json::from_str(old).expect("an older flow");
+        assert!(!flow.fresh);
+        assert_eq!(flow.link.as_deref(), Some("u1"));
     }
 
     #[test]
@@ -793,6 +1110,7 @@ mod tests {
             next: "/".into(),
             at,
             link: None,
+            fresh: false,
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

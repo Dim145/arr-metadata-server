@@ -24,7 +24,9 @@ docker run --rm -it -v arr-metadata-server_metadata-data:/data --env-file .env \
 
 `-it` is for a command that asks for a password at the terminal. One read from standard input
 — `--password-stdin`, `--passphrase-stdin` — needs `-i` alone, and nothing is ever taken as an
-argument, which a process list and a shell's history would keep:
+argument, which a process list and a shell's history would keep — the password of a database
+address, which `transfer` takes, is read from the environment instead
+([below](#the-server)):
 
 ```bash
 printf '%s\n' "$NEW_PASSWORD" | \
@@ -41,7 +43,7 @@ not exactly this binary's, rather than migrate it under a server that runs anoth
 | --- | --- |
 | *(none)*, `serve` | Runs the server. |
 | `healthcheck` | Asks the running server's `/health`, over loopback; exits non-zero if it is unwell. The image's health check. |
-| `transfer FROM TO [--force]` | Copies a database into another, whatever their engines. |
+| `transfer [FROM] [TO] [--force]` | Copies a database into another, whatever their engines. A URL with a password is read from `AMS_TRANSFER_FROM` or `AMS_TRANSFER_TO`, never an argument. |
 | `backup [--out PATH] [--include-media] [--passphrase-stdin]` | Makes an archive. |
 | `restore ARCHIVE [--replace] [--passphrase-stdin]` | Restores one. Refused while a server runs on the database. |
 | `user list` | Lists the accounts. |
@@ -65,8 +67,25 @@ one moment, so a server may go on writing to it meanwhile; the copy is one trans
 failure leaves the target as it was:
 
 ```bash
-arr-metadata-server transfer 'sqlite://data/ams.db' 'postgres://ams:secret@localhost/ams'
+arr-metadata-server transfer 'sqlite://data/ams.db' 'postgres://ams@localhost/ams'
 ```
+
+A password is never an argument, which a process list and a shell's history would keep. A URL
+that carries one — after the user's name, or as `?password=` — is refused as an argument, with a
+message that says where to put it: `AMS_TRANSFER_FROM` names the source and `AMS_TRANSFER_TO` the
+target, each standing in for the argument left out, so the source may be an argument and the
+target a variable. An argument that is given wins over its variable, and a `.env` is read as for
+every other variable. Typed with nothing shown, the variable is not in the shell's history
+either:
+
+```bash
+read -rs AMS_TRANSFER_TO    # the target's URL, password and all
+export AMS_TRANSFER_TO
+arr-metadata-server transfer 'sqlite://data/ams.db'
+```
+
+In a container, hand it the variable by name — `docker compose run --rm -e AMS_TRANSFER_TO metadata
+transfer 'sqlite:///data/ams.db'` — and Docker takes its value from the shell.
 
 ## Backups
 
@@ -76,7 +95,9 @@ several instances — listed on **Administration › Backups** like any other, a
 puts the media kept on disk in it; `--out PATH` writes it to a file instead, or into a directory
 under its usual name, and does not list it; `--passphrase-stdin` encrypts it with a passphrase
 read from standard input — asked for, unseen, at a terminal — rather than `AMS_BACKUP_PASSPHRASE`.
-It says where it wrote the archive, its size and its SHA-256.
+It says where it wrote the archive, its size and its SHA-256. The archive is written readable by
+the user who runs the command alone (`0600`), wherever it goes, the directories made for it
+`0700`; [Installing and running](install.md#backups) says who else can be given it.
 
 `restore` puts an archive back: a file, or the name of one the server keeps. It has the database
 to itself, or it does not start: a server holding it — the server's own lock beside an SQLite
@@ -134,10 +155,12 @@ TheTVDB or IMDb id: the document travels from one catalogue to another.
 
 `config check` prints the configuration as the server reads it — every secret masked, as the log
 masks it — and then probes what it names: the database, and where its migrations stand; the media
-store, a directory or a bucket; where the archives are kept, written to and listed; the public
-address's `/health`. A configuration the server would refuse to start with is said as the start
-would say it. It exits non-zero when the database, the store or the archives' place does not
-answer; the public address is only reported, since a proxy may route it from outside alone.
+store, a directory or a bucket; where the archives are kept, written to and listed — with a
+warning when `AMS_BACKUP_PASSPHRASE` is unset, since an archive then goes unencrypted with every
+account's password hash in it; the public address's `/health`. A configuration the server would
+refuse to start with is said as the start would say it. It exits non-zero when the database, the
+store or the archives' place does not answer; the public address is only reported, since a proxy
+may route it from outside alone.
 
 `migrate status` lists this binary's migrations — applied, pending, or failed — and any the
 database has that it does not know, which a later version applied. `migrate run` applies those

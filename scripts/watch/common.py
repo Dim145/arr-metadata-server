@@ -101,6 +101,7 @@ def _closed(url, data, headers, method, timeout, limit):
     """One request on a connection of its own, as urllib makes them."""
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected — the URLs are the checks' own https constants
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read(limit) if limit else response.read()
             return response.status, response.headers, _decoded(body, response.headers, limit)
@@ -145,8 +146,10 @@ def _kept(url, data, headers, method, timeout, limit):
 def _connect(host, port, timeout):
     proxy = urllib.request.getproxies().get("https")
     if not proxy or urllib.request.proxy_bypass(host):
+        # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected — http.client verifies the certificate and the host name
         return http.client.HTTPSConnection(host, port, timeout=timeout)
     via = urllib.parse.urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+    # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected — http.client verifies the certificate and the host name
     connection = http.client.HTTPSConnection(via.hostname, via.port or 80, timeout=timeout)
     tunnel = {}
     if via.username:

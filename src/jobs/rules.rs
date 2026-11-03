@@ -310,7 +310,7 @@ async fn fetch(state: &AppState, url: &str) -> Result<String> {
         )
         .send()
         .await
-        .map_err(|e| anyhow::anyhow!("{} could not be fetched: {e}", shown_url(url)))?;
+        .map_err(|e| unfetched(url, &e))?;
     let status = response.status();
     if !status.is_success() {
         anyhow::bail!("{} answered {status}", shown_url(url));
@@ -319,6 +319,26 @@ async fn fetch(state: &AppState, url: &str) -> Result<String> {
         .await
         .with_context(|| format!("{} could not be read", shown_url(url)))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Why an address could not be fetched, as a page and a log may say it: the
+/// address as the pages show it, its key hidden, and what kind of failure it
+/// was and what lay under it. Never reqwest's own words, which name the
+/// address as it was asked — the key of a private list in its query, and all.
+fn unfetched(url: &str, e: &reqwest::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} could not be fetched: {}",
+        shown_url(url),
+        crate::providers::describe_request_error(e)
+    )
+}
+
+/// What a failure of a rule says of itself, as the history, the log and a
+/// page may carry it: masked as every logged text is, an address in it with
+/// the key it was read with and the password it was given hidden — the
+/// parts of the chain that are not the address of a list say what they like.
+pub fn told(e: &anyhow::Error) -> String {
+    crate::telemetry::redact(&format!("{e:#}"))
 }
 
 /// The works a list names, read as a feed when it is one, else a line at a
@@ -632,7 +652,7 @@ async fn run_one(state: &AppState, rule: &Rule, read: Read, record: &str) -> boo
     let wanted = match gather(state, read.source, &read.params).await {
         Ok(wanted) => wanted,
         Err(e) => {
-            let why = format!("{e:#}");
+            let why = told(&e);
             tracing::info!(rule = %rule.id, error = %why, "an import rule could not read its source");
             if let Err(e) = job::finish(&state.db, record, None, Some(&why)).await {
                 tracing::warn!(error = %e, "could not close a rule's run");
@@ -662,7 +682,7 @@ async fn run_one(state: &AppState, rule: &Rule, read: Read, record: &str) -> boo
                     "{left} works were not put in the selection, which is full"
                 ))
             }
-            Err(e) => trouble = Some(format!("{e:#}")),
+            Err(e) => trouble = Some(told(&e)),
         }
     }
     let summary = format!("{}, of {}", brought.tally.said(), wanted.len());
@@ -809,6 +829,42 @@ mod tests {
             shown_url("https://example.org/list.txt"),
             "https://example.org/list.txt"
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_fetch_names_the_address_without_its_key() {
+        let url =
+            "http://127.0.0.1:1/api/v1/lists/top/ids.txt?api_key=s3cret&auth=t0pS3cret&kind=movie";
+        // Nothing listens there: reqwest's own error names the address asked.
+        let refused = reqwest::Client::new().get(url).send().await.unwrap_err();
+        assert!(
+            refused.to_string().contains("s3cret"),
+            "{refused}: the point of the test"
+        );
+
+        let said = format!("{:#}", unfetched(url, &refused));
+        for key in ["s3cret", "t0pS3cret"] {
+            assert!(!said.contains(key), "{said}");
+        }
+        assert!(said.contains("api_key=hidden"), "{said}");
+        assert!(said.contains("could not connect"), "{said}");
+    }
+
+    #[test]
+    fn what_a_failed_rule_says_carries_no_key_and_no_password() {
+        let failure = anyhow::anyhow!(
+            "https://reader:pa55w0rd@other.example/list.txt?auth=t0pS3cret&kind=movie answered 403 Forbidden"
+        )
+        .context("the rule could not read its source");
+        let said = told(&failure);
+        for secret in ["pa55w0rd", "t0pS3cret"] {
+            assert!(!said.contains(secret), "{said}");
+        }
+        assert!(said.contains("auth=***"), "{said}");
+        assert!(said.contains("reader:***@"), "{said}");
+        assert!(said.contains("kind=movie"), "{said}");
+        // A line break from outside stays on the line it came on.
+        assert_eq!(told(&anyhow::anyhow!("a\nb")), "a\\nb");
     }
 
     #[test]

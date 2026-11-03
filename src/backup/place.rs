@@ -257,14 +257,25 @@ impl Place {
         }
     }
 
+    /// Make where the archives go ready to be written to: a directory is
+    /// made, with those above it that are missing, for the user who runs the
+    /// server alone — one already there is left as it is. A bucket is ready
+    /// as it stands.
+    pub async fn prepare(&self) -> Result<()> {
+        if let Self::Directory(dir) = self {
+            super::private_dirs(dir).with_context(|| {
+                format!("could not create the backups' directory {}", dir.display())
+            })?;
+        }
+        Ok(())
+    }
+
     /// Somewhere to write the archive `name` to, a blocking writer for the
     /// same reason. It is not listed until [`Writer::finish`].
     pub async fn writer(&self, name: &str) -> Result<Writer> {
         match self {
             Self::Directory(dir) => {
-                tokio::fs::create_dir_all(dir).await.with_context(|| {
-                    format!("could not create the backups' directory {}", dir.display())
-                })?;
+                self.prepare().await?;
                 Writer::file(&dir.join(name))
             }
             Self::Bucket(bucket) => {
@@ -335,7 +346,8 @@ enum Inner {
 
 impl Writer {
     /// A file at `path`, written under a dotted name beside it until it is
-    /// whole: what the command line's `--out` writes to.
+    /// whole: what the command line's `--out` writes to. Readable by the user
+    /// who runs the server alone, as the archives it keeps are.
     pub fn file(path: &Path) -> Result<Self> {
         let name = path
             .file_name()
@@ -343,10 +355,7 @@ impl Writer {
             .to_string_lossy()
             .to_string();
         let partial = path.with_file_name(partial_name(&name));
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&partial)
+        let file = super::private_file(&partial)
             .with_context(|| format!("could not write {}", partial.display()))?;
         Ok(Self(Inner::File {
             file,
@@ -518,6 +527,35 @@ mod tests {
         .unwrap();
         assert!(place.list().await.unwrap().is_empty());
         assert_eq!(place.size(name).await.unwrap(), None);
+    }
+
+    /// An archive holds every account's hash: written for the server's user
+    /// alone, under its partial name too, in a directory made that way.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_file_is_written_for_its_user_alone_in_a_directory_made_for_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+        let base = crate::backup::scratch();
+        let dir = base.join("not").join("there").join("yet");
+        let place = Place::Directory(dir.clone());
+        let name = "ams-20261019-020000-manual.tar.zst";
+        let mut writer = place.writer(name).await.unwrap();
+        writer.write_all(b"some bytes").unwrap();
+        assert_eq!(mode(&dir.join(format!(".{name}.partial"))), 0o600);
+        writer.finish().unwrap();
+        assert_eq!(mode(&dir.join(name)), 0o600);
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(dir.parent().unwrap()), 0o700);
+
+        // The command line's file: the same, wherever it is asked for.
+        let out = base.join("asked-for.tar.zst");
+        let mut writer = Writer::file(&out).unwrap();
+        writer.write_all(b"some bytes").unwrap();
+        writer.finish().unwrap();
+        assert_eq!(mode(&out), 0o600);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]

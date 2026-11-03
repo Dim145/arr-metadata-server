@@ -224,6 +224,11 @@ pub struct UpdateRequest {
 }
 
 /// Enable or disable a key without revoking it.
+///
+/// A person's key paused from here pauses its owner's keys: its owner can
+/// neither resume it nor make another, or resume any other of theirs, until an
+/// administrator enables a key of theirs from here, or lifts the pause
+/// (`DELETE /users/{id}/keys-pause`).
 #[utoipa::path(
     patch, path = "/clients/{id}", tag = TAG,
     operation_id = "clients_update",
@@ -235,7 +240,7 @@ pub struct UpdateRequest {
         (status = 404, description = "No such client"),
     ),
 )]
-async fn update(
+pub(crate) async fn update(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
     ip: ClientIp,
@@ -245,6 +250,11 @@ async fn update(
     identity.require_admin()?;
 
     if let Some(enabled) = request.is_enabled {
+        // Under the accounts lock, as its owner's own changes to their keys
+        // are: a key enabled between the pause being read and being written
+        // would be enabled still.
+        let _held = state.accounts_lock().await;
+
         // Read first: the trail is read by humans, who know the name, and a
         // person's key paused from here is one its owner cannot resume.
         let key = repo::client::get(&state.db, &id).await?;
@@ -256,11 +266,13 @@ async fn update(
 
         // A server key has no owner to keep it from; an administrator's own
         // key, paused from here, is theirs to resume from their account.
+        let mut said = String::from(if enabled { "enabled" } else { "disabled" });
         if let Some(owner) = key.as_ref().and_then(|k| k.owner_id.as_deref()) {
             if !enabled && identity.person_id() != Some(owner) {
-                mark_paused(&state, &id, Some(&identity.label())).await?;
-            } else if enabled {
-                mark_paused(&state, &id, None).await?;
+                mark_paused(&state, owner, Some(&identity.label())).await?;
+                said.push_str(" · its owner can neither make nor resume keys until it is lifted");
+            } else if enabled && lift_pause(&state, owner).await? {
+                said.push_str(" · the pause on its owner's keys lifted");
             }
         }
 
@@ -271,7 +283,7 @@ async fn update(
                 ip: &ip,
                 action: Action::ClientUpdated,
                 target: name.as_deref(),
-                detail: Some(if enabled { "enabled" } else { "disabled" }),
+                detail: Some(&said),
             },
         )
         .await;
@@ -356,32 +368,169 @@ fn expiry(text: &str) -> AppResult<String> {
     Ok(crate::db::to_rfc3339(at))
 }
 
-/// Where the administrator who paused a person's key is written down.
+/// Where the administrator who paused a person's keys is written down.
 ///
-/// In the store every instance shares rather than on the key's row: what
-/// matters is only that the owner's own "resume" is refused while it is
-/// there, and that is the store that needs no change of schema to hold it.
-fn pause_entry(id: &str) -> String {
-    format!("client.pausedBy:{id}")
+/// On the person, not on a key: a key its owner deletes and makes again is
+/// another key, and a pause that stood on the first went with it. In the store
+/// every instance shares rather than on the account's row, which is the one
+/// that needs no change of schema to hold it.
+fn pause_entry(owner_id: &str) -> String {
+    format!("user.keysPausedBy:{owner_id}")
 }
 
-/// Write down who paused a person's key, or that nobody holds it paused.
-async fn mark_paused(state: &AppState, id: &str, by: Option<&str>) -> AppResult<()> {
-    repo::keystore::put(&state.db, &pause_entry(id), by.unwrap_or_default()).await?;
+/// What an older version wrote: the pause on one key, and nothing on its
+/// owner. Still honoured, until an administrator lifts it.
+fn key_pause_entry(key_id: &str) -> String {
+    format!("client.pausedBy:{key_id}")
+}
+
+/// Write down who paused a person's keys, or that nobody holds them paused.
+async fn mark_paused(state: &AppState, owner_id: &str, by: Option<&str>) -> AppResult<()> {
+    repo::keystore::put(&state.db, &pause_entry(owner_id), by.unwrap_or_default()).await?;
     Ok(())
 }
 
-/// Whether an administrator paused this key, which its owner then may not
-/// resume.
-pub(crate) async fn paused_by_admin(state: &AppState, id: &str) -> AppResult<bool> {
-    Ok(repo::keystore::get(&state.db, &pause_entry(id))
+/// Who an entry says paused, when it says anybody.
+async fn standing(state: &AppState, entry: &str) -> AppResult<Option<String>> {
+    Ok(repo::keystore::get(&state.db, entry)
         .await?
-        .is_some_and(|by| !by.is_empty()))
+        .filter(|by| !by.is_empty()))
+}
+
+/// Who paused this person's keys, when an administrator did and none has
+/// lifted it: until then their owner can neither make a key nor resume one.
+pub(crate) async fn paused_by_admin(state: &AppState, owner_id: &str) -> AppResult<Option<String>> {
+    if let Some(by) = standing(state, &pause_entry(owner_id)).await? {
+        return Ok(Some(by));
+    }
+    // A key paused before the pause stood on the person: the person's, too.
+    for key in repo::client::list(&state.db, repo::client::Owner::User(owner_id)).await? {
+        if let Some(by) = standing(state, &key_pause_entry(&key.id)).await? {
+            return Ok(Some(by));
+        }
+    }
+    Ok(None)
+}
+
+/// Lift the pause on a person's keys, the one on the person and any that an
+/// older version left on a key: whether one stood. What an administrator does
+/// by enabling one of their keys, or by saying so.
+pub(crate) async fn lift_pause(state: &AppState, owner_id: &str) -> AppResult<bool> {
+    let mut lifted = false;
+    if standing(state, &pause_entry(owner_id)).await?.is_some() {
+        mark_paused(state, owner_id, None).await?;
+        lifted = true;
+    }
+    for key in repo::client::list(&state.db, repo::client::Owner::User(owner_id)).await? {
+        let entry = key_pause_entry(&key.id);
+        if standing(state, &entry).await?.is_some() {
+            repo::keystore::put(&state.db, &entry, "").await?;
+            lifted = true;
+        }
+    }
+    Ok(lifted)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::repo::user::{NO_PASSWORD, NewUser, Role, Status, User};
+
+    async fn person(state: &AppState, name: &str, role: Role) -> User {
+        repo::user::create(
+            &state.db,
+            NewUser {
+                username: name,
+                password_hash: NO_PASSWORD,
+                role,
+                status: Status::Active,
+                display_name: None,
+                email: None,
+                invited_by: None,
+                oidc: None,
+            },
+        )
+        .await
+        .expect("an account")
+    }
+
+    async fn key_of(state: &AppState, owner: &User, name: &str) -> ApiClient {
+        repo::client::create(
+            &state.db,
+            repo::client::NewClient {
+                name,
+                key_prefix: "ams_test",
+                key_hash: name,
+                scopes: &["read".to_string()],
+                expires_at: None,
+                note: None,
+                owner_id: Some(&owner.id),
+            },
+        )
+        .await
+        .expect("a key")
+    }
+
+    /// What the version before this one wrote was a pause on a key, and
+    /// nothing on its owner: still a pause on the person, and lifted with it.
+    #[tokio::test]
+    async fn a_pause_put_on_a_key_by_an_older_version_is_still_the_persons() {
+        let state = crate::api::native::testing::server().await;
+        let alice = person(&state, "alice", Role::Member).await;
+        let key = key_of(&state, &alice, "Sonarr").await;
+
+        assert_eq!(paused_by_admin(&state, &alice.id).await.unwrap(), None);
+        repo::keystore::put(
+            &state.db,
+            &format!("client.pausedBy:{}", key.id),
+            "admin:root",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            paused_by_admin(&state, &alice.id).await.unwrap().as_deref(),
+            Some("admin:root")
+        );
+
+        assert!(lift_pause(&state, &alice.id).await.unwrap());
+        assert_eq!(paused_by_admin(&state, &alice.id).await.unwrap(), None);
+        assert!(!lift_pause(&state, &alice.id).await.unwrap(), "none stood");
+    }
+
+    /// Pausing a person's key writes the pause on the person, naming who; an
+    /// administrator's own key, paused from here, is theirs to resume.
+    #[tokio::test]
+    async fn pausing_a_persons_key_pauses_the_person_and_naming_who() {
+        let state = crate::api::native::testing::server().await;
+        let admin = person(&state, "root", Role::Admin).await;
+        let alice = person(&state, "alice", Role::Member).await;
+        let hers = key_of(&state, &alice, "Sonarr").await;
+        let own = key_of(&state, &admin, "Mine").await;
+        let as_admin = || Extension(Identity::User(Box::new(admin.clone())));
+        let pause = |id: &str, enabled: bool| {
+            update(
+                State(state.clone()),
+                as_admin(),
+                ClientIp::NONE,
+                Path(id.to_string()),
+                Json(UpdateRequest {
+                    is_enabled: Some(enabled),
+                }),
+            )
+        };
+
+        let _ = pause(&own.id, false).await.expect("an administrator's own");
+        assert_eq!(paused_by_admin(&state, &admin.id).await.unwrap(), None);
+
+        let _ = pause(&hers.id, false).await.expect("a member's");
+        assert_eq!(
+            paused_by_admin(&state, &alice.id).await.unwrap().as_deref(),
+            Some("admin:root")
+        );
+        // Enabling it from here lifts the pause on its owner.
+        let _ = pause(&hers.id, true).await.expect("resumed");
+        assert_eq!(paused_by_admin(&state, &alice.id).await.unwrap(), None);
+    }
 
     #[test]
     fn an_expiry_is_a_time_still_to_come() {

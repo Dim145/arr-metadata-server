@@ -293,7 +293,7 @@ async fn chart(
         language.as_deref().unwrap_or(""),
         identity.can_write(),
         state.caches.stamp(),
-        repo::item::catalogue_stamp(&state.db).await?
+        state.caches.catalogue_stamp(&state.db).await?
     );
     if let Some(cached) = state.caches.searches.get(&key).await
         && let Ok(chart) = serde_json::from_str::<Chart>(&cached)

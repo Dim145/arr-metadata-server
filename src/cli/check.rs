@@ -115,7 +115,9 @@ pub async fn run() -> Result<()> {
         match backup::Backups::new(&config, found.clone(), None) {
             Ok(backups) => match probe_place(backups.place()).await {
                 Ok(()) => said(
-                    Some(true),
+                    // An archive that is not encrypted is a warning, not a
+                    // failure: it holds what lets somebody into the server.
+                    backups.encrypts().then_some(true),
                     "backups",
                     &format!(
                         "kept in {} ({}), {}",
@@ -124,7 +126,11 @@ pub async fn run() -> Result<()> {
                         if backups.encrypts() {
                             format!("encrypted with {}", backup::PASSPHRASE_VARIABLE)
                         } else {
-                            format!("not encrypted: {} is unset", backup::PASSPHRASE_VARIABLE)
+                            format!(
+                                "not encrypted: {} is unset, and an archive holds every \
+                                 account's password hash",
+                                backup::PASSPHRASE_VARIABLE
+                            )
                         }
                     ),
                 ),
@@ -197,8 +203,10 @@ pub async fn run() -> Result<()> {
 
 /// Write a file where the archives are kept, read the listing, take it away.
 async fn probe_place(place: &Place) -> Result<()> {
+    // Made as the server makes it, for its user alone: a check that came
+    // first would otherwise leave the directory with the umask's permissions.
+    place.prepare().await?;
     if let Some(dir) = place.directory() {
-        tokio::fs::create_dir_all(dir).await?;
         let probe = dir.join(".ams-config-check");
         tokio::fs::write(&probe, b"probe").await?;
         tokio::fs::remove_file(&probe).await?;

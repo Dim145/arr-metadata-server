@@ -29,7 +29,12 @@ default: nothing is kept until it is asked for.
   and whatever it redirects to. A picture mirror on a private network is
   reached all the same; `AMS_MEDIA_PRIVATE_NETWORKS=false` keeps the store
   and the NFO export out of `10/8`, `172.16/12`, `192.168/16`, `100.64/10`
-  and IPv6's unique-local `fc00::/7` too (`true` by default).
+  and IPv6's unique-local `fc00::/7` too (`true` by default). A writer who is
+  not an administrator is told of a picture that failed only that it "could
+  not be fetched", and not how many tries it took: what the address answered,
+  or that it did not, is the administrator's to read on **Administration ›
+  Media** — an address is whatever a writer typed in, and what came back for
+  each would be a map of the network the server is on.
 - **How they are served.** Every copy is addressed by the hash of its bytes
   under `/media/`, and served immutable. The rows keep the providers'
   addresses: a work is rewritten as it is read, never as it is written, and
@@ -51,7 +56,12 @@ default: nothing is kept until it is asked for.
   read for what it is, never for what it is called; SVG is refused, since a
   document that can carry a script must not be served from here — and a
   copy taken away. An upload's file goes with it; a provider's copy is
-  fetched again at the next refresh.
+  fetched again at the next refresh. A picture may weigh 25 MiB and a theme
+  60, a writer who is not an administrator keeps 1 GiB of uploads all told,
+  and an upload is cut off at the weight of what it is as it is read —
+  told by its first bytes, or by the `kind` of the form when that comes
+  before the file —, not once all of it is held in memory; one whose first
+  bytes are neither a picture nor a sound is refused with them.
 - **The sweep.** Daily, and on request: what no work points at any more —
   a work removed, a picture a provider dropped, an upload taken off — is
   forgotten and its file deleted, and a file no row names is removed once it
@@ -116,8 +126,16 @@ anything — and asks for the right files from its first picture.
   poster's 480, a background's 1280. Any other is made the first time a
   page asks for it — a few hundred milliseconds for a large background —
   and served from the store after. A width no page asks for is refused, so
-  a picture has a dozen copies at the most. The thumbnails earlier versions
-  made are still served; none is made any more.
+  a picture has a dozen copies at the most, a picture's own width being one
+  only where it is no wider than 1920. The thumbnails earlier versions
+  made are still served; none is made any more. Making one is work, and is
+  held to what the rest of the server's is: the address that asks is counted
+  against `AMS_RATE_LIMIT_PER_MINUTE` each time it asks for a copy that is not
+  kept yet — a copy already kept is served, and a picture, for nothing —; at
+  most thirty-two are made at once, and a page that asks for one when there
+  is no room is sent the picture itself, for that time, and asks again; and
+  a copy waits for its turn among the pictures being decoded before its
+  picture is read from the store, not after.
 - **Turned on.** The pages ask for the copies at once, and the pictures
   kept already have theirs made as they are asked for: a catalogue's first
   pages after the switch are a little slower to fill.
@@ -129,9 +147,22 @@ anything — and asks for the right files from its first picture.
   [Deleting the copies of a format](#deleting-the-copies-of-a-format).
 - **Read safely.** A picture is decoded in Rust, never by libwebp: a
   picture past 16,384 pixels a side or 100 million pixels is not decoded
-  at all, nor one whose pixels would take more than 256 MB, and a decoder
-  that panics on what it is given is a copy refused, not a server brought
-  down. Such a picture is served whole.
+  at all, nor one whose decoding would hold more than 256 MB at its worst,
+  and a decoder that panics on what it is given is a copy refused, not a
+  server brought down. Such a picture is served whole. What decoding holds
+  is counted from the picture's header, before a byte of it is decoded, by
+  the byte a pixel at the worst moment of the way from the file to the copy:
+  the decoder's buffer and what it keeps beside it — a progressive JPEG's
+  coefficients, six bytes a pixel more than its three —, the copy a quarter
+  turn makes, the copy that makes the pixels eight bits an RGB or RGBA
+  channel, what the resizer holds beside them, and what is held at the end:
+  3 to 9 bytes a pixel for a picture in colour, 16 for one with transparency.
+  A grey picture of 10,000 by 10,000 pixels is 100 MB for its decoder, and
+  took some 700 with the copies made of it; it is counted at 400 MB, or 900
+  where a copy is made of it, and refused. The pictures being decoded hold
+  256 MB between them, whatever their sizes: a large one waits for those
+  before it, and small ones go side by side. What an encoder holds to write
+  a copy is its own matter, and a copy is never wider than 1920 pixels.
 - **The square for Plex.** A background kept is also cut into a square
   from its middle, 1080 pixels a side, as a JPEG — Plex's
   `backgroundSquare`: see [Plex](plex.md#what-is-served).

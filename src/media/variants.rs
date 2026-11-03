@@ -17,7 +17,7 @@
 
 use std::{
     panic::AssertUnwindSafe,
-    sync::{Arc, LazyLock},
+    sync::{Arc, Condvar, LazyLock, Mutex, PoisonError},
 };
 
 use anyhow::{Context as _, Result, bail};
@@ -80,9 +80,14 @@ pub fn avif_widths(cover: Option<CoverType>) -> &'static [u32] {
 }
 
 /// The width a copy asked for is made at: the width asked, never past the
-/// picture's own — `None` for a width the interface never asks for.
+/// picture's own — `None` for a width the interface never asks for. The
+/// picture's own width is one it asks for, and one made, only where the
+/// picture is no wider than the widest copy: past that, "its own" is a
+/// request for the whole of a picture of any size, drawn and written again
+/// at full size.
 pub fn width_made(asked: u32, own: u32) -> Option<u32> {
-    (WIDTHS.contains(&asked) || asked == own).then(|| asked.min(own))
+    let widest = WIDTHS[WIDTHS.len() - 1];
+    (WIDTHS.contains(&asked) || (asked == own && own <= widest)).then(|| asked.min(own))
 }
 
 /// What a copy is written as.
@@ -127,45 +132,45 @@ pub struct Decoded {
     pub width: u32,
     pub height: u32,
     pub alpha: bool,
+    /// What reading the picture reserved of the memory the pictures decoding
+    /// may hold together, kept for as long as the picture is: given back
+    /// when it is dropped. Nothing for a copy of it made smaller, which is
+    /// within what was reserved for the whole.
+    _held: Option<Held>,
 }
 
 impl Decoded {
-    /// Read a picture's bytes — see [`file::decode`] for the bounds.
+    /// Read a picture's bytes — see [`file::decode_with`] for the bounds.
+    /// Waits, on the thread it is called from, for the memory its picture
+    /// needs to be there: see [`Budget`].
     pub fn read(bytes: &[u8]) -> Result<Self> {
-        Ok(Self::of(file::decode(bytes)?))
+        let (picture, held) = file::decode_with(bytes, true, |weight| BUDGET.take(weight))?;
+        Ok(Self::of(picture, Some(held)))
     }
 
     /// Read a picture's bytes `side` or more on one of its sides, smaller
-    /// than it is where its format allows: see [`file::decode_small`].
+    /// than it is where its format allows: see [`file::decode_small_with`].
     pub fn read_small(bytes: &[u8], side: u32) -> Result<Self> {
-        Ok(Self::of(file::decode_small(bytes, side)?))
+        let (picture, held) = file::decode_small_with(bytes, side, |weight| BUDGET.take(weight))?;
+        Ok(Self::of(picture, Some(held)))
     }
 
-    fn of(picture: image::DynamicImage) -> Self {
+    fn of(picture: image::DynamicImage, held: Option<Held>) -> Self {
         let (width, height) = (picture.width(), picture.height());
         // An alpha channel that is opaque everywhere is a photograph like
         // any other; only real transparency is kept.
         if picture.color().has_alpha() {
-            let rgba = picture.into_rgba8().into_raw();
-            if rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255) {
-                return Self {
-                    pixels: rgba,
-                    width,
-                    height,
-                    alpha: true,
-                };
+            let mut rgba = picture.into_rgba8().into_raw();
+            let transparent = rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+            if !transparent {
+                drop_alpha(&mut rgba);
             }
-            let rgb = rgba
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .flat_map(|p| [p[0], p[1], p[2]])
-                .collect();
             return Self {
-                pixels: rgb,
+                pixels: rgba,
                 width,
                 height,
-                alpha: false,
+                alpha: transparent,
+                _held: held,
             };
         }
         Self {
@@ -173,10 +178,11 @@ impl Decoded {
             width,
             height,
             alpha: false,
+            _held: held,
         }
     }
 
-    fn as_pixels(&self) -> Pixels<'_> {
+    pub fn as_pixels(&self) -> Pixels<'_> {
         Pixels {
             data: &self.pixels,
             width: self.width,
@@ -195,6 +201,7 @@ impl Decoded {
                 width,
                 height,
                 alpha: self.alpha,
+                _held: None,
             });
         }
         let kind = if self.alpha {
@@ -220,6 +227,7 @@ impl Decoded {
             width,
             height,
             alpha: self.alpha,
+            _held: None,
         })
     }
 
@@ -232,6 +240,7 @@ impl Decoded {
                 width: self.width,
                 height: self.height,
                 alpha: false,
+                _held: None,
             };
         }
         let pixels = self
@@ -249,6 +258,7 @@ impl Decoded {
             width: self.width,
             height: self.height,
             alpha: false,
+            _held: None,
         }
     }
 
@@ -257,19 +267,17 @@ impl Decoded {
     fn is_portrait(&self) -> bool {
         self.height > self.width
     }
+}
 
-    /// RGBA, whatever it is: what the placeholder is worked out from.
-    pub fn rgba(&self) -> Vec<u8> {
-        if self.alpha {
-            return self.pixels.clone();
-        }
-        self.pixels
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|p| [p[0], p[1], p[2], 255])
-            .collect()
+/// RGBA made RGB where it lies, each pixel's three colours moved down over
+/// the alpha of those before it: a second buffer would be held beside the
+/// first at the moment both are whole, a third as much again as the picture.
+fn drop_alpha(pixels: &mut Vec<u8>) {
+    let count = pixels.len() / 4;
+    for at in 0..count {
+        pixels.copy_within(at * 4..at * 4 + 3, at * 3);
     }
+    pixels.truncate(count * 3);
 }
 
 /// A copy made.
@@ -334,7 +342,8 @@ pub fn make(
         (Made::Width(asked), Format::Webp | Format::Avif) => {
             let width = asked.min(decoded.width);
             let height = height_at(decoded, width);
-            let small = decoded.resized(width, height)?;
+            let mut resized = None;
+            let small = drawn_at(decoded, width, height, &mut resized)?;
             let bytes = if format == Format::Avif {
                 encode::avif(&small.as_pixels())?
             } else {
@@ -365,6 +374,22 @@ pub fn make(
         }
         _ => bail!("{made:?} is not made as {}", format.as_str()),
     }
+}
+
+/// A picture at the size a copy is made at: itself where it is that size
+/// already — a copy at a picture's own width copies none of its pixels, which
+/// would be a second of them beside the first — and otherwise resized into
+/// `resized`, whose picture is returned.
+fn drawn_at<'a>(
+    decoded: &'a Decoded,
+    width: u32,
+    height: u32,
+    resized: &'a mut Option<Decoded>,
+) -> Result<&'a Decoded> {
+    if (width, height) == (decoded.width, decoded.height) {
+        return Ok(decoded);
+    }
+    Ok(resized.insert(decoded.resized(width, height)?))
 }
 
 /// What preparing a picture as it is stored came to: its placeholder, and
@@ -402,7 +427,8 @@ pub fn prepare(bytes: &[u8], cover: Option<CoverType>, webp: bool) -> Result<Pre
 /// How many pictures are decoded at once, whoever asks — the worker's
 /// fetches, an upload, a page asking for a copy, the task: a large picture
 /// takes a few hundred megabytes to decode, and the copies a page asks for
-/// on its first visit are a dozen at a time.
+/// on its first visit are a dozen at a time. What they hold together is
+/// bounded besides, by [`Budget`], whatever their sizes.
 const AT_ONCE: usize = 2;
 static DECODING: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(AT_ONCE)));
@@ -411,34 +437,156 @@ static DECODING: LazyLock<Arc<tokio::sync::Semaphore>> =
 static AVIF: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
 
-/// Run `work` — a decoding, a resizing, an encoding — off the server's
-/// threads, as many at once as [`AT_ONCE`] allows, and a decoder that
-/// panics on the bytes it was given as a picture refused rather than a
-/// thread brought down.
+/// What the pictures being decoded may hold in memory together
+/// ([`file::DECODE_BUDGET`]), however many the gate lets through and
+/// whatever they are: each takes the share its picture's worst case needs
+/// ([`file::decode_with`] counts it from the header) before a byte is
+/// allocated for it, and gives it back when what it decoded is dropped.
+/// Taken in turn, so that a large picture is not kept waiting for ever by a
+/// string of small ones; the thread that waits is the one the work runs on
+/// (see [`Turn::run`]), of which [`AT_ONCE`] and the night's one are all
+/// there are.
+struct Budget {
+    limit: u64,
+    shares: Mutex<Shares>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct Shares {
+    /// What is held.
+    used: u64,
+    /// The next place in line to hand out, and the one whose turn it is.
+    next: u64,
+    serving: u64,
+}
+
+static BUDGET: LazyLock<Arc<Budget>> = LazyLock::new(|| Arc::new(Budget::new(file::DECODE_BUDGET)));
+
+impl Budget {
+    fn new(limit: u64) -> Self {
+        Self {
+            limit,
+            shares: Mutex::new(Shares::default()),
+            changed: Condvar::new(),
+        }
+    }
+
+    /// A share of `bytes`, waited for until it fits beside those held and
+    /// every share asked for before it has been given. One larger than the
+    /// whole is the whole: the pictures that need more are refused before
+    /// they ask.
+    fn take(self: &Arc<Self>, bytes: u64) -> Held {
+        let bytes = bytes.min(self.limit);
+        let mut shares = self.shares.lock().unwrap_or_else(PoisonError::into_inner);
+        let place = shares.next;
+        shares.next += 1;
+        while shares.serving != place || shares.used + bytes > self.limit {
+            shares = self
+                .changed
+                .wait(shares)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        shares.used += bytes;
+        shares.serving += 1;
+        // The one behind may fit beside this.
+        self.changed.notify_all();
+        Held {
+            budget: self.clone(),
+            bytes,
+        }
+    }
+}
+
+/// A share of the [`Budget`], given back when it is dropped.
+pub struct Held {
+    budget: Arc<Budget>,
+    bytes: u64,
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let mut shares = self
+            .budget
+            .shares
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        shares.used = shares.used.saturating_sub(self.bytes);
+        self.budget.changed.notify_all();
+    }
+}
+
+/// A place among the pictures decoded at once ([`AT_ONCE`]), held until the
+/// work it was waited for is done. Taken before the picture is read from
+/// the store, so that no more pictures sit in memory waiting to be decoded
+/// than are being decoded.
+pub struct Turn(tokio::sync::OwnedSemaphorePermit);
+
+/// Wait for a place among the pictures decoded at once.
+pub async fn turn() -> Result<Turn> {
+    let permit = DECODING
+        .clone()
+        .acquire_owned()
+        .await
+        .context("the pictures' gate is closed")?;
+    Ok(Turn(permit))
+}
+
+/// Every place at once, for a test that fills the gate: held by one test at a
+/// time, since two of them, each holding one of the two places, would wait
+/// for each other for ever.
+#[cfg(test)]
+pub async fn every_turn() -> (tokio::sync::MutexGuard<'static, ()>, [Turn; AT_ONCE]) {
+    static FILLING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let filling = FILLING.lock().await;
+    let mut turns = Vec::new();
+    for _ in 0..AT_ONCE {
+        turns.push(turn().await.expect("a place"));
+    }
+    let turns = turns.try_into().ok().expect("as many places as there are");
+    (filling, turns)
+}
+
+impl Turn {
+    /// Run `work` — a decoding, a resizing, an encoding — off the server's
+    /// threads, holding this place until it is done, and a decoder that
+    /// panics on the bytes it was given as a picture refused rather than a
+    /// thread brought down.
+    pub async fn run<T: Send + 'static>(
+        self,
+        work: impl FnOnce() -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        run_holding(self.0, work).await
+    }
+}
+
+/// Run `work` off the server's threads, as many at once as [`AT_ONCE`]
+/// allows, and a decoder that panics on the bytes it was given as a picture
+/// refused rather than a thread brought down.
 pub async fn off_thread<T: Send + 'static>(
     work: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    run_under(&DECODING, work).await
+    turn().await?.run(work).await
 }
 
 /// The same, for an AVIF copy: one at a time.
 pub async fn off_thread_avif<T: Send + 'static>(
     work: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    run_under(&AVIF, work).await
-}
-
-async fn run_under<T: Send + 'static>(
-    gate: &Arc<tokio::sync::Semaphore>,
-    work: impl FnOnce() -> Result<T> + Send + 'static,
-) -> Result<T> {
-    // Held by the work itself, so that a request given up on meanwhile does
-    // not let another start beside it.
-    let permit = gate
+    let permit = AVIF
         .clone()
         .acquire_owned()
         .await
         .context("the pictures' gate is closed")?;
+    run_holding(permit, work).await
+}
+
+async fn run_holding<T: Send + 'static>(
+    permit: tokio::sync::OwnedSemaphorePermit,
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    // Held by the work itself, so that a request given up on meanwhile does
+    // not let another start beside it.
     let joined = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         std::panic::catch_unwind(AssertUnwindSafe(work))
@@ -506,6 +654,13 @@ mod tests {
             "no width the interface never asks for"
         );
         assert_eq!(width_made(10_000, 20_000), None);
+        // Its own width is a copy only where it is no wider than the widest:
+        // past that it would be a request for the whole of a picture of any
+        // size, drawn and written again.
+        assert_eq!(width_made(1920, 1920), Some(1920));
+        assert_eq!(width_made(2000, 2000), None);
+        assert_eq!(width_made(9_000, 9_000), None);
+        assert_eq!(width_made(1920, 3000), Some(1920));
     }
 
     #[test]
@@ -570,12 +725,49 @@ mod tests {
         assert_eq!(back.get_pixel(20, 70)[3], 0, "transparent where it was");
         assert_eq!(back.get_pixel(380, 70)[3], 255, "opaque where it was");
 
-        // An alpha channel opaque everywhere is no transparency.
+        // An alpha channel opaque everywhere is no transparency, and the
+        // colours are what they were, closed up where they lay.
         let mut opaque = Vec::new();
-        image::RgbaImage::from_pixel(50, 50, image::Rgba([1, 2, 3, 255]))
-            .write_to(&mut Cursor::new(&mut opaque), image::ImageFormat::Png)
-            .unwrap();
-        assert!(!Decoded::read(&opaque).unwrap().alpha);
+        image::RgbaImage::from_fn(50, 40, |x, y| {
+            image::Rgba([(x * 5) as u8, (y * 6) as u8, 3, 255])
+        })
+        .write_to(&mut Cursor::new(&mut opaque), image::ImageFormat::Png)
+        .unwrap();
+        let decoded = Decoded::read(&opaque).unwrap();
+        assert!(!decoded.alpha);
+        let pixels = decoded.as_pixels();
+        assert_eq!((pixels.data.len(), pixels.channels()), (50 * 40 * 3, 3));
+        assert_eq!(&pixels.data[(7 * 50 + 9) * 3..][..3], [45, 42, 3]);
+        assert_eq!(&pixels.data[(39 * 50 + 49) * 3..][..3], [245, 234, 3]);
+    }
+
+    /// RGBA made RGB where it lies keeps every pixel's colours, in order.
+    #[test]
+    fn the_alpha_is_dropped_where_the_pixels_lie() {
+        let mut pixels = vec![1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255];
+        drop_alpha(&mut pixels);
+        assert_eq!(pixels, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        let mut none: Vec<u8> = Vec::new();
+        drop_alpha(&mut none);
+        assert!(none.is_empty());
+    }
+
+    /// A copy at the picture's own size draws the picture itself: no second
+    /// buffer of its pixels beside the first; any other size is resized.
+    #[test]
+    fn a_copy_at_the_pictures_own_size_copies_none_of_its_pixels() {
+        let decoded = Decoded::read(&png(300, 200)).unwrap();
+        let mut resized = None;
+        let same = drawn_at(&decoded, 300, 200, &mut resized).unwrap();
+        assert!(std::ptr::eq(same, &decoded));
+        assert!(resized.is_none());
+        let smaller = drawn_at(&decoded, 150, 100, &mut resized).unwrap();
+        assert!(!std::ptr::eq(smaller, &decoded));
+        assert_eq!((smaller.width, smaller.height), (150, 100));
+        // And the copy made is the same as before it was spared.
+        let copy = make(&decoded, Made::Width(300), Format::Webp, None).unwrap();
+        assert_eq!((copy.width, copy.height), (300, 200));
+        assert_eq!(size_of(&copy.bytes), (300, 200));
     }
 
     #[test]
@@ -635,6 +827,110 @@ mod tests {
             assert!(prepared.copies.is_empty(), "{cover:?}");
         }
         assert!(prepare(b"not a picture", Some(CoverType::Poster), false).is_err());
+    }
+
+    /// Pictures decoding together hold no more than the budget: one that
+    /// does not fit waits for those that do to be done, and those behind it
+    /// wait their turn, though they would fit — so that a large picture is
+    /// not kept waiting by a string of small ones. A share is given back
+    /// when it is dropped.
+    #[test]
+    fn pictures_decoding_together_hold_no_more_than_the_budget_and_wait_in_turn() {
+        use std::{sync::mpsc, thread, time::Duration};
+
+        let budget = Arc::new(Budget::new(100));
+        let first = budget.take(60);
+        let held = |budget: &Budget| budget.shares.lock().unwrap().used;
+        assert_eq!(held(&budget), 60);
+
+        let (told, heard) = mpsc::channel();
+        let ask = |name: &'static str, bytes: u64| {
+            let (budget, told) = (budget.clone(), told.clone());
+            thread::spawn(move || {
+                let share = budget.take(bytes);
+                told.send(name).unwrap();
+                // Held a moment, as a picture is while it is decoded.
+                thread::sleep(Duration::from_millis(50));
+                drop(share);
+            })
+        };
+        // 60 does not fit beside 60; 30 would, and is behind it.
+        let large = ask("large", 60);
+        thread::sleep(Duration::from_millis(100));
+        let small = ask("small", 30);
+        assert!(
+            heard.recv_timeout(Duration::from_millis(300)).is_err(),
+            "nobody goes while the first holds its share, and the small one is in turn"
+        );
+        assert_eq!(held(&budget), 60);
+
+        drop(first);
+        let mut told_in_the_end = vec![
+            heard.recv_timeout(Duration::from_secs(5)).unwrap(),
+            heard.recv_timeout(Duration::from_secs(5)).unwrap(),
+        ];
+        told_in_the_end.sort_unstable();
+        assert_eq!(told_in_the_end, ["large", "small"]);
+        large.join().unwrap();
+        small.join().unwrap();
+        assert_eq!(held(&budget), 0, "every share is given back");
+
+        // A share larger than the whole is the whole, and never waits for
+        // more than there is.
+        let all = budget.take(500);
+        assert_eq!(all.bytes, 100);
+        assert_eq!(held(&budget), 100);
+        drop(all);
+        assert_eq!(held(&budget), 0);
+    }
+
+    /// What a picture reserves is its worst case from the header, taken
+    /// before it is decoded, held for as long as the picture is and given
+    /// back with it.
+    #[test]
+    fn what_a_picture_reserves_is_given_back_once_it_is_dropped() {
+        let budget = Arc::new(Budget::new(file::DECODE_BUDGET));
+        let used = || budget.shares.lock().unwrap().used;
+        let bytes = png(64, 48);
+        let (picture, held) =
+            file::decode_with(&bytes, true, |weight| budget.take(weight)).unwrap();
+        assert_eq!((picture.width(), picture.height()), (64, 48));
+        // 3 072 pixels of RGB, 9 bytes each with the copy to be made of
+        // them, the file's own bytes and the fixed ones.
+        assert_eq!(
+            held.bytes,
+            64 * 48 * 9 + bytes.len() as u64 + 8 * 1024 * 1024
+        );
+        assert_eq!(used(), held.bytes);
+        drop(held);
+        assert_eq!(used(), 0);
+
+        // A picture read for the copies carries its share, a copy of it
+        // made smaller none, being within it.
+        let decoded = Decoded::read(&bytes).unwrap();
+        assert!(decoded._held.is_some());
+        assert!(decoded.resized(32, 24).unwrap()._held.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_turn_is_waited_for_and_held_by_the_work() {
+        // Every place taken: another waits.
+        let (filling, [one, two]) = every_turn().await;
+        let mut third = Box::pin(turn());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut third)
+                .await
+                .is_err(),
+            "no more than {AT_ONCE} are decoded at once"
+        );
+        // The work holds its place until it is done, whoever stops waiting.
+        let done = one.run(|| Ok(1)).await.unwrap();
+        assert_eq!(done, 1);
+        let third = tokio::time::timeout(std::time::Duration::from_secs(5), third)
+            .await
+            .expect("a place freed by the work")
+            .unwrap();
+        drop((two, third, filling));
     }
 
     #[tokio::test]

@@ -5,9 +5,10 @@
 //!
 //! The copy is generic: every table is read column by column and written back
 //! with the same names, so a migration that adds a column does not also require
-//! editing this file. Values are decoded by trying the types the schema uses —
-//! there are only three — rather than consulting the engine's own type system,
-//! which `Any` does not expose.
+//! editing this file. The names are the source's, which on a restore is an
+//! archive's own file, so they are quoted wherever they are written. Values are
+//! decoded by trying the types the schema uses — there are only three — rather
+//! than consulting the engine's own type system, which `Any` does not expose.
 //!
 //! It is also how a backup is made of a PostgreSQL — copied into an SQLite
 //! file, the archive's one engine-neutral payload — and how any archive is
@@ -470,6 +471,16 @@ async fn copy_table(
     Ok(written)
 }
 
+/// A name as both engines read it quoted, whatever it holds.
+///
+/// The names of a table's columns come from the database being copied from —
+/// on a restore, the archive's own file, which is somebody else's — and a
+/// name that closed the list it stands in would write the statement after it.
+/// A quote inside a name is doubled, which is how a name holds one.
+fn quoted(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 /// Write one chunk of a table's rows, as they were read.
 async fn insert(
     target: &Db,
@@ -478,7 +489,11 @@ async fn insert(
     columns: &[String],
     decoded: &[Vec<Value>],
 ) -> Result<u64> {
-    let column_list = columns.join(", ");
+    let column_list = columns
+        .iter()
+        .map(|column| quoted(column))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     // A NULL goes in as a literal rather than a bound parameter. Binding
     // `None::<String>` sends a typed null, and PostgreSQL rejects a text
@@ -746,5 +761,79 @@ mod tests {
         let report = run(&source, &target, false).await.unwrap();
         assert_eq!(report.total(), 0);
         assert_eq!(report.copied.len(), TABLES.len());
+    }
+
+    /// A restore reads the archive's own file, which is somebody else's: the
+    /// names of its columns are names, never part of the statement that
+    /// writes them.
+    #[tokio::test]
+    async fn a_column_named_like_a_statement_is_refused_and_runs_nothing() {
+        let source = sqlite().await;
+        let target = sqlite().await;
+        sqlx::query(source.sql(
+            "INSERT INTO genre (id, slug, created_at, updated_at) \
+             VALUES ('g1', 'drama', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        ))
+        .execute(source.pool())
+        .await
+        .unwrap();
+        // `slug` as a hostile archive would name it: the text that closes the
+        // column list and the statement, writes a row the copy never meant
+        // to, and opens the statement again where it was.
+        let hostile = "slug, created_at, updated_at) VALUES ('a', 'a', 'a', 'a'); \
+                       INSERT INTO keyword (id, name, created_at, updated_at) \
+                       VALUES ('injected', 'injected', 'x', 'x'); \
+                       INSERT INTO genre (id, slug";
+        sqlx::query(source.sql(&format!(
+            "ALTER TABLE genre RENAME COLUMN slug TO \"{hostile}\""
+        )))
+        .execute(source.pool())
+        .await
+        .unwrap();
+
+        let refused = format!("{:#}", run(&source, &target, false).await.unwrap_err());
+        assert!(refused.contains("genre"), "{refused}");
+        assert_eq!(
+            count(&target, "keyword").await.unwrap(),
+            0,
+            "what the name said was run"
+        );
+        // All or none: nothing of the copy stays.
+        assert_eq!(count(&target, "genre").await.unwrap(), 0);
+    }
+
+    #[test]
+    fn a_name_is_quoted_whatever_it_holds() {
+        assert_eq!(quoted("title"), "\"title\"");
+        assert_eq!(quoted("a\"b"), "\"a\"\"b\"");
+        assert_eq!(quoted("x); DROP TABLE y; --"), "\"x); DROP TABLE y; --\"");
+    }
+
+    /// Quoted, a name is matched as written; unquoted, PostgreSQL reads it in
+    /// lower case. The columns' names are the same on both engines because
+    /// they are all in lower case, which this keeps true.
+    #[tokio::test]
+    async fn every_column_is_named_in_lower_case() {
+        let db = sqlite().await;
+        let columns = sqlx::query(db.sql(
+            "SELECT m.name AS tbl, p.name AS col FROM sqlite_master m, pragma_table_info(m.name) p \
+             WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'",
+        ))
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        assert!(columns.len() > 100, "the schema was read");
+        let odd: Vec<String> = columns
+            .iter()
+            .map(|row| {
+                (
+                    row.try_get::<String, _>("tbl").unwrap(),
+                    row.try_get::<String, _>("col").unwrap(),
+                )
+            })
+            .filter(|(_, col)| col.to_ascii_lowercase() != *col)
+            .map(|(tbl, col)| format!("{tbl}.{col}"))
+            .collect();
+        assert!(odd.is_empty(), "{odd:?}");
     }
 }

@@ -86,6 +86,12 @@ const COLLECTIONS: &[&str] = &["GenreCollection", "MediaTagCollection"];
 /// What a relayed request keeps of the caller's headers: what describes it.
 const ASKED_WITH: &[&str] = &["user-agent", "accept", "accept-language", "content-type"];
 
+/// Of those, the headers that may change AniList's answer: what a kept answer
+/// is told apart by besides the query — the type a body is posted as says how
+/// AniList reads it — as it travels asked with them, an answer filed without
+/// them would be handed to a caller that asked otherwise.
+const VARIES_BY: &[&str] = &["accept", "accept-language", "content-type"];
+
 /// How many entries of one answer are looked up here, in the order the
 /// answer lists them. A page is fifty at most; a user's whole list, in one
 /// answer, is not patched beyond this.
@@ -258,7 +264,7 @@ pub async fn relay(State(state): State<AppState>, request: Request) -> AppResult
             .is_some_and(|query| !has_mutation(query) && !is_personal(query));
     let ask = relay::Ask {
         service: relay::Service::Anilist,
-        key: anybodys.then(|| relay_key(&state, &parts.method, &parts.uri, &body)),
+        key: anybodys.then(|| relay_key(&state, &parts.method, &parts.uri, &parts.headers, &body)),
         path: if document.as_deref().is_some_and(asks_collections_alone) {
             cache::ANILIST_COLLECTIONS
         } else {
@@ -535,12 +541,22 @@ fn is_personal(document: &str) -> bool {
 }
 
 /// What a relayed answer is filed under: the query asked — its text, its
-/// variables, whatever else the body says — digested, under the generation.
-fn relay_key(state: &AppState, method: &Method, uri: &Uri, body: &[u8]) -> String {
+/// variables, whatever else the body says — and the caller's headers that
+/// travel and may change AniList's answer ([`relay::varies_by`]), digested,
+/// under the generation.
+fn relay_key(
+    state: &AppState,
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> String {
     let mut digest = Sha256::new();
     digest.update(method.as_str().as_bytes());
     digest.update(b"\n");
     digest.update(relay::sorted_query(uri, relay::OUR_PARAMS).as_bytes());
+    digest.update(b"\n");
+    digest.update(relay::varies_by(headers, VARIES_BY).as_bytes());
     digest.update(b"\n");
     digest.update(body);
     let digest: String = digest
@@ -2169,6 +2185,17 @@ mod tests {
     /// What the relay answers `query`, asked with somebody's own AniList
     /// token when there is one.
     async fn relayed(state: &AppState, query: &str, token: Option<&str>) -> Response {
+        relayed_with(state, query, token, &[]).await
+    }
+
+    /// The same, with headers of the caller's own, which take the place of
+    /// the ones a client posts a query with.
+    async fn relayed_with(
+        state: &AppState,
+        query: &str,
+        token: Option<&str>,
+        headers: &[(header::HeaderName, &str)],
+    ) -> Response {
         let mut request = axum::http::Request::builder()
             .method(Method::POST)
             .uri("/")
@@ -2177,7 +2204,12 @@ mod tests {
         if let Some(token) = token {
             request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
-        let request = request.body(Body::from(posted(query))).unwrap();
+        let mut request = request.body(Body::from(posted(query))).unwrap();
+        for (name, value) in headers {
+            request
+                .headers_mut()
+                .insert(name.clone(), HeaderValue::from_str(value).unwrap());
+        }
         match relay(State(state.clone()), request).await {
             Ok(response) => response,
             Err(error) => error.into_response(),
@@ -2195,20 +2227,89 @@ mod tests {
         response.headers().get(name)?.to_str().ok()?.parse().ok()
     }
 
+    /// The headers a client posts a query with, as [`relayed`] does.
+    fn posting() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        headers
+    }
+
     /// What the relay space holds for `query`.
     async fn kept(state: &AppState, query: &str) -> Option<cache::Relayed> {
-        let key = relay_key(state, &Method::POST, &Uri::from_static("/"), &posted(query));
+        let key = relay_key(
+            state,
+            &Method::POST,
+            &Uri::from_static("/"),
+            &posting(),
+            &posted(query),
+        );
         state.caches.relay.get(&key).await
     }
 
     /// What was kept for `query`, made `seconds` old — as if AniList had
     /// answered it then.
     async fn aged(state: &AppState, query: &str, seconds: u64) {
-        let key = relay_key(state, &Method::POST, &Uri::from_static("/"), &posted(query));
+        let key = relay_key(
+            state,
+            &Method::POST,
+            &Uri::from_static("/"),
+            &posting(),
+            &posted(query),
+        );
         let mut kept = state.caches.relay.get(&key).await.expect("kept");
         kept.expires_at =
             cache::now_secs() + cache::relay_ttl(cache::ANILIST_QUERY).as_secs() - seconds;
         state.caches.relay.insert(key, kept).await;
+    }
+
+    /// What AniList answered is kept for the callers who asked as its first
+    /// did — by the headers that travel to it and may change its answer: the
+    /// type a body is posted as says how AniList reads it — and not for
+    /// those who asked otherwise.
+    #[tokio::test]
+    async fn an_answer_is_kept_for_the_callers_who_asked_as_its_first_did() {
+        const FIRST: &str = r#"{"data":{"Media":{"id":9400001,"title":{"romaji":"First"}}}}"#;
+        const OTHER: &str = r#"{"data":{"Media":{"id":9400001,"title":{"romaji":"Other"}}}}"#;
+        let (at, asked) = stand_in(vec![reply("200 OK", FIRST), reply("200 OK", OTHER)]).await;
+        let state = server(&at).await;
+        let query = "{ Media(id: 9400001) { id title { romaji } } }";
+
+        assert_eq!(text(relayed(&state, query, None).await).await, FIRST);
+        assert_eq!(text(relayed(&state, query, None).await).await, FIRST);
+        assert_eq!(asked.load(Ordering::SeqCst), 1, "kept for the same caller");
+
+        // Another language: another entry, asked of AniList; and then kept.
+        let german = [(header::ACCEPT_LANGUAGE, "de")];
+        assert_eq!(
+            text(relayed_with(&state, query, None, &german).await).await,
+            OTHER
+        );
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            text(relayed_with(&state, query, None, &german).await).await,
+            OTHER
+        );
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+        // The first caller's is as it was.
+        assert_eq!(text(relayed(&state, query, None).await).await, FIRST);
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+
+        // The same body posted as another type is another request to AniList,
+        // and another entry here.
+        let graphql = [(header::CONTENT_TYPE, "application/graphql")];
+        let _ = relayed_with(&state, query, None, &graphql).await;
+        assert_eq!(asked.load(Ordering::SeqCst), 3);
+        let _ = relayed_with(&state, query, None, &graphql).await;
+        assert_eq!(asked.load(Ordering::SeqCst), 3, "and then kept");
+        // And what does not change AniList's answer is not another entry.
+        let agent = [(header::USER_AGENT, "Yamtrack/1.0")];
+        assert_eq!(
+            text(relayed_with(&state, query, None, &agent).await).await,
+            FIRST
+        );
     }
 
     #[tokio::test]

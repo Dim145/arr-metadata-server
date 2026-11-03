@@ -185,6 +185,7 @@ async fn create(
 async fn download(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    ip: ClientIp,
     Path(name): Path<String>,
 ) -> AppResult<Response> {
     identity.require_admin()?;
@@ -193,6 +194,21 @@ async fn download(
         .download(&name)
         .await?
         .ok_or(AppError::NotFound)?;
+
+    // Written down as the archive starts to leave: it holds every account's
+    // password hash, and who took one is what the trail is read for after a
+    // leak. A name that is no archive's, or no longer kept, is not an entry.
+    audit::record(
+        &state,
+        Event {
+            identity: Some(&identity),
+            ip: &ip,
+            action: Action::BackupDownloaded,
+            target: Some(&name),
+            detail: None,
+        },
+    )
+    .await;
 
     let mut response = Body::from_stream(found.stream).into_response();
     let headers = response.headers_mut();
@@ -340,6 +356,7 @@ mod tests {
                 download(
                     State(state.clone()),
                     Extension(identity.clone()),
+                    ClientIp::NONE,
                     Path("ams-20261019-020000-manual.tar.zst".into())
                 )
                 .await,
@@ -371,9 +388,14 @@ mod tests {
         assert_eq!(archive.size_bytes, made.size);
         assert!(!listed.overdue);
 
-        let response = download(State(state.clone()), admin(), Path(made.name.clone()))
-            .await
-            .unwrap();
+        let response = download(
+            State(state.clone()),
+            admin(),
+            ClientIp::NONE,
+            Path(made.name.clone()),
+        )
+        .await
+        .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers()[header::ETAG],
@@ -394,10 +416,32 @@ mod tests {
         // A name that is not an archive's names nothing, wherever it points.
         for name in ["../ams.db", "ams.db", "ams-20261019-020000-manual.tar.zst"] {
             assert!(matches!(
-                download(State(state.clone()), admin(), Path(name.into())).await,
+                download(
+                    State(state.clone()),
+                    admin(),
+                    ClientIp::NONE,
+                    Path(name.into())
+                )
+                .await,
                 Err(AppError::NotFound)
             ));
         }
+
+        // Written down: which archive was taken, and by whom — once, for the
+        // download that happened, none for the names that named nothing.
+        let trail = repo::audit::list(
+            &state.db,
+            &repo::audit::Query {
+                action: Some("backup.downloaded".into()),
+                limit: 5,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(trail.len(), 1);
+        assert_eq!(trail[0].target.as_deref(), Some(made.name.as_str()));
+        assert!(trail[0].actor.is_some());
 
         let gone = remove(
             State(state.clone()),

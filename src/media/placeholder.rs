@@ -58,11 +58,21 @@ pub fn parse_thumbhash(text: &str) -> Option<Vec<u8>> {
     (5..=32).contains(&bytes.len()).then_some(bytes)
 }
 
-/// The placeholder of a decoded picture.
+/// The placeholder of a decoded picture: drawn from its pixels where they
+/// lie, the sketch being the only copy made — a hundred pixels on a side at
+/// the most, where a copy of the whole as RGBA was a third as much again as
+/// the picture, on top of it.
 pub fn of(decoded: &Decoded) -> Result<Placeholder> {
-    let rgba = decoded.rgba();
+    let pixels = decoded.as_pixels();
     let (width, height) = fit(decoded.width, decoded.height);
-    let sketch = area_average(&rgba, decoded.width, decoded.height, width, height)?;
+    let sketch = area_average(
+        pixels.data,
+        pixels.channels(),
+        decoded.width,
+        decoded.height,
+        width,
+        height,
+    )?;
     let thumbhash = thumbhash::rgba_to_thumb_hash(width as usize, height as usize, &sketch);
     let color = dominant(&sketch).unwrap_or([0, 0, 0]);
     Ok(Placeholder { color, thumbhash })
@@ -85,10 +95,22 @@ fn fit(width: u32, height: u32) -> (u32, u32) {
 
 /// A picture made smaller by averaging every pixel of each area into one —
 /// the colours weighed by their alpha, so that what is transparent lends
-/// none of its colour — in whole numbers, the same everywhere.
-fn area_average(rgba: &[u8], width: u32, height: u32, to_w: u32, to_h: u32) -> Result<Vec<u8>> {
+/// none of its colour — in whole numbers, the same everywhere. `pixels` are
+/// RGB or RGBA, `channels` bytes each (3 or 4), RGB being opaque; the
+/// sketch is always RGBA.
+fn area_average(
+    pixels: &[u8],
+    channels: usize,
+    width: u32,
+    height: u32,
+    to_w: u32,
+    to_h: u32,
+) -> Result<Vec<u8>> {
     ensure!(
-        rgba.len() == width as usize * height as usize * 4 && to_w > 0 && to_h > 0,
+        (channels == 3 || channels == 4)
+            && pixels.len() == width as usize * height as usize * channels
+            && to_w > 0
+            && to_h > 0,
         "the pixels are not the size the picture says"
     );
     let (width, height, to_w, to_h) = (
@@ -111,11 +133,15 @@ fn area_average(rgba: &[u8], width: u32, height: u32, to_w: u32, to_h: u32) -> R
             let (mut r, mut g, mut b, mut a, mut n) = (0u64, 0u64, 0u64, 0u64, 0u64);
             for y in y0..y1.min(height) {
                 for x in x0..x1.min(width) {
-                    let at = (y * width + x) * 4;
-                    let alpha = u64::from(rgba[at + 3]);
-                    r += u64::from(rgba[at]) * alpha;
-                    g += u64::from(rgba[at + 1]) * alpha;
-                    b += u64::from(rgba[at + 2]) * alpha;
+                    let at = (y * width + x) * channels;
+                    let alpha = if channels == 4 {
+                        u64::from(pixels[at + 3])
+                    } else {
+                        255
+                    };
+                    r += u64::from(pixels[at]) * alpha;
+                    g += u64::from(pixels[at + 1]) * alpha;
+                    b += u64::from(pixels[at + 2]) * alpha;
                     a += alpha;
                     n += 1;
                 }

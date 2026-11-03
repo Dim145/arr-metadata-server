@@ -7,6 +7,106 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+### Security
+
+A review of the whole server, area by area, and of what semgrep, CodeQL,
+gitleaks, trivy and zizmor find in it. Nothing let a caller past a guard; what
+follows let one cost the server too much, see what was not theirs, or keep
+what they had lost.
+
+- **Signing in.** Failed sign-ins locked an account for everyone, so a guesser
+  could shut the administrator out of their own server; they are counted per
+  account and address now (an IPv6 /64 as one), each before its password is
+  checked and with one atomic count on the cache server, and guessing from
+  many addresses meets a bar five times higher that never applies to an
+  address the account signed in from in the last thirty days. Concurrent
+  guesses no longer slip past the count while it is read, and a full count
+  forgets its oldest rather than stop counting. A run of failed sign-ins, or of
+  returns from the identity provider, from one address is one audit row with
+  its number; a return nobody started here is not written at all.
+- **Accounts and keys.** A member could get round an administrator's pause of
+  their key by deleting it and making another; the pause stands on the member
+  now, until an administrator enables one of their keys or lifts it
+  (`DELETE /api/v1/users/{id}/keys-pause`). Tying an identity-provider login to
+  an account asks for the account's password — or has the provider sign the
+  person in again, for an account with none — where a session alone did; the
+  owner can untie it from their account page, an administrator's password
+  reset unties it, and the journal says who tied and who untied.
+- **The identity provider's client** refuses link-local and metadata addresses
+  at connect time (loopback excepted), judges the provider's endpoints before
+  it asks any of them, and sends no Referer.
+- **A trusted proxy** that forwarded a request without an `X-Forwarded-For`
+  hop made every client look like the proxy, whose address the allowlist
+  admits; the client is unknown now, refused by every allowlist, and the log
+  says so.
+- **Load.** One address could hold every connection of a door — idle HTTP/2
+  connections that answer pings, slow readers: no network holds more than 64
+  now (a trusted proxy's and this machine's excepted), a connection with no
+  request in flight for two minutes is closed, and a response its peer does
+  not read is given up on after a minute. Searches, facets, lists and figures
+  no cache held are read three at a time, a caller waiting more than three
+  seconds answered `503` with `Retry-After`. Link previews, a network's page
+  and `/ready` asked the database afresh for every request: previews count
+  against the caller's allowance and are kept five seconds, the catalogue's
+  mark and `/ready`'s answer are asked once in five seconds, and a network's
+  slug is matched in memory. `/tmdb-images/` has a quota of its own, ten times
+  the requests', and hands on 16 pictures at a time. Search terms are cut at
+  200 characters at every door, as the catalogue's own search always did.
+- **Pictures.** One picture could take some 700 MB to decode, as only the
+  decoder's own buffer was bounded: decoding is counted by the byte a pixel
+  from the picture's header before anything is decoded, a picture that would
+  hold more than 256 MB is served whole, and the pictures decoding together
+  share those 256 MB. A copy made on demand waits for its turn before reading
+  the original, at most 32 are made at once, and each counts against the
+  caller's rate limit. An upload is cut off as it is read, at the weight its
+  first bytes say it may have, and a writer who is not an administrator keeps
+  1 GiB of uploads all told. A writer is told only that a picture could not be
+  fetched, no longer how or after how many tries — which let a typed-in
+  address map the private network.
+- **Relays.** TheTVDB's relay read every season, episode and character kept
+  without a TheTVDB id on each request for a negative number: a number no id
+  made here can be is answered at once, the others are found in maps read once
+  while the catalogue stays as it was, and seasons and orders' episodes are
+  indexed by TheTVDB's id (migration 0053). A reference list asked with a
+  made-up parameter or header filed a new database row each time: lists are
+  filed under their path and the language and region asked, 512 at most per
+  relay. TheTVDB's and AniList's relays key their answers on the Accept,
+  Accept-Language and Content-Type they ask with, as TMDB's does.
+- **Outbound requests** send no Referer, which handed the next host of a
+  redirect the address it came from, key included; TMDB, Fanart.tv, TheTVDB
+  and MyAnimeList follow a redirect only within the origin first asked. A
+  series' IMDb id went into TMDB's `/find` path unchecked; it is checked as a
+  film's is and written as one segment.
+- **Logs.** A sign-in's `code`, `state` and `session_state`, TMDB's
+  `session_id`, `guest_session_id` and `request_token`, and an `auth`
+  parameter are masked as the other keys are; an import rule that could not
+  fetch its list wrote reqwest's error, address and key included, into its
+  history and the log; a database address whose password holds an `@`, or
+  that carries it as `?password=`, was written in part.
+- **Backups.** Archives, and the copy of the database one is made from, were
+  readable by every user of the machine: they are written for the server's
+  user alone (0600, new directories 0700), `config check` warns when archives
+  are not encrypted, and downloading one is written to the audit trail. A
+  restore wrote the archive's column names into SQL as they stood, so a crafted
+  archive could run statements of its own: names are quoted, and such an
+  archive is refused.
+- **Elsewhere.** The trailer's frame is sandboxed. `trust-ca.sh` checked a
+  pinned fingerprint against a decoding of the whole file while installing
+  every certificate in it: a fetched or pinned file must be exactly one
+  certificate. History lines gitleaks takes for secrets are named, each with
+  why it is none, in `.gitleaksignore`.
+
+### Changed
+
+- `transfer` refuses a database URL with a password among its arguments: such
+  URLs are read from `AMS_TRANSFER_FROM` and `AMS_TRANSFER_TO`, which a
+  process list and a shell's history do not keep.
+- A provider's upstream that redirects `http://` to `https://` is no longer
+  followed there: give it as `https://`.
+- Tying an account to the identity provider is a button on the account page
+  that asks for the password (`POST /api/v1/account/provider`); untying is
+  beside it (`DELETE /api/v1/account/provider`).
+
 ## [0.14.0] — 2026-11-03
 
 ### Added

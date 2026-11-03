@@ -97,7 +97,8 @@ why. Say in the pull request why a new dependency is worth carrying.
 
 **Secrets.** None, in the code, the tests or the fixtures.
 `gitleaks detect --source . --redact` reads the history with
-[`.gitleaks.toml`](.gitleaks.toml).
+[`.gitleaks.toml`](.gitleaks.toml); the few lines of past commits that are no
+secret are named, each with its reason, in [`.gitleaksignore`](.gitleaksignore).
 
 ## The interface's design system
 

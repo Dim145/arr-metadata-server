@@ -339,7 +339,7 @@ fn clean_key_name(raw: &str) -> AppResult<String> {
     responses(
         (status = 201, body = IssuedKey),
         (status = 400, description = "A field was rejected"),
-        (status = 403, description = "The key limit is reached, or a key asked"),
+        (status = 403, description = "The key limit is reached, a key asked, or an administrator paused your keys"),
         (status = 409, description = "You already have a key by that name"),
     ),
 )]
@@ -356,6 +356,10 @@ async fn create_key(
     // The count and the insert under one hold, or two requests sent together
     // would both find room for one more.
     let _held = state.accounts_lock().await;
+
+    if clients::paused_by_admin(&state, &me.id).await?.is_some() {
+        return Err(keys_paused());
+    }
 
     if let Some(limit) = limit_for(&state, me)
         && repo::client::count_owned(&state.db, &me.id).await? >= limit
@@ -412,6 +416,18 @@ async fn create_key(
     ))
 }
 
+/// What a person is told while an administrator's pause on their keys stands:
+/// the pause is on them, not on one key, so that deleting a paused key and
+/// making another is no way round it.
+fn keys_paused() -> AppError {
+    AppError::Refused {
+        code: "keys_paused_by_admin",
+        message: "an administrator paused your keys: until one lifts that, you can neither make a \
+                  key nor resume one"
+            .into(),
+    }
+}
+
 /// One of your keys, or nobody's business.
 async fn own_key(state: &AppState, me: &User, id: &str) -> AppResult<ApiClient> {
     repo::client::get(&state.db, id)
@@ -437,6 +453,7 @@ pub struct KeyUpdate {
     responses(
         (status = 200, body = ApiClient),
         (status = 400, description = "A field was rejected"),
+        (status = 403, description = "An administrator paused your keys, and only one can resume them"),
         (status = 404, description = "Not one of your keys"),
         (status = 409, description = "You already have a key by that name"),
     ),
@@ -470,17 +487,14 @@ async fn update_key(
         )));
     }
 
-    // Paused by an administrator, it stays paused until one resumes it: a
-    // member whose key was stopped for hammering the relays does not get to
-    // start it again.
+    // Paused by an administrator, the keys stay paused until one resumes
+    // them: a member whose key was stopped for hammering the relays does not
+    // get to start it again, nor another of theirs.
     if update.is_enabled == Some(true)
         && !key.is_enabled
-        && clients::paused_by_admin(&state, &id).await?
+        && clients::paused_by_admin(&state, &me.id).await?.is_some()
     {
-        return Err(AppError::Refused {
-            code: "key_paused_by_admin",
-            message: "an administrator paused this key; only an administrator can resume it".into(),
-        });
+        return Err(keys_paused());
     }
 
     if let Some(name) = &name {
@@ -823,6 +837,124 @@ mod tests {
                 "{refused:?} was let through"
             );
         }
+    }
+
+    async fn opened(state: &AppState, name: &str, role: Role) -> User {
+        repo::user::create(
+            &state.db,
+            repo::user::NewUser {
+                username: name,
+                password_hash: repo::user::NO_PASSWORD,
+                role,
+                status: Status::Active,
+                display_name: None,
+                email: None,
+                invited_by: None,
+                oidc: None,
+            },
+        )
+        .await
+        .expect("an account")
+    }
+
+    /// Whether an answer is the refusal a pause tells.
+    fn paused<T>(answer: Result<T, AppError>) -> bool {
+        matches!(
+            answer,
+            Err(AppError::Refused {
+                code: "keys_paused_by_admin",
+                ..
+            })
+        )
+    }
+
+    /// A member whose key an administrator stopped could delete it and make
+    /// another, and the pause was gone with the key. It stands on the person:
+    /// until an administrator lifts it they make no key and resume none, and
+    /// deleting the one that was paused is no way round it.
+    #[tokio::test]
+    async fn an_administrators_pause_stands_on_the_person_and_outlives_the_key() {
+        use crate::settings::Scope;
+
+        let state = crate::api::native::testing::server().await;
+        state
+            .settings
+            .set(Scope::Server, "", "keys.maxPerUser", "5", None)
+            .await
+            .expect("room for several keys");
+        let admin = opened(&state, "root", Role::Admin).await;
+        let alice = opened(&state, "alice", Role::Member).await;
+        let as_alice = || Extension(Identity::User(Box::new(alice.clone())));
+        let as_admin = || Extension(Identity::User(Box::new(admin.clone())));
+
+        let make = |name: &'static str| {
+            create_key(
+                State(state.clone()),
+                as_alice(),
+                ClientIp::NONE,
+                Json(NewKey {
+                    name: name.into(),
+                    scopes: vec![],
+                }),
+            )
+        };
+        let toggle = |id: &str, enabled: bool| {
+            update_key(
+                State(state.clone()),
+                as_alice(),
+                ClientIp::NONE,
+                Path(id.to_string()),
+                Json(KeyUpdate {
+                    name: None,
+                    is_enabled: Some(enabled),
+                    scopes: None,
+                }),
+            )
+        };
+        let from_admin = |id: &str, enabled: bool| {
+            clients::update(
+                State(state.clone()),
+                as_admin(),
+                ClientIp::NONE,
+                Path(id.to_string()),
+                Json(clients::UpdateRequest {
+                    is_enabled: Some(enabled),
+                }),
+            )
+        };
+
+        let (_, Json(sonarr)) = make("Sonarr").await.expect("a key");
+        let (_, Json(radarr)) = make("Radarr").await.expect("another");
+
+        // Hers to pause and resume, while nobody else has said anything.
+        let _ = toggle(&radarr.key.id, false).await.expect("paused by her");
+        let _ = toggle(&radarr.key.id, true).await.expect("resumed by her");
+
+        // An administrator stops the first, which is hammering the relays.
+        let _ = from_admin(&sonarr.key.id, false).await.expect("paused");
+        assert!(paused(toggle(&sonarr.key.id, true).await));
+        // Nor does she resume another she pauses herself, or make a third.
+        let _ = toggle(&radarr.key.id, false).await.expect("paused by her");
+        assert!(paused(toggle(&radarr.key.id, true).await));
+        assert!(paused(make("Third").await));
+
+        // Deleting the key that was paused is no way round it.
+        delete_key(
+            State(state.clone()),
+            as_alice(),
+            ClientIp::NONE,
+            Path(sonarr.key.id.clone()),
+        )
+        .await
+        .expect("deleted");
+        assert!(paused(make("Sonarr again").await));
+        assert!(paused(toggle(&radarr.key.id, true).await));
+
+        // The administrator resumes the key she has left, and the pause lifts.
+        let _ = from_admin(&radarr.key.id, true).await.expect("resumed");
+        let _ = make("Sonarr again").await.expect("made again");
+        let _ = toggle(&radarr.key.id, false).await.expect("hers again");
+        let _ = toggle(&radarr.key.id, true).await.expect("hers again");
     }
 
     #[tokio::test]

@@ -744,6 +744,64 @@ pub(super) mod tests {
         ON_HERE.with(|on| on.set(false));
     }
 
+    /// The query a server span records is masked by the list the log is:
+    /// the key of a client, what a sign-in's address is sent back with, what
+    /// a TMDB session carries — and what is not a secret stays as it was.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_query_a_server_span_records_is_masked_as_the_log_masks_it() {
+        ON_HERE.with(|on| on.set(true));
+        let kept = Kept::default();
+        let provider_spans = SdkTracerProvider::builder()
+            .with_simple_exporter(kept.clone())
+            .with_id_generator(Chosen::default())
+            .build();
+        let subscriber = tracing_subscriber::registry().with(spans(provider_spans.tracer("test")));
+        let _default = tracing::subscriber::set_default(subscriber);
+
+        let (upstream, _) = provider().await;
+        let query = "code=authcode123456&state=csrfstate7890&session_state=sessstate4321\
+                     &session_id=tmdbsession5555&guest_session_id=guestsess6666\
+                     &request_token=reqtoken7777&auth=listkey8888&api_key=clientkey9999&language=fr";
+        let mut request = HttpRequest::get(format!("/v1/tvdb/shows/en/81189?{query}"))
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+            "203.0.113.5:4000".parse().unwrap(),
+        ));
+        let response = door(upstream, vec![]).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), 200);
+        // The span ends with the answer's body, as the other test reads it.
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"answered");
+
+        let spans = std::mem::take(&mut *kept.0.lock().unwrap());
+        let server = spans
+            .iter()
+            .find(|s| s.span_kind == SpanKind::Server)
+            .expect("the server span");
+        let recorded = attribute(server, "url.query")
+            .expect("the query")
+            .to_string();
+        for planted in [
+            "authcode123456",
+            "csrfstate7890",
+            "sessstate4321",
+            "tmdbsession5555",
+            "guestsess6666",
+            "reqtoken7777",
+            "listkey8888",
+            "clientkey9999",
+        ] {
+            assert!(!recorded.contains(planted), "{planted} in {recorded}");
+        }
+        assert!(recorded.contains("language=fr"), "{recorded}");
+        assert!(recorded.contains("code=***&state=***"), "{recorded}");
+
+        ON_HERE.with(|on| on.set(false));
+    }
+
     /// A call made outside any request — a background task's — is sent as
     /// it is: no span, no `traceparent`.
     #[tokio::test(flavor = "current_thread")]

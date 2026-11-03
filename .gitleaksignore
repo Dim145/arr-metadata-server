@@ -1,0 +1,17 @@
+# Findings of the history that are not secrets, by fingerprint — the commit,
+# the file, the rule and the line, which `gitleaks git` prints for each. A
+# fingerprint names one line of one commit and nothing else: it loosens no
+# rule, and a line like it written today would be found again. What is
+# allowed on every commit, whatever its line, is in .gitleaks.toml.
+
+# A test's fake key — `ams_` and the base64 of a made-up phrase, not written
+# here so that this file is no finding of its own — the key a Plex address
+# carries in the test that checks it is masked in a logged path. It opens
+# nothing; a later commit wrote one that says so on its face.
+cf133cdde69916eb02aea11e847b383d37112bb1:src/telemetry.rs:generic-api-key:316
+
+# The host name api.radarr.video, in the help text that lists the addresses
+# the clients' door answers for (the French text, then the English): Radarr's
+# own public API address, which the generic-key rule reads as a key.
+c2f01484fd17d70fc97bc9af2d762cc60640e8a0:frontend/src/lib/lang/fr.ts:generic-api-key:867
+c2f01484fd17d70fc97bc9af2d762cc60640e8a0:frontend/src/lib/lang/en.ts:generic-api-key:860

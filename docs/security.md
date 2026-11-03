@@ -31,37 +31,68 @@ is in [Accounts and access](access.md), and publishing the interface in
   browser's `Origin` is not this server's (`AMS_PUBLIC_URL` and
   `AMS_CORS_ORIGINS` count as this server's). Keys, Sonarr, Radarr and scripts
   are not concerned.
-- **Every response carries a content security policy** with `frame-ancestors
-  'none'`, so no page elsewhere can frame this one and borrow an administrator's
-  clicks, and `Referrer-Policy: no-referrer`, so the ids of what you are looking
-  at do not travel to the artwork hosts; a `Permissions-Policy` that denies the
-  camera, the microphone, the location and payments; on pages, a
+- **Every response of the interface carries a content security policy** with
+  `frame-ancestors 'self'`, and `X-Frame-Options: SAMEORIGIN` beside it for an
+  engine older than the directive: no page elsewhere can frame this one and
+  borrow an administrator's clicks. This server's own pages may, on purpose —
+  the editor shows a work's public page in a frame, as a preview of it. The
+  clients' door, which serves no page, sends `default-src 'none';
+  frame-ancestors 'none'; sandbox`. Both send `Referrer-Policy: no-referrer`,
+  so the ids of what you are looking at do not travel to the artwork hosts; the
+  interface also sends a `Permissions-Policy` that denies the camera, the
+  microphone, the location and payments; on pages, a
   `Cross-Origin-Opener-Policy`; and, over TLS — this server's own or a trusted
   proxy's — `Strict-Transport-Security` for a year.
-- **Every surface is rate limited**, the arr and TMDB ones included
+- **Every API surface is rate limited**, the arr and TMDB ones included
   (`AMS_RATE_LIMIT_PER_MINUTE`, 600 by default, per address — an IPv6 address
-  by its /64), save TMDB's pictures under `/tmdb-images/` for an address their
-  guard lets in, which a library's scan asks for in bursts; a refusal says
-  when to come back in `Retry-After`, and the per-address limit its quota in
-  `RateLimit` and `RateLimit-Policy`. Signing
-  in has two brakes of its own: an account that failed
-  `AMS_SIGNIN_FAILURES_PER_ACCOUNT` times (10) in fifteen minutes is refused
-  without being checked until the window closes, from wherever the attempts
-  come; and passwords are checked a few at a time — as many as the machine has
+  by its /64). TMDB's pictures under `/tmdb-images/` are counted apart for an
+  address their guard lets in, against a quota ten times as high, since a
+  library's scan asks for them in bursts; and they are handed on from TMDB
+  sixteen at a time, the others waiting their turn for five seconds before
+  they are answered `503`. A refusal says when to come back in `Retry-After`,
+  and the per-address limit its quota in `RateLimit` and `RateLimit-Policy`.
+  Signing in has two brakes of its own: an address — an IPv6 /64 as one — that
+  failed `AMS_SIGNIN_FAILURES_PER_ACCOUNT` times (10) in fifteen minutes for an
+  account is refused for it without being checked until the window closes, each
+  attempt counted before its password is; five times as many from every address
+  together refuse the account to the rest, never to an address it signed in from
+  in the last thirty days, so a guesser cannot shut its owner out; and passwords
+  are checked a few at a time — as many as the machine has
   cores, two to eight — so a burst of sign-ins waits, or is told to come back,
   rather than taking the memory argon2 needs for each. With passwords off, the
   name `AMS_ADMIN_USERNAME` keeps its door, and takes as long to refuse as any
   other name.
+- **What costs the database more than it takes to ask for is done a few at a
+  time.** A search nobody made lately, the facets of a filter nobody chose, a
+  page of the catalogue, its figures: read three at a time, the others waiting
+  their turn for three seconds before they are answered `503` with
+  `Retry-After`. What the cache holds is answered whatever. A link's preview —
+  a work's, a list's, a genre's — is looked up on the caller's account, counted
+  against the allowance above as the API's requests are, and kept five seconds;
+  a caller who has spent its allowance is given the page without one.
+  `/ready` asks the database once in five seconds, however often it is asked.
 - **Each door holds `AMS_MAX_CONNECTIONS` connections at once** (1024); past
-  that, a new one waits to be accepted. A connection has
+  that, a new one waits to be accepted. No one network holds more than 64 of
+  them — an address, or an IPv6 /64 — and a connection past that is closed as
+  it is accepted; a trusted proxy's addresses and this machine's own are not
+  counted, since everybody behind a proxy has the proxy's. A connection has
   `AMS_HEADER_READ_TIMEOUT` seconds (30) to send a request's head, and may sit
-  idle between two requests no longer.
+  idle between two requests no longer. One with no request in flight for two
+  minutes is closed — an HTTP/2 one too, which is pinged and answers the
+  pings — and a response its peer does not read is given up on once a write
+  has stood still for a minute.
 - **What is logged has its secrets masked:** the values of `api_key`, `apikey`,
-  `token` and their like in any address, what follows `Bearer` or `Basic`, the
+  `token`, `auth`, a sign-in's `code`, `state` and `session_state`, TMDB's
+  `session_id`, `guest_session_id` and `request_token`, and their like in any
+  address, what follows `Bearer` or `Basic`, the
   password of an address, the configured keys and passwords, the keys kept for
   your own Sonarr and Radarr, and the addresses, tokens and signing secrets of
   notification destinations. A failed sign-in's username is logged quoted, its
   line breaks escaped.
+- **Requests this server makes send no `Referer`,** which would hand the next
+  host of a redirect the address it came from, key included; and the providers
+  a key or a client id travels to — TMDB, Fanart.tv, TheTVDB, MyAnimeList —
+  are followed only within the origin first asked.
 - **An image URL may not name an address only this server can reach** — loopback,
   link-local, `169.254.169.254`. The NFO export downloads stored artwork, which
   makes an image URL a request this server makes on somebody else's say-so.

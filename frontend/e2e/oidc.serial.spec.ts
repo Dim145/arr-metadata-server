@@ -302,7 +302,11 @@ test.describe('signing in through an identity provider', () => {
 
       provider.signInAs({ sub: `sub-${username}`, preferred_username: `${username}-there`, groups: [] })
       await them.goto('/account')
-      await them.getByRole('link', { name: /tie my account|lier mon compte/i }).click()
+      // Tying asks for the password first: a session alone ties nothing.
+      await them.getByRole('button', { name: /tie my account|lier mon compte/i }).click()
+      const asked = them.getByRole('dialog')
+      await asked.getByLabel(/^(current password|mot de passe actuel)$/i).fill(password)
+      await asked.getByRole('button', { name: /tie my account|lier mon compte/i }).click()
       await them.waitForURL('**/account')
       await expect(them.getByText(/tied to the identity provider|lié au fournisseur d’identité/i)).toBeVisible()
 

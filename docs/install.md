@@ -110,13 +110,18 @@ Changing `AMS_DATABASE_URL` points the server at a different database; it does
 not carry your catalogue across. To move it:
 
 ```bash
-arr-metadata-server transfer 'sqlite://data/ams.db' 'postgres://ams:secret@localhost/ams'
+arr-metadata-server transfer 'sqlite://data/ams.db' 'postgres://ams@localhost/ams'
 ```
 
 The target is migrated first and must be empty, unless you pass `--force` to add
 to what is already there. Everything goes across, the lists read whole — TVmaze's
 index, Wikidata's links — included. An archive does the same: one made on SQLite
 restores on PostgreSQL, and the other way round (see [Backups](#backups)).
+
+A URL that carries a password is not an argument, which a process list and the shell's
+history would keep: the command refuses one, and takes the source from `AMS_TRANSFER_FROM`
+and the target from `AMS_TRANSFER_TO` instead, each standing in for an argument left out
+([the command line](cli.md#the-server)).
 
 ## Backups
 
@@ -142,6 +147,13 @@ downloads, deletes and restores them; [the command line](cli.md) does the same f
   put together in `AMS_BACKUP_DIR` all the same: that is where the room for a copy of the
   database is wanted, not in the system's temporary directory, often a small tmpfs in a
   container.
+- **Who can read them.** The user who runs the server, alone: each archive is written `0600`,
+  and the copy of the database it is put together from, and the directories the server makes
+  for them — `AMS_BACKUP_DIR` when it is not there yet, the `.work` folder in it — `0700`,
+  whatever the umask says. A directory that exists already keeps the permissions it has, and so
+  do the archives an earlier version wrote: `chmod 600` those. A job that copies the directory as
+  another user has to run as root, or be given the right to read each archive, which nothing
+  gives it by default.
 - **Before an upgrade.** A start that finds migrations to apply first makes an archive of the
   database as the version before left it, without the media:
   `ams-20261019-020000-upgrade-m0037.tar.zst`, made before the migrations that bring it to 0037,

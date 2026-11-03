@@ -479,6 +479,9 @@ fn builder() -> reqwest::ClientBuilder {
         .no_proxy()
         .connect_timeout(Duration::from_secs(5))
         .timeout(LONG)
+        // The address a redirect came from, said to the one it goes to, is
+        // the address of Sonarr or Radarr: not a thing to tell.
+        .referer(false)
         .redirect(reqwest::redirect::Policy::custom(|attempt| match redirect(
             attempt.previous().first(),
             attempt.url(),
@@ -678,6 +681,43 @@ pub(crate) mod tests {
             )
             .is_err()
         );
+    }
+
+    /// A redirect within the origin asked is followed, and says nothing of
+    /// where it came from: the address asked, the key of a list in its query.
+    #[tokio::test]
+    async fn a_redirect_at_the_same_origin_is_followed_without_a_referer() {
+        use axum::{Router, http::HeaderMap, response::Redirect, routing::get};
+
+        let app = Router::new()
+            .route("/start", get(|| async { Redirect::temporary("/next") }))
+            .route(
+                "/next",
+                get(|headers: HeaderMap| async move {
+                    headers
+                        .get("referer")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("none")
+                        .to_string()
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let said = builder()
+            .build()
+            .unwrap()
+            .get(format!("http://{at}/start?apikey=s3cret"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(said, "none");
     }
 
     /// The wire as well as the rule: a Sonarr whose answer is a redirect to

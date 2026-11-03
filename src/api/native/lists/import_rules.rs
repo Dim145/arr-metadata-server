@@ -577,7 +577,7 @@ async fn preview(
     let checked = check(&state, request, current.as_ref()).await?;
     let wanted = rules::gather(&state, checked.source, &checked.params)
         .await
-        .map_err(|e| AppError::BadRequest(format!("{e:#}")))?;
+        .map_err(|e| AppError::BadRequest(rules::told(&e)))?;
     let lines: Vec<Line> = wanted
         .iter()
         .take(PREVIEW_MOST)

@@ -27,10 +27,12 @@ const FORWARDING_HEADERS: [&str; 3] = [FORWARDED_FOR, "forwarded", "x-real-ip"];
 pub enum Caller {
     /// The address to make decisions about.
     Known(IpAddr),
-    /// A trusted proxy forwarded a chain that cannot be read — a hop that is
-    /// no address, bytes that are no text. The client is unknown: it fails
-    /// every allowlist and shares one rate-limit bucket with the others like
-    /// it. The proxy's address is kept for the record, and only for that.
+    /// A trusted proxy forwarded a request whose client cannot be read — a
+    /// hop that is no address, bytes that are no text, an `X-Forwarded-For`
+    /// with nothing in it, or only a `Forwarded` or `X-Real-IP`, which are
+    /// not read. The client is unknown: it fails every allowlist and shares
+    /// one rate-limit bucket with the others like it. The proxy's address is
+    /// kept for the record, and only for that.
     Unreadable { proxy: IpAddr },
     /// No socket address at all.
     Missing,
@@ -55,6 +57,13 @@ impl Caller {
 /// client is then unknown, never the proxy, whose address is very likely on
 /// the allowlist. Every hop trusted means the request came from inside the
 /// proxies' own networks, and the peer is taken.
+///
+/// A trusted proxy that forwards a request without a hop to read — no
+/// `X-Forwarded-For` line with an address in it — while it names the client
+/// some other way (`Forwarded`, `X-Real-IP`, a line left empty) has told
+/// nothing this server believes: the client is unknown, as for an unreadable
+/// hop, rather than the proxy that every client behind it would look like.
+/// The peer is taken only when nothing was forwarded at all.
 pub fn caller(peer: Option<SocketAddr>, headers: &HeaderMap, trusted: &[IpNet]) -> Caller {
     // No peer address means no basis for a decision; the caller denies.
     let Some(peer) = peer else {
@@ -90,7 +99,19 @@ pub fn caller(peer: Option<SocketAddr>, headers: &HeaderMap, trusted: &[IpNet]) 
         }
     }
 
+    // Nothing to walk, though the proxy forwarded: its client is whoever the
+    // headers this server does not read name, and the proxy's own address —
+    // on the allowlist, very likely — is no answer to that.
+    if hops.is_empty() && names_a_client(headers) {
+        return Caller::Unreadable { proxy: peer_ip };
+    }
+
     Caller::Known(peer_ip)
+}
+
+/// Whether the request carries one of the headers a proxy names the client in.
+fn names_a_client(headers: &HeaderMap) -> bool {
+    FORWARDING_HEADERS.iter().any(|h| headers.contains_key(*h))
 }
 
 /// The address to make access decisions about: [`caller`]'s, or nothing when
@@ -114,7 +135,7 @@ pub fn forwarded_by_stranger(
     headers: &HeaderMap,
     trusted: &[IpNet],
 ) -> bool {
-    !is_trusted_peer(peer, trusted) && FORWARDING_HEADERS.iter().any(|h| headers.contains_key(*h))
+    !is_trusted_peer(peer, trusted) && names_a_client(headers)
 }
 
 /// The scheme a request reached this server by, when that is known: `https`
@@ -395,6 +416,74 @@ mod tests {
         let everything = vec![("all".to_string(), "0.0.0.0/0".parse::<IpNet>().unwrap())];
         let unknown = resolve(peer("10.0.0.2"), &headers("x"), &trusted);
         assert_eq!(matching_rule(unknown, &everything), None);
+    }
+
+    /// A proxy that forwards, and names its client where this server does not
+    /// read: no hop to walk. The proxy's own address — an allowlisted one,
+    /// very likely — is no answer; the client is unknown, as for a hop that is
+    /// no address.
+    #[test]
+    fn a_trusted_proxy_that_names_no_readable_client_leaves_the_client_unknown() {
+        let trusted = nets(&["10.0.0.0/8"]);
+        let unreadable = Caller::Unreadable {
+            proxy: "10.0.0.2".parse().unwrap(),
+        };
+
+        let mut real_ip = HeaderMap::new();
+        real_ip.insert("x-real-ip", "203.0.113.5".parse().unwrap());
+        let mut forwarded = HeaderMap::new();
+        forwarded.insert("forwarded", "for=203.0.113.5;proto=https".parse().unwrap());
+        // A line with nothing in it, and one with only the commas between
+        // hops: present, and telling nothing.
+        let empty = lines(&[b""]);
+        let commas = lines(&[b" , ,"]);
+
+        for (name, forwarded) in [
+            ("X-Real-IP", real_ip),
+            ("Forwarded", forwarded),
+            ("an empty X-Forwarded-For", empty),
+            ("an X-Forwarded-For of commas", commas),
+        ] {
+            let caller = caller(peer("10.0.0.2"), &forwarded, &trusted);
+            assert_eq!(caller, unreadable, "{name}");
+            assert_eq!(caller.address(), None, "{name}");
+            assert_eq!(resolve(peer("10.0.0.2"), &forwarded, &trusted), None);
+        }
+
+        // Unknown is refused by every allowlist, the widest included.
+        let everything = vec![("all".to_string(), "0.0.0.0/0".parse::<IpNet>().unwrap())];
+        assert_eq!(matching_rule(None, &everything), None);
+    }
+
+    /// The peer is the client only when nothing was forwarded — a proxy's own
+    /// request, a health check — or when the chain it forwarded is all its
+    /// own networks, whatever else it sent beside it.
+    #[test]
+    fn a_trusted_peer_is_the_caller_when_nothing_names_a_client_or_the_chain_is_its_own() {
+        let trusted = nets(&["10.0.0.0/8"]);
+        let proxy: IpAddr = "10.0.0.2".parse().unwrap();
+
+        assert_eq!(
+            caller(peer("10.0.0.2"), &HeaderMap::new(), &trusted),
+            Caller::Known(proxy)
+        );
+
+        // A hop is there to read, and it is inside the proxies' networks.
+        let mut chain = headers("10.0.0.9");
+        chain.insert("x-real-ip", "203.0.113.5".parse().unwrap());
+        assert_eq!(
+            caller(peer("10.0.0.2"), &chain, &trusted),
+            Caller::Known(proxy)
+        );
+
+        // A client that names itself in a header only a proxy is believed
+        // in, from beyond the proxies, is still itself.
+        let mut stranger = HeaderMap::new();
+        stranger.insert("x-real-ip", "10.0.0.2".parse().unwrap());
+        assert_eq!(
+            caller(peer("203.0.113.5"), &stranger, &trusted),
+            Caller::Known("203.0.113.5".parse().unwrap())
+        );
     }
 
     #[test]

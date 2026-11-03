@@ -228,7 +228,49 @@ impl Identity {
 #[cfg(test)]
 pub(crate) mod testing {
     use super::*;
-    use crate::db::repo::user::Status;
+    use crate::{api::extract::ClientIp, db::repo::user::Status, state::AppState};
+
+    /// The whole server, as [`crate::api::native::testing::server`] makes it,
+    /// with these things its test is about: how many attempts an account takes
+    /// from one address — a password checked is seconds of argon2 in a debug
+    /// build, so a test of the lock-out wants the limit low — and the public
+    /// address a provider sends a browser back to.
+    pub async fn server(sign_in_failures: u32) -> AppState {
+        use crate::config;
+
+        let mut config = config::Config::from_env().expect("a configuration");
+        config.mode = config::Mode::Single;
+        config.database = crate::db::testing::database().await;
+        config.security.bootstrap_admin = None;
+        config.cache.redis_url = None;
+        config.media.storage = config::MediaStorage::Off;
+        config.clients = None;
+        config.tmdb.api_key = None;
+        config.tmdb.include_adult = false;
+        config.tvdb.api_key = None;
+        config.tvdb.enabled = false;
+        config.security.sign_in_failures_per_account = sign_in_failures;
+        config.server.public_url = Some("http://meta.test".into());
+
+        AppState::bootstrap(config).await.expect("a server")
+    }
+
+    /// A caller at an address, as the extractor reads one of a request from
+    /// a peer that is no proxy.
+    pub async fn client_at(state: &AppState, address: &str) -> ClientIp {
+        use axum::extract::{ConnectInfo, FromRequestParts as _};
+
+        let mut request = axum::http::Request::new(());
+        request
+            .extensions_mut()
+            .insert(ConnectInfo::<std::net::SocketAddr>(
+                format!("{address}:4000").parse().unwrap(),
+            ));
+        let (mut parts, ()) = request.into_parts();
+        ClientIp::from_request_parts(&mut parts, state)
+            .await
+            .expect("an address")
+    }
 
     /// A key with these scopes — as they stand once its owner's role has
     /// capped them — and, when it is a person's, that person's role.

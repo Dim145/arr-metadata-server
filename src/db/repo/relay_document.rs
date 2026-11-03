@@ -6,7 +6,8 @@
 //!
 //! Never AniList's: its terms want nothing stored, and the table refuses
 //! any relay but TMDB's and TheTVDB's. Nothing older than [`KEEP_DAYS`] is
-//! read back, and [`purge`] deletes it.
+//! read back, and [`purge`] deletes it; and no relay keeps more than
+//! [`MOST_ROWS`], the oldest going first ([`write`]).
 
 use anyhow::Result;
 
@@ -15,6 +16,12 @@ use crate::db::{Db, RowExt, to_rfc3339};
 /// The most days a document is kept and served: TMDB's terms allow six
 /// months, and TheTVDB's lists keep to the same rule.
 pub const KEEP_DAYS: i64 = 180;
+
+/// The most documents one relay keeps. Its reference lists are a few dozen,
+/// each in the handful of languages its clients read it in: well under this.
+/// What asks for more — the same lists asked in a language made up for each
+/// request — is not a client, and finds the oldest gone to make room.
+pub const MOST_ROWS: i64 = 512;
 
 /// A document kept, as the service answered it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,7 +39,9 @@ pub fn cutoff() -> String {
 }
 
 /// Keep a document `relay` was answered — `tmdb` or `tvdb` — under `key`,
-/// in place of whatever was kept under it.
+/// in place of whatever was kept under it; and, past [`MOST_ROWS`] of that
+/// relay's, let the oldest go — by the instant each was fetched at, so a
+/// document answered now is the last to be let go.
 pub async fn write(db: &Db, relay: &str, key: &str, document: &Document) -> Result<()> {
     sqlx::query(db.sql(
         "INSERT INTO relay_document (relay, cache_key, content_type, body, fetched_at)
@@ -46,6 +55,21 @@ pub async fn write(db: &Db, relay: &str, key: &str, document: &Document) -> Resu
     .bind(&document.content_type)
     .bind(&document.body)
     .bind(&document.fetched_at)
+    .execute(db.pool())
+    .await?;
+
+    sqlx::query(db.sql(
+        "DELETE FROM relay_document
+          WHERE relay = ?
+            AND cache_key NOT IN (
+                SELECT cache_key FROM relay_document
+                 WHERE relay = ?
+                 ORDER BY fetched_at DESC, cache_key
+                 LIMIT ?)",
+    ))
+    .bind(relay)
+    .bind(relay)
+    .bind(MOST_ROWS)
     .execute(db.pool())
     .await?;
     Ok(())
@@ -157,6 +181,87 @@ mod tests {
             .unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].text("cache_key").unwrap(), "/v4/genres");
+    }
+
+    async fn rows_of(db: &Db, relay: &str) -> i64 {
+        sqlx::query_scalar(db.sql("SELECT COUNT(*) FROM relay_document WHERE relay = ?"))
+            .bind(relay)
+            .fetch_one(db.pool())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_relay_keeps_no_more_than_its_share_and_the_oldest_go_first() {
+        let db = db().await;
+        // A day old and younger, each a minute after the one before.
+        let at = |n: i64| {
+            to_rfc3339(
+                chrono::Utc::now() - chrono::TimeDelta::days(1) + chrono::TimeDelta::minutes(n),
+            )
+        };
+        let key = |n: i64| format!("/3/genre/movie/list?language=l{n}");
+        let surplus = 20;
+        for n in 0..MOST_ROWS + surplus {
+            write(&db, "tmdb", &key(n), &document("{}", &at(n)))
+                .await
+                .unwrap();
+        }
+        // The other relay's share is its own.
+        write(&db, "tvdb", "/v4/languages", &document("[]", &at(0)))
+            .await
+            .unwrap();
+
+        assert_eq!(rows_of(&db, "tmdb").await, MOST_ROWS);
+        assert_eq!(rows_of(&db, "tvdb").await, 1);
+        for gone in [0, surplus - 1] {
+            assert_eq!(
+                read(&db, "tmdb", &key(gone), &cutoff()).await.unwrap(),
+                None,
+                "{gone}, among the oldest"
+            );
+        }
+        for kept in [surplus, MOST_ROWS + surplus - 1] {
+            assert!(
+                read(&db, "tmdb", &key(kept), &cutoff())
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "{kept}, among the youngest"
+            );
+        }
+
+        // A list written over is the same row, and costs the others nothing;
+        // once more, it is the youngest of them all.
+        write(&db, "tmdb", &key(surplus), &document("[1]", &now()))
+            .await
+            .unwrap();
+        assert_eq!(rows_of(&db, "tmdb").await, MOST_ROWS);
+        write(&db, "tmdb", "/3/configuration", &document("{}", &now()))
+            .await
+            .unwrap();
+        assert_eq!(rows_of(&db, "tmdb").await, MOST_ROWS);
+        assert!(
+            read(&db, "tmdb", "/3/configuration", &cutoff())
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            read(&db, "tmdb", &key(surplus), &cutoff())
+                .await
+                .unwrap()
+                .map(|kept| kept.body),
+            Some("[1]".into()),
+            "written over, so no longer the oldest"
+        );
+        assert_eq!(
+            read(&db, "tmdb", &key(surplus + 1), &cutoff())
+                .await
+                .unwrap(),
+            None,
+            "the oldest now"
+        );
     }
 
     #[tokio::test]

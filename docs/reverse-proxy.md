@@ -86,14 +86,17 @@ From a trusted proxy, and from nobody else:
 
 | Header | Read as |
 | --- | --- |
-| `X-Forwarded-For` | The client's address. Its lines are read as one list, in the order they arrived, and walked from the right: the first address that is not itself a trusted proxy is the client. A hop that is no address leaves the client unknown: refused by every list of allowed addresses, and counted with the other unknowns. |
+| `X-Forwarded-For` | The client's address. Its lines are read as one list, in the order they arrived, and walked from the right: the first address that is not itself a trusted proxy is the client. A hop that is no address leaves the client unknown: refused by every list of allowed addresses, and counted with the other unknowns. So does a request forwarded with no hop to read: a line left empty, or only a `Forwarded` or an `X-Real-IP`. |
 | `X-Forwarded-Proto` | The scheme the request reached the proxy by, `https` or `http`: its first value. |
 | `X-Forwarded-Host` | The name the request reached the proxy by: its first value. It counts as this server's own origin when a change is asked, and names the links of a feed when `AMS_PUBLIC_URL` is unset. |
 
 `Forwarded` and `X-Real-IP` are only recognised, never read: a proxy that sends either without
-`X-Forwarded-For` leaves every client looking like the proxy. With several proxies in a row,
-every one between the client and the server has to be in `AMS_TRUSTED_PROXIES`. A request from
-an address that is not trusted keeps its own address, whatever it claims in these headers.
+an `X-Forwarded-For` that has an address in it leaves its client unknown — refused by every
+list of allowed addresses, counted with the other unknowns, and warned of in the log with the
+proxy's address — rather than looking like the proxy. Only a request that carries none of the
+three is taken to be the proxy's own. With several proxies in a row, every one between the
+client and the server has to be in `AMS_TRUSTED_PROXIES`. A request from an address that is not
+trusted keeps its own address, whatever it claims in these headers.
 
 The `Host` header is read as it arrives. With `AMS_ALLOWED_HOSTS` set, it has to be one of
 those names, or the request is answered `421` — so the proxy passes the client's `Host` on, and
@@ -118,11 +121,16 @@ name, and the paths they call are best not forwarded by it at all:
 | `/v1/…`, `/v2/…` | Sonarr and Radarr |
 | `/3/…`, `/4/…` | TMDB clients |
 | `/v4/…` | TheTVDB clients |
+| `/tmdb-images/…` | TMDB clients, for TMDB's pictures when `tmdb.images` names this server |
 
 They are guarded either way — by the list of allowed addresses, or by a key — but Plex sends
 a provider no credential, so the Plex provider is guarded by address alone unless its address
-carries a key ([Keeping it on your network](plex.md#keeping-it-on-your-network)). The
-interface asks for none of these paths. A Plex that is elsewhere and reaches this server
+carries a key ([Keeping it on your network](plex.md#keeping-it-on-your-network)). So are
+TMDB's pictures, since a picture's address carries no key. An address the list lets in is held
+to a quota of its own, ten times the requests' — a library's scan asks for pictures in bursts —
+and pictures are handed on from TMDB sixteen at a time; a proxy that forwards `/tmdb-images/…`
+from the internet, to a TMDB policy that is `open`, still gives anyone a way to TMDB's picture
+server through this one. The interface asks for none of these paths. A Plex that is elsewhere and reaches this server
 through the proxy is given a key in its address instead (`AMS_PLEX_AUTH=apikey`,
 [A key in the address](plex.md#a-key-in-the-address)), and `/plex` is then forwarded.
 
@@ -182,7 +190,7 @@ server {
     client_max_body_size 61m;
 
     # The surfaces the clients call stay on the local network.
-    location ~ ^/(plex|v1|v2|v4|3|4)(/|$) {
+    location ~ ^/(plex|v1|v2|v4|3|4|tmdb-images)(/|$) {
         return 404;
     }
 
@@ -210,6 +218,7 @@ certificate resolver `letsencrypt` in Traefik's own configuration:
         Host(`metadata.example.com`)
         && !PathPrefix(`/plex`) && !PathPrefix(`/v1/`) && !PathPrefix(`/v2/`)
         && !PathPrefix(`/v4/`) && !PathPrefix(`/3/`) && !PathPrefix(`/4/`)
+        && !PathPrefix(`/tmdb-images/`)
       traefik.http.routers.metadata.entrypoints: websecure
       traefik.http.routers.metadata.tls.certresolver: letsencrypt
       traefik.http.services.metadata.loadbalancer.server.port: "8080"
@@ -224,7 +233,7 @@ Caddy obtains the certificate for the name, passes the `Host` on and sets the
 
 ```
 metadata.example.com {
-	@clients path /plex /plex/* /v1/* /v2/* /v4/* /3/* /4/*
+	@clients path /plex /plex/* /v1/* /v2/* /v4/* /3/* /4/* /tmdb-images/*
 	respond @clients 404
 
 	reverse_proxy metadata:8080

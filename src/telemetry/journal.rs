@@ -504,6 +504,41 @@ mod tests {
     }
 
     #[test]
+    fn what_a_sign_in_or_a_session_carries_in_an_address_is_not_kept() {
+        let subscriber = tracing_subscriber::registry().with(layer());
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(
+                callback = %"/api/v1/auth/oidc/callback?code=authcode123456&state=csrfstate7890&session_state=sessstate4321",
+                tmdb = %"/3/account/1/lists?session_id=tmdbsession5555&guest_session_id=guestsess6666&request_token=reqtoken7777",
+                list = %"https://other.example/ids.txt?auth=listkey8888&kind=movie",
+                "signin-line-marker"
+            );
+        });
+        let lines = kept("signin-line-marker");
+        let text = lines.first().expect("the line").as_text();
+        for planted in [
+            "authcode123456",
+            "csrfstate7890",
+            "sessstate4321",
+            "tmdbsession5555",
+            "guestsess6666",
+            "reqtoken7777",
+            "listkey8888",
+        ] {
+            assert!(!text.contains(planted), "{planted} in {text}");
+        }
+        for masked in [
+            "code=***",
+            "state=***",
+            "session_id=***",
+            "auth=***",
+            "kind=movie",
+        ] {
+            assert!(text.contains(masked), "{masked} in {text}");
+        }
+    }
+
+    #[test]
     fn the_journal_is_read_by_level_by_words_and_after_a_line() {
         let subscriber = tracing_subscriber::registry().with(layer());
         tracing::subscriber::with_default(subscriber, || {

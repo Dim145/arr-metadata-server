@@ -175,6 +175,9 @@ pub struct Inner {
     accounts: tokio::sync::Mutex<()>,
     /// What each API answered since the start.
     pub calls: Calls,
+    /// The numbers the TheTVDB relay made for what TheTVDB gave none, led back
+    /// to what they name: read once while the catalogue stays as it was.
+    pub made_ids: crate::api::thetvdb::MadeIds,
     /// The media kept: the store, and the index of what is in it.
     pub media: crate::media::Media,
     /// The doors' certificates: the clients' listener and what it shows.
@@ -231,11 +234,13 @@ impl AppState {
 
         let upstreams = std::sync::Arc::new(configured_hosts(&config));
         let http = outbound_client(&upstreams, Redirects::Anywhere)?;
-        // MyAnimeList's client id travels in a header of its own, which a
-        // redirect to another origin — another host, but another port or
-        // scheme of the same one too — would carry along: reqwest strips only
-        // the ones it knows for credentials.
-        let mal_http = outbound_client(&upstreams, Redirects::SameOrigin)?;
+        // The providers a credential travels to: TMDB's and Fanart's key in
+        // the address, TheTVDB's in the body of its sign-in, which a 307
+        // sends on again, MyAnimeList's client id in a header of its own,
+        // which reqwest does not know for a credential and keeps on a
+        // redirect to another port or scheme of the same host too. Each is
+        // followed only where it was first asked.
+        let keyed_http = outbound_client(&upstreams, Redirects::SameOrigin)?;
 
         let slot = crate::cache::RedisSlot::default();
         let caches = Caches::new(&config.cache, slot.clone());
@@ -270,20 +275,20 @@ impl AppState {
             crate::config::Mode::Single => axum_extra::extract::cookie::Key::generate(),
             crate::config::Mode::Multi => shared_cookie_key(&db).await?,
         };
-        let tmdb = TmdbClient::new(http.clone(), &config.tmdb);
+        let tmdb = TmdbClient::new(keyed_http.clone(), &config.tmdb);
         let skyhook = SkyhookClient::new(http.clone(), &config.skyhook, instance.clone());
         let radarr_metadata =
             RadarrMetadataClient::new(http.clone(), &config.radarr_metadata, instance.clone());
-        let fanart = FanartClient::new(http.clone(), &config.fanart, &config.tmdb.language);
+        let fanart = FanartClient::new(keyed_http.clone(), &config.fanart, &config.tmdb.language);
         let tvdb = TvdbClient::new(
-            http.clone(),
+            keyed_http.clone(),
             &config.tvdb,
             &config.tmdb.language,
             instance.clone(),
         );
         let tvmaze = TvmazeClient::new(http.clone(), &config.tvmaze);
         let anilist = AnilistClient::new(http.clone(), &config.anilist, instance.clone());
-        let mal = MalClient::new(mal_http, &config.mal);
+        let mal = MalClient::new(keyed_http, &config.mal);
         let fankai = FankaiClient::new(http.clone(), &config.fankai, &config.tmdb.language);
         let fankai_wiki = FankaiWikiClient::new(http.clone(), &config.fankai_wiki);
 
@@ -346,6 +351,7 @@ impl AppState {
             instance,
             accounts: tokio::sync::Mutex::new(()),
             calls: Calls::default(),
+            made_ids: crate::api::thetvdb::MadeIds::default(),
             cookie_key,
             tls,
             coord,
@@ -1112,8 +1118,8 @@ enum Redirects {
     /// To any host the guard does not refuse.
     Anywhere,
     /// Only at the origin first asked — its scheme, host and port: a
-    /// credential in a header of the provider's own goes nowhere else, and
-    /// not to another service of the same host.
+    /// credential of the provider's own goes nowhere else, and not to
+    /// another service of the same host.
     SameOrigin,
 }
 
@@ -1122,6 +1128,26 @@ enum Redirects {
 /// many hops it has made; with none on record, nothing is known to stay.
 fn leaves_origin(first: Option<&url::Url>, next: &url::Url) -> bool {
     first.is_none_or(|first| !crate::outbound::same_origin(first.as_str(), next.as_str()))
+}
+
+/// What every client of the providers is made from: this server's name, how
+/// long it waits, and no `Referer`. reqwest writes the address a redirect
+/// came from into one, query and all, and for a provider asked with its key
+/// in the address — TMDB's, Fanart's — that address carries the key to
+/// whoever the redirect names.
+fn provider_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .user_agent(concat!(
+            "arr-metadata-server/",
+            env!("CARGO_PKG_VERSION"),
+            " (+",
+            env!("CARGO_PKG_REPOSITORY"),
+            ")"
+        ))
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .pool_max_idle_per_host(16)
+        .referer(false)
 }
 
 /// The client every provider, dataset, relay to TMDB and webhook is asked
@@ -1138,17 +1164,7 @@ fn outbound_client(
     redirects: Redirects,
 ) -> Result<reqwest::Client> {
     let guard = crate::outbound::Guard::default();
-    reqwest::Client::builder()
-        .user_agent(concat!(
-            "arr-metadata-server/",
-            env!("CARGO_PKG_VERSION"),
-            " (+",
-            env!("CARGO_PKG_REPOSITORY"),
-            ")"
-        ))
-        .timeout(std::time::Duration::from_secs(30))
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .pool_max_idle_per_host(16)
+    provider_builder()
         .dns_resolver(std::sync::Arc::new(UpstreamResolver {
             configured: std::sync::Arc::clone(upstreams),
         }))
@@ -1357,6 +1373,110 @@ mod redirect_tests {
 
         // With no first request on record, nothing is known to stay.
         assert!(leaves_origin(None, &first));
+    }
+
+    /// A stand-in on the loopback: `/start` is sent on to `/next`, which says
+    /// the `Referer` it came with; `/away` is sent on to `elsewhere`.
+    async fn stand_in(elsewhere: &str) -> std::net::SocketAddr {
+        use axum::{Router, http::HeaderMap, response::Redirect, routing::get};
+
+        let away = elsewhere.to_string();
+        let app = Router::new()
+            .route("/start", get(|| async { Redirect::temporary("/next") }))
+            .route(
+                "/next",
+                get(|headers: HeaderMap| async move {
+                    headers
+                        .get("referer")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("none")
+                        .to_string()
+                }),
+            )
+            .route(
+                "/away",
+                get(move || async move { Redirect::temporary(&away) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let at = listener.local_addr().expect("its address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        at
+    }
+
+    #[tokio::test]
+    async fn a_redirect_is_followed_without_telling_where_it_came_from() {
+        let at = stand_in("/").await;
+        let asked = format!("http://{at}/start?api_key=s3cret");
+        let said = |builder: reqwest::ClientBuilder| {
+            let asked = asked.clone();
+            async move {
+                builder
+                    .redirect(reqwest::redirect::Policy::limited(2))
+                    .build()
+                    .unwrap()
+                    .get(asked)
+                    .send()
+                    .await
+                    .expect("answered")
+                    .text()
+                    .await
+                    .expect("read")
+            }
+        };
+        assert_eq!(said(super::provider_builder()).await, "none");
+        // What makes it a test: a client as reqwest builds one says the
+        // address it was sent to, key and all.
+        assert!(said(reqwest::Client::builder()).await.contains("s3cret"));
+    }
+
+    /// The server's own clients, as they are built: TMDB's, which carries its
+    /// key in the address, is handed a redirect to another origin as it came;
+    /// the client of a provider with no credential is judged by the guard
+    /// alone, which refuses a hop to the loopback with an error.
+    #[tokio::test]
+    async fn the_client_of_tmdb_follows_no_redirect_off_its_origin() {
+        use crate::api::relay::testing::{StandIn, server};
+
+        let elsewhere = stand_in("/").await;
+        let at = stand_in(&format!("http://{elsewhere}/next")).await;
+        let upstream =
+            StandIn::start(|_| (axum::http::StatusCode::OK, serde_json::json!({}))).await;
+        let state = server(&upstream).await;
+        let asked = format!("http://{at}/away?api_key=s3cret");
+
+        let answer = state
+            .tmdb
+            .request(reqwest::Method::GET, &asked)
+            .send()
+            .await
+            .expect("answered");
+        assert_eq!(answer.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        assert!(state.http.get(&asked).send().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_provider_with_a_credential_is_not_followed_to_another_origin() {
+        let elsewhere = stand_in("/").await;
+        let at = stand_in(&format!("http://{elsewhere}/next")).await;
+        let upstreams = std::sync::Arc::new(std::collections::HashSet::new());
+        let keyed = super::outbound_client(&upstreams, super::Redirects::SameOrigin).unwrap();
+
+        // Another port of the same host is another service: the redirect is
+        // handed back as it came, and nothing is sent to it.
+        let answer = keyed
+            .get(format!("http://{at}/away?api_key=s3cret"))
+            .send()
+            .await
+            .expect("answered");
+        assert_eq!(answer.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            answer.headers()["location"],
+            format!("http://{elsewhere}/next")
+        );
     }
 }
 

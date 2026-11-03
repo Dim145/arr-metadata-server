@@ -217,7 +217,7 @@
             "description": "A field was rejected"
           },
           "403": {
-            "description": "The key limit is reached, or a key asked"
+            "description": "The key limit is reached, a key asked, or an administrator paused your keys"
           },
           "409": {
             "description": "You already have a key by that name"
@@ -287,6 +287,9 @@
           },
           "400": {
             "description": "A field was rejected"
+          },
+          "403": {
+            "description": "An administrator paused your keys, and only one can resume them"
           },
           "404": {
             "description": "Not one of your keys"
@@ -419,6 +422,74 @@
           },
           "403": {
             "description": "A key cannot manage an account"
+          }
+        }
+      }
+    },
+    "/api/v1/account/provider": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Tie your account to the person the identity provider knows, so that you\ncan sign in through it as well.",
+        "description": "A session is not proof enough: one left open, or taken, would tie whoever\nholds it, and the tie would outlive the password the account's owner then\nresets. So the account's current password is asked for — or, for an account\nwith none, the provider is asked to have you sign in again, and its answer\nmust say you did. The answer is the provider's address to send the browser\nto; the tie is made when the browser comes back from it.",
+        "operationId": "oidc_tie",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TieRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Where to send the browser; the cookie of the flow is set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TieStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The password was left out, or is too long"
+          },
+          "401": {
+            "description": "The password was wrong"
+          },
+          "403": {
+            "description": "A key cannot manage an account"
+          },
+          "409": {
+            "description": "The account is tied already, or no provider is set up"
+          },
+          "429": {
+            "description": "Too many wrong passwords lately"
+          },
+          "502": {
+            "description": "The provider did not answer"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Untie your account from the identity provider. Not one that would be left\nwith no way in: a password of its own, which this server asks for, comes\nfirst. Your other sessions are closed — one of them may have been opened\nthrough the tie.",
+        "operationId": "oidc_untie",
+        "responses": {
+          "204": {
+            "description": "Untied; the other sessions are closed"
+          },
+          "403": {
+            "description": "A key cannot manage an account"
+          },
+          "409": {
+            "description": "The account is not tied, or would be left with no way in"
           }
         }
       }
@@ -1977,7 +2048,7 @@
         "tags": [
           "Session"
         ],
-        "summary": "Go to the identity provider to sign in — or, with `link`, to tie the\nsigned-in account to the person the provider knows.",
+        "summary": "Go to the identity provider to sign in. Tying an account to the person the\nprovider knows is asked for with `POST /account/provider`.",
         "operationId": "oidc_start",
         "parameters": [
           {
@@ -1992,7 +2063,7 @@
           {
             "name": "link",
             "in": "query",
-            "description": "Set by a signed-in person tying their account to the provider.",
+            "description": "Refused: a tie is asked for from the account page, with\n`POST /account/provider`, which proves it by the account's password.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2425,6 +2496,7 @@
           "Clients"
         ],
         "summary": "Enable or disable a key without revoking it.",
+        "description": "A person's key paused from here pauses its owner's keys: its owner can\nneither resume it nor make another, or resume any other of theirs, until an\nadministrator enables a key of theirs from here, or lifts the pause\n(`DELETE /users/{id}/keys-pause`).",
         "operationId": "clients_update",
         "parameters": [
           {
@@ -3486,6 +3558,9 @@
           },
           "400": {
             "description": "A filter was not one the list understands"
+          },
+          "503": {
+            "description": "As many such reads as the server answers at once are under way; `Retry-After` says when to ask again"
           }
         }
       }
@@ -3577,6 +3652,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "As many such reads as the server answers at once are under way; `Retry-After` says when to ask again"
           }
         }
       }
@@ -4254,6 +4332,9 @@
           },
           "401": {
             "description": "No valid credential was presented"
+          },
+          "503": {
+            "description": "As many such reads as the server answers at once are under way; `Retry-After` says when to ask again"
           }
         }
       },
@@ -8161,6 +8242,9 @@
           },
           "400": {
             "description": "The term is too long, a kind is not one of work, person and episode, or the language is not a language tag"
+          },
+          "503": {
+            "description": "As many such reads as the server answers at once are under way; `Retry-After` says when to ask again"
           }
         }
       }
@@ -9043,6 +9127,34 @@
         }
       }
     },
+    "/api/v1/users/{id}/keys-pause": {
+      "delete": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Lift the pause an administrator put on a person's keys — by disabling one\nof them from **Keys & network** — so that they can make keys and resume\nthem again. Enabling a key of theirs from there lifts it too; this is for\na person who has deleted theirs, with none left to enable.",
+        "operationId": "users_lift_keys_pause",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Lifted, or there was none"
+          },
+          "403": {
+            "description": "The caller is not an administrator"
+          },
+          "404": {}
+        }
+      }
+    },
     "/api/v1/users/{id}/oidc": {
       "delete": {
         "tags": [
@@ -9077,7 +9189,7 @@
         "tags": [
           "Users"
         ],
-        "summary": "Give an account a new password; its sessions are closed.",
+        "summary": "Give an account a new password; its sessions are closed, and so is its tie\nto the identity provider, if it has one: whoever tied it — the person, or\nsomebody holding a session of theirs — signed in as them through the\nprovider, which no password reset would otherwise end.",
         "operationId": "users_reset_password",
         "parameters": [
           {
@@ -9742,11 +9854,14 @@
           "404": {
             "description": "TMDB has no such picture at that size"
           },
+          "429": {
+            "description": "The caller's quota of pictures is spent for now; `Retry-After` says when to ask again"
+          },
           "502": {
             "description": "TMDB's pictures could not be reached"
           },
           "503": {
-            "description": "The TMDB relay is switched off"
+            "description": "The TMDB relay is switched off, or as many pictures as are handed on from TMDB at once are under way (`Retry-After` says when to ask again)"
           }
         },
         "security": []
@@ -24654,6 +24769,37 @@
           }
         }
       },
+      "TieRequest": {
+        "type": "object",
+        "properties": {
+          "currentPassword": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account's current password: the proof, from an account that has\none, that its owner is asking and not a session left open. An account\nwith none leaves it out, and is sent to sign in at the provider again\ninstead."
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The page of this site to come back to."
+          }
+        }
+      },
+      "TieStarted": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Where to send the browser: the identity provider's sign-in. The\ncookie that carries the flow back is set with this answer."
+          }
+        }
+      },
       "TimeOfDay": {
         "type": "object",
         "required": [
@@ -25117,6 +25263,13 @@
             "items": {
               "$ref": "#/components/schemas/Session"
             }
+          },
+          "keysPausedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who paused this person's keys, while the pause stands: until an\nadministrator lifts it ([`lift_keys_pause`]), they can neither make a\nkey nor resume one."
           }
         }
       },
