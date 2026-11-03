@@ -7,6 +7,8 @@ may change what the API or the configuration means, and says so here.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-11-03
+
 ### Security
 
 A review of the whole server, area by area, and of what semgrep, CodeQL,
@@ -3114,7 +3116,8 @@ and arm64.
 - End-to-end checks against a real Sonarr, against two instances, and a
   Playwright suite over the whole interface.
 
-[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/Dim145/arr-metadata-server/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Dim145/arr-metadata-server/compare/v0.11.1...v0.12.0
